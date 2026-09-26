@@ -2,8 +2,8 @@
 <configuration>
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <!-- 彩色简洁格式：时间/线程淡灰，级别按等级变色，Logger 青色 -->
-            <pattern>%clr(%d{HH:mm:ss.SSS}){faint} %highlight(%-5level) %clr([%thread]){faint} %clr(%logger{20}){cyan} : %msg%n</pattern>
+            <!-- 彩色简洁格式 -->
+            <pattern>%cyan(%d{HH:mm:ss.SSS}) %-5level [%thread] %blue(%logger{20}) : %msg%n</pattern>
             <charset>UTF-8</charset>
         </encoder>
     </appender>
