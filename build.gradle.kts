@@ -21,8 +21,8 @@ dependencies {
     /** Kotlin 反射库：支持 Kotlin 反射特性 */
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     
-    /** Shiro OneBot 框架：QQ 机器人开发框架 */
-    implementation("com.mikuac:shiro:2.5.0")
+    /** Shiro OneBot 框架：QQ 机器人开发框架（2.5.3+ 修复了 Tomcat 11 request recycled 问题） */
+    implementation("com.mikuac:shiro:2.5.5")
     
     /** ClassGraph 类路径扫描库：用于扫描所有 Agent 子类 */
     implementation("io.github.classgraph:classgraph:4.8.165")
