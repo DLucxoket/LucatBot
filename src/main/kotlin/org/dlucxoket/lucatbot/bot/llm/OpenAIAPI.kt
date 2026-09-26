@@ -36,17 +36,23 @@ class OpenAIAPI: LLM {
         val DEFAULT: OpenAIAPI by lazy { OpenAIAPI() }
     }
 
-    /** API 端点地址，默认指向本地 Ollama */
-    @Value($$"${ai.qwen.base-url:http://localhost:11434/v1}")
-    private lateinit var baseUrl: String
+    /** API 端点地址（支持环境变量 LLM_BASE_URL / 配置项 ai.qwen.base-url） */
+    @Value($$"${ai.qwen.base-url:}")
+    private var baseUrl: String = System.getenv("LLM_BASE_URL")
+        ?: System.getProperty("ai.qwen.base-url")
+        ?: "https://token-plan-cn.xiaomimimo.com/v1"
 
-    /** API 密钥，Ollama 场景下填任意非空字符串即可 */
-    @Value($$"${ai.qwen.api-key:ollama}")
-    private lateinit var apiKey: String
+    /** API 密钥（支持环境变量 LLM_API_KEY / 配置项 ai.qwen.api-key） */
+    @Value($$"${ai.qwen.api-key:}")
+    private var apiKey: String = System.getenv("LLM_API_KEY")
+        ?: System.getProperty("ai.qwen.api-key")
+        ?: "ollama"
 
-    /** 模型名称，需与 Ollama/服务端实际部署的模型一致 */
-    @Value($$"${ai.qwen.model-name:qwen2.5}")
-    private lateinit var modelName: String
+    /** 模型名称（支持环境变量 LLM_MODEL_NAME / 配置项 ai.qwen.model-name） */
+    @Value($$"${ai.qwen.model-name:}")
+    private var modelName: String = System.getenv("LLM_MODEL_NAME")
+        ?: System.getProperty("ai.qwen.model-name")
+        ?: "mimo-v2.5"
 
 
     /**
