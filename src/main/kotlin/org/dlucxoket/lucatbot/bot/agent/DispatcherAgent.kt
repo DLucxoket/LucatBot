@@ -28,8 +28,9 @@ object DispatcherAgent : Agent<DispatcherRequest, DispatcherResult>() {
         [{"agent": "AgentName", "input": {...}}]
         
         **重要规则**：
-        - 收到用户消息时，必须调用至少一个Agent来处理（通常是ReplyAgent）
-        - 只有在已经完成处理、无需进一步操作时才返回done
+        - 收到用户消息时，调用一个Agent来处理（通常是ReplyAgent）
+        - 如果已有Agent成功回复了用户，直接返回done，不要再调用
+        - 不要重复调用同一个Agent处理同一件事
         - input由你显式指定，只传该Agent需要的信息
     """.trimIndent()
 
@@ -76,11 +77,14 @@ object DispatcherAgent : Agent<DispatcherRequest, DispatcherResult>() {
             上下文：
             ${request.context}
 
-            **你必须输出JSON格式的调用计划来处理上面的用户消息。**
-            至少调用 ReplyAgent 来回复用户。例如：
-            [{"agent": "ReplyAgent", "input": {"context": "用户发来的消息", "messages": []}}]
+            请输出JSON格式的调用计划。规则：
+            1. 如果还没有Agent回复过用户，调用ReplyAgent回复
+            2. 如果已经有Agent成功回复了用户，输出done
+            3. 不要重复调用同一个Agent处理同一件事
             
-            只有在确认已处理完毕时才输出 done。
+            示例：
+            [{"agent": "ReplyAgent", "input": {"context": "用户的消息", "messages": []}}]
+            或者输出 done。
         """.trimIndent())
 
         // 解析 LLM 输出为 OOP 结果
