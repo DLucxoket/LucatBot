@@ -52,7 +52,7 @@ internal class MainPlugin: BotPlugin() {
             val modelEvent = ShiroConverter.toModelEvent(event)
 
             // 提取纯文本作为 AgentChain 初始输入
-            val plainText = ShiroConverter.extractPlainText(event.message)
+            val plainText = ShiroConverter.extractPlainText(event)
             if (plainText.isBlank()) {
                 log.info("收到空文本消息，跳过处理")
                 return MESSAGE_IGNORE
@@ -64,7 +64,7 @@ internal class MainPlugin: BotPlugin() {
             val reply = agentChain.execute(plainText)
 
             // 回复消息
-            bot.sendMsg(event.messageType, event.userId, event.groupId, reply)
+            bot.sendMsg(event, reply, false)
             log.info("回复消息: $reply")
 
             return MESSAGE_BLOCK

@@ -24,7 +24,8 @@ object UserProfileTool : Tool() {
 
         // 调用 OneBot API 获取用户信息
         return try {
-            val userInfo = b.getStrangerInfo(qqNumber, false)
+            val actionData = b.getStrangerInfo(qqNumber, false)
+            val userInfo = actionData?.data
             if (userInfo != null) {
                 """
                 用户资料：

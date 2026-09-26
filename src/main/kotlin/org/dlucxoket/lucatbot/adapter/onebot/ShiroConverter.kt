@@ -1,14 +1,13 @@
 package org.dlucxoket.lucatbot.adapter.onebot
 
 import com.mikuac.shiro.dto.event.message.AnyMessageEvent
-import com.mikuac.shiro.dto.message.MessageSegment
+import com.mikuac.shiro.enums.MsgTypeEnum
+import com.mikuac.shiro.model.ArrayMsg
 import org.dlucxoket.lucatbot.model.event.message.FriendMessageEvent
 import org.dlucxoket.lucatbot.model.event.message.GroupMessageEvent
 import org.dlucxoket.lucatbot.model.event.message.MessageEvent
-import org.dlucxoket.lucatbot.model.event.message.PrivateMessageEvent
 import org.dlucxoket.lucatbot.model.group.Group
 import org.dlucxoket.lucatbot.model.message.ChatMessage
-import org.dlucxoket.lucatbot.model.message.Message
 import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
 import org.dlucxoket.lucatbot.model.message.member.FaceMessageMember
 import org.dlucxoket.lucatbot.model.message.member.ImageMessageMember
@@ -35,40 +34,37 @@ object ShiroConverter {
      * @return 对应的 model 层 MessageEvent
      */
     fun toModelEvent(event: AnyMessageEvent): MessageEvent {
-        val message = toModelMessage(event.message)
+        val message = toModelMessage(event)
         val sender = toModelUser(event)
         val timestamp = event.time * 1000L  // OneBot 秒级时间戳 → 毫秒
 
         return if (event.groupId != null && event.groupId > 0) {
-            // 群消息
             val group = Group(
                 groupNumber = event.groupId,
-                groupName = "" // 群名需额外调 API 获取，这里先留空
+                groupName = ""
             )
             GroupMessageEvent(message, sender, group, timestamp)
         } else {
-            // 私聊消息（默认按好友处理）
             FriendMessageEvent(message, sender, timestamp)
         }
     }
 
     /**
-     * 将 Shiro 的 AnyMessage 转为 model 层的 ChatMessage
+     * 将 Shiro 事件中的消息段转为 model 层的 ChatMessage
      *
-     * 遍历消息段列表，按类型映射为对应的 MessageMember。
-     *
-     * @param message Shiro 消息对象
+     * @param event Shiro 消息事件
      * @return model 层 ChatMessage
      */
-    fun toModelMessage(message: com.mikuac.shiro.dto.message.AnyMessage): ChatMessage {
-        val members = message.messageList.mapNotNull { segment ->
+    fun toModelMessage(event: AnyMessageEvent): ChatMessage {
+        val segments = event.arrayMsg ?: return ChatMessage(emptyList())
+        val members = segments.mapNotNull { segment ->
             toModelMember(segment)
         }
         return ChatMessage(members)
     }
 
     /**
-     * 将单个 Shiro MessageSegment 转为 model 层的 MessageMember
+     * 将单个 Shiro ArrayMsg 段转为 model 层的 MessageMember
      *
      * 支持的片段类型：text、at、image、face、meme。
      * 未识别的类型返回 null（跳过）。
@@ -76,13 +72,13 @@ object ShiroConverter {
      * @param segment Shiro 消息段
      * @return 对应的 MessageMember，不支持时返回 null
      */
-    private fun toModelMember(segment: MessageSegment): MessageMember? {
+    private fun toModelMember(segment: ArrayMsg): MessageMember? {
         return when (segment.type) {
-            "text" -> TextMessageMember(segment.data["text"] ?: "")
-            "at" -> AtMessageMember(segment.data["qq"]?.toLongOrNull() ?: 0L)
-            "image" -> ImageMessageMember(segment.data["url"] ?: segment.data["file"] ?: "")
-            "face" -> FaceMessageMember(segment.data["id"]?.toIntOrNull() ?: 0)
-            "meme", "sface" -> MemeMessageMember(segment.data["url"] ?: segment.data["file"] ?: "")
+            MsgTypeEnum.text -> TextMessageMember(segment.getStringData("text") ?: "")
+            MsgTypeEnum.at -> AtMessageMember(segment.getStringData("qq")?.toLongOrNull() ?: 0L)
+            MsgTypeEnum.image -> ImageMessageMember(segment.getStringData("url") ?: segment.getStringData("file") ?: "")
+            MsgTypeEnum.face -> FaceMessageMember(segment.getStringData("id")?.toIntOrNull() ?: 0)
+            MsgTypeEnum.mface -> MemeMessageMember(segment.getStringData("url") ?: segment.getStringData("file") ?: "")
             else -> null
         }
     }
@@ -96,15 +92,15 @@ object ShiroConverter {
     private fun toModelUser(event: AnyMessageEvent): User {
         val sender = event.sender
         return User(
-            qqNumber = sender.userId,
-            nickname = sender.nickname ?: "",
-            sex = when (sender.sex) {
+            qqNumber = event.userId ?: 0L,
+            nickname = sender?.nickname ?: "",
+            sex = when (sender?.sex) {
                 "male" -> Sex.MALE
                 "female" -> Sex.FEMALE
                 else -> Sex.UNKNOWN
             },
-            level = 0, // Shiro Sender 无等级字段
-            signature = "" // 需额外调 API 获取
+            level = 0,
+            signature = ""
         )
     }
 
@@ -113,13 +109,14 @@ object ShiroConverter {
      *
      * 用于 Agent 链路的 initialInput。
      *
-     * @param message Shiro 消息对象
+     * @param event Shiro 消息事件
      * @return 拼接后的纯文本
      */
-    fun extractPlainText(message: com.mikuac.shiro.dto.message.AnyMessage): String {
-        return message.messageList
-            .filter { it.type == "text" }
-            .joinToString("") { it.data["text"] ?: "" }
+    fun extractPlainText(event: AnyMessageEvent): String {
+        val segments = event.arrayMsg ?: return event.message ?: ""
+        return segments
+            .filter { it.type == MsgTypeEnum.text }
+            .joinToString("") { it.getStringData("text") ?: "" }
             .trim()
     }
 }
