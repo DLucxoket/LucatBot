@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot
 
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
+import org.springframework.scheduling.annotation.EnableScheduling
 
 /**
  * Spring Boot 应用入口类
@@ -14,6 +15,7 @@ import org.springframework.boot.runApplication
  * 启动方式：`./gradlew run` 或 `java -jar build/libs/LucatBot-*.jar`
  */
 @SpringBootApplication
+@EnableScheduling
 class LucatBotApplication
 
 /**

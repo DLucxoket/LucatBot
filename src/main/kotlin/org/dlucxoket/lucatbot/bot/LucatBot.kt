@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot
 
 import org.dlucxoket.lucatbot.model.event.message.MessageEvent
+import org.springframework.stereotype.Component
 
 /**
  * 机器人本体——状态机
@@ -15,6 +16,7 @@ import org.dlucxoket.lucatbot.model.event.message.MessageEvent
  * - 在 A 会话时，B 会话的普通消息 → 未读队列，不处理
  * - 在 A 会话时，B 会话 @我/@全体 → 可能打断（取决于优先级）
  */
+@Component
 class LucatBot {
 
     /**
