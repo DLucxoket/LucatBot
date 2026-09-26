@@ -7,7 +7,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
  */
 data class EchoRequest(
     @JsonProperty("text")
-    val text: String
+    val text: String = ""
 )
 
 /**
@@ -15,5 +15,5 @@ data class EchoRequest(
  */
 data class EchoResult(
     @JsonProperty("echo")
-    val echo: String
+    val echo: String = ""
 )

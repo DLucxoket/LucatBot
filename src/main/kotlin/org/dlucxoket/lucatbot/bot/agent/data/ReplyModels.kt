@@ -7,7 +7,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
  */
 data class ReplyRequest(
     @JsonProperty("context")
-    val context: String,
+    val context: String = "",
 
     @JsonProperty("messages")
     val messages: List<ChatMessageItem> = emptyList(),
@@ -24,10 +24,10 @@ data class ReplyRequest(
  */
 data class ChatMessageItem(
     @JsonProperty("sender")
-    val sender: String,
+    val sender: String = "",
 
     @JsonProperty("content")
-    val content: String,
+    val content: String = "",
 
     @JsonProperty("timestamp")
     val timestamp: Long = 0L
@@ -38,7 +38,7 @@ data class ChatMessageItem(
  */
 data class ReplyResult(
     @JsonProperty("reply")
-    val reply: String,
+    val reply: String = "",
 
     @JsonProperty("action")
     val action: String = "send",
