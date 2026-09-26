@@ -75,25 +75,22 @@ class AgentChain(
     /**
      * 构建发给用户的自然语言回复
      *
-     * 从执行结果中提取最终回复文本，而不是暴露 JSON。
+     * 出错时返回空串（不发送），只记 log。
      */
     private fun buildUserReply(results: List<AgentExecutionResult>): String {
         // 找最后一个成功的结果
         val lastSuccess = results.lastOrNull { it.success }
         if (lastSuccess != null) {
-            // 尝试从 JSON 结果中提取 reply 字段
             val reply = extractReply(lastSuccess.output)
-            if (reply != null) return reply
-            return lastSuccess.output
+            return reply ?: lastSuccess.output
         }
 
-        // 有失败结果
-        val lastError = results.lastOrNull { it.error != null }
-        if (lastError != null) {
-            return "抱歉，处理消息时出了点问题：${lastError.error}"
+        // 有失败结果——只打 log，不发给用户
+        val errors = results.filter { !it.success }
+        if (errors.isNotEmpty()) {
+            log.error("Agent 执行失败，不回复用户: {}", errors.map { it.error })
         }
 
-        // 没有执行任何 Agent
         return ""
     }
 

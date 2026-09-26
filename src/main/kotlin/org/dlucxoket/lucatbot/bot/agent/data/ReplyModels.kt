@@ -1,22 +1,21 @@
 package org.dlucxoket.lucatbot.bot.agent.data
 
+import com.fasterxml.jackson.annotation.JsonProperty
+
 /**
  * 智能回复 Agent 的请求
- *
- * 模拟真人看到消息后产生回复意图时拥有的全部信息。
- * JSON 边界序列化 ↔ Agent 内部 OOP 操作。
  */
 data class ReplyRequest(
-    /** 当前会话的上下文描述 */
+    @JsonProperty("context")
     val context: String,
 
-    /** 要回复的消息内容 */
+    @JsonProperty("messages")
     val messages: List<ChatMessageItem> = emptyList(),
 
-    /** 机器人的性格设定（影响说话风格） */
+    @JsonProperty("personality")
     val personality: String = "",
 
-    /** 当前心情 */
+    @JsonProperty("mood")
     val mood: String = ""
 )
 
@@ -24,23 +23,26 @@ data class ReplyRequest(
  * 聊天消息条目
  */
 data class ChatMessageItem(
+    @JsonProperty("sender")
     val sender: String,
+
+    @JsonProperty("content")
     val content: String,
+
+    @JsonProperty("timestamp")
     val timestamp: Long = 0L
 )
 
 /**
  * 智能回复 Agent 的响应
- *
- * 模拟真人的回复决策：说什么、要不要发、什么动作。
  */
 data class ReplyResult(
-    /** 回复内容 */
+    @JsonProperty("reply")
     val reply: String,
 
-    /** 动作类型：send=发送、ignore=不回、emoji=发表情 */
+    @JsonProperty("action")
     val action: String = "send",
 
-    /** 置信度（0-1），用于调试 */
+    @JsonProperty("confidence")
     val confidence: Double = 1.0
 )
