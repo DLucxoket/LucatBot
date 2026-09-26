@@ -9,9 +9,13 @@ package org.dlucxoket.lucatbot.model.event.message
  * 子类按消息来源区分（私聊、群聊、好友等），
  * 消息内容本身由 Message 子类表达（文本、图片、表情等）。
  *
- * @param message 本事件携带的消息对象
+ * @param message   本事件携带的消息对象
+ * @param sender    发送者用户信息
+ * @param timestamp 消息时间戳（毫秒）
  */
 abstract class MessageEvent(
-    val message: org.dlucxoket.lucatbot.model.message.Message
+    val message: org.dlucxoket.lucatbot.model.message.Message,
+    val sender: org.dlucxoket.lucatbot.model.user.User,
+    val timestamp: Long
 ): org.dlucxoket.lucatbot.model.event.Event {
 }

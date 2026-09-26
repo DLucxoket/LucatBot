@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.agent
 
 import io.github.classgraph.ClassGraph
+import org.dlucxoket.lucatbot.bot.tool.Tool
 import kotlin.reflect.KClass
 import kotlin.reflect.full.createInstance
 import kotlin.reflect.full.isSubclassOf
@@ -42,7 +43,7 @@ object DispatcherAgent : Agent() {
         Agent1: 给Agent1的输入
         Agent2: 给Agent2的输入
         
-        然后系统将依次调用
+        然后系统将并行调用所有Agent
         其中给Agent的输入必须能够帮助Agent完成任务，每行之间用一个换行符隔开，不要有空行
         如果某个Agent依照当前上下文的信息无法准确完成任务，不要调用他
         只选择调用你认为该调用的即可，没必要每个都调用
@@ -93,6 +94,25 @@ object DispatcherAgent : Agent() {
             sb.append("\n- ${kClass.simpleName}: ${instance.shortDescription}")
         }
 
+        // 扫描 Tool 类，一并展示给 LLM
+        val toolClasses = ClassGraph()
+            .enableClassInfo()
+            .scan()
+            .use { scanResult ->
+                scanResult.getSubclasses(Tool::class.java.name)
+                    .filter { !it.isAbstract && !it.isInterface }
+                    .mapNotNull { it.loadClass().kotlin }
+            }
+
+        sb.appendLine()
+        sb.appendLine("可用的Tool（数据查询工具，输入由你指定）：")
+        toolClasses.forEach { kClass ->
+            val instance = kClass.objectInstance ?: kClass.createInstance()
+            if (instance is Tool) {
+                sb.appendLine("- ${instance.name}: ${instance.description}  参数格式：${instance.parameterHint}")
+            }
+        }
+
         /**
          * 第三步：调用 LLM 进行智能决策
          *
@@ -105,9 +125,9 @@ object DispatcherAgent : Agent() {
          */
         val reply = llm.ask("""
             $systemPromptHead
-            
+
             可用的Agent以及描述：$sb
-            
+
             上下文：
             $input
         """.trimIndent())

@@ -1,6 +1,6 @@
 ---
 feature: agent-chain
-status: designed
+status: in-progress
 updated: 2026-09-26
 branch: feature/agent-chain
 commits: 
@@ -142,6 +142,31 @@ onAnyMessage:
 - DispatcherAgent 输出格式异常：记日志，返回错误消息给用户
 - 超过最大轮次：强制终止并返回已有结果汇总
 
+### 2.8 Tool 包设计（与 agent 包平行）
+
+仿照 `bot/agent/` 的结构，新建 `bot/tool/` 包，用于与 onebot、model 层交互（查聊天记录、看用户主页、查消息列表等）。
+
+#### `Tool`（抽象基类）
+```kotlin
+abstract class Tool {
+    abstract val name: String          // 工具名称（唯一标识）
+    abstract val description: String   // LLM 可读的功能描述
+    abstract val parameterHint: String // 参数格式说明（供 LLM 理解）
+    abstract fun execute(input: String): String
+}
+```
+与 Agent 的区别：Agent 是 LLM 驱动的智能处理单元，Tool 是确定性的数据查询/交互操作。Agent 可调用 Tool 获取数据，Tool 不调用 LLM。
+
+#### 示例 Tool
+| 类名 | 功能 | 输入 | 输出 |
+|------|------|------|------|
+| `ChatHistoryTool` | 查询聊天记录 | 群号/用户号 + 条数 | 最近 N 条消息文本 |
+| `UserProfileTool` | 查看用户主页 | QQ 号 | 用户资料（昵称、签名等） |
+| `MessageListTool` | 查看消息列表 | 会话标识 | 消息摘要列表 |
+
+#### Tool 发现机制
+与 Agent 相同：ClassGraph 自动扫描 `Tool` 子类，无需手动注册。DispatcherAgent 可将 Tool 纳入调度候选。
+
 ## [S3] Out of Scope
 
 - Session / 多轮对话上下文持久化（下轮实现）
@@ -161,3 +186,6 @@ onAnyMessage:
 - [ ] T7: 实现 `ReplyAgent` 示例 — acceptance: 调用 LLM 生成回复，继承 Agent (covers: S2.5)
 - [ ] T8: 集成 `MainPlugin.onAnyMessage` — acceptance: 消息进来后走完整链路并回复 (covers: S2.6; depends: T4, T5, T6)
 - [ ] T9: 编译验证 + 更新 DESIGN.md/AGENTS.md — acceptance: `./gradlew compileKotlin` 通过，文档反映新增类 (covers: S2; depends: T8)
+- [ ] T10: 实现 `Tool` 抽象基类 — acceptance: 抽象类可编译，包含 name/description/parameterHint/execute (covers: S2.8)
+- [ ] T11: 实现 3 个示例 Tool（ChatHistoryTool/UserProfileTool/MessageListTool） — acceptance: 继承 Tool，实现 execute，能通过 OneBot API 查询数据 (covers: S2.8; depends: T10)
+- [ ] T12: DispatcherAgent 集成 Tool 发现 — acceptance: Tool 类出现在调度器的可用工具列表中 (covers: S2.8; depends: T10, T11)
