@@ -4,28 +4,24 @@ import com.mikuac.shiro.core.Bot
 import com.mikuac.shiro.core.BotPlugin
 import com.mikuac.shiro.dto.event.message.AnyMessageEvent
 import com.mikuac.shiro.dto.event.request.FriendAddRequestEvent
+import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.AgentChain
 import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
 import org.dlucxoket.lucatbot.bot.tool.MessageListTool
 import org.dlucxoket.lucatbot.bot.tool.UserProfileTool
+import org.dlucxoket.lucatbot.model.message.ChatMessage
+import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
 /**
  * Shiro 主插件——OneBot 消息处理入口
  *
- * 所有 QQ 消息事件的第一入口。通过 application.yaml 中的
- * `shiro.plugin-list` 配置注册，Shiro 框架会在收到事件时按序调用。
- *
- * 消息处理链路：
- * 1. ShiroConverter 将 Shiro 事件转为 model 层对象
- * 2. 提取纯文本作为 AgentChain 的初始输入
- * 3. AgentChain 调度执行（DispatcherAgent → Agent 并行 → 循环决策）
- * 4. 将最终结果回复给用户
- *
- * 插件链机制：
- * - 返回 MESSAGE_IGNORE → 继续执行 plugin-list 中的下一个插件
- * - 返回 MESSAGE_BLOCK  → 中断插件链，不执行后续插件
+ * 消息处理链路（模拟真人行为）：
+ * 1. ShiroConverter 转为 model 层对象
+ * 2. LucatBot 状态机判断消息该怎么处理（PROCESS/NOTIFY/IGNORE）
+ * 3. PROCESS/NOTIFY → AgentChain 调度 → 回复
+ * 4. IGNORE → 加入未读队列，不处理
  */
 @Component
 internal class MainPlugin: BotPlugin() {
@@ -34,36 +30,43 @@ internal class MainPlugin: BotPlugin() {
     /** Agent 调度执行引擎 */
     private val agentChain = AgentChain()
 
-    /**
-     * 处理所有类型的消息事件（群消息、私聊消息等）
-     *
-     * 完整链路：消息接收 → Model 转换 → AgentChain 调度 → 回复。
-     *
-     * @param bot   Shiro 的 Bot 实例，可用于发送消息、获取群成员等操作
-     * @param event 消息事件，包含发送者、消息内容、来源群/私聊等信息
-     * @return MESSAGE_BLOCK 阻断后续插件（已处理）
-     */
+    /** 机器人状态机（模拟真人 QQ 行为） */
+    private val lucatBot = LucatBot()
+
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
-            // 绑定 Bot 实例到所有 Tool
             bindTools(bot)
 
-            // 转为 model 层对象（供 Agent 系统使用）
             val modelEvent = ShiroConverter.toModelEvent(event)
-
-            // 提取纯文本作为 AgentChain 初始输入
             val plainText = ShiroConverter.extractPlainText(event)
             if (plainText.isBlank()) {
-                log.info("收到空文本消息，跳过处理")
                 return MESSAGE_IGNORE
             }
 
-            log.info("收到消息: $plainText")
+            // 判断是否 @我 或 @全体
+            val isAtMe = isAtMe(event, bot.selfId)
+            val isAtAll = isAtAll(modelEvent)
+
+            // LucatBot 状态机决策
+            val action = lucatBot.handleMessage(modelEvent, isAtMe, isAtAll)
+
+            when (action) {
+                LucatBot.MessageAction.IGNORE -> {
+                    log.info("消息进未读队列（状态：${lucatBot.state}）")
+                    return MESSAGE_IGNORE
+                }
+                LucatBot.MessageAction.NOTIFY -> {
+                    log.info("收到 @我/@全体 消息，处理中...")
+                }
+                LucatBot.MessageAction.PROCESS -> {
+                    log.info("当前会话消息，处理中...")
+                }
+            }
 
             // 执行 Agent 调度链
+            log.info("收到消息: $plainText")
             val reply = agentChain.execute(plainText)
 
-            // 回复消息（空回复不发，避免 OneBot 解析失败）
             if (reply.isNotBlank()) {
                 bot.sendMsg(event, reply, false)
                 log.info("回复消息: $reply")
@@ -78,28 +81,38 @@ internal class MainPlugin: BotPlugin() {
         }
     }
 
-    /**
-     * 处理好友添加请求
-     *
-     * 自动通过所有好友请求。
-     *
-     * @param bot   Bot 实例，用于调用 setFriendAddRequest 响应请求
-     * @param event 好友添加请求事件
-     * @return 调用 super 实现
-     */
     override fun onFriendAddRequest(bot: Bot, event: FriendAddRequestEvent): Int {
         bot.setFriendAddRequest(event.flag, true, null)
         return super.onFriendAddRequest(bot, event)
     }
 
-    /**
-     * 绑定 Bot 实例到所有 Tool
-     *
-     * Tool 需要 Bot 来调用 OneBot API。
-     */
     private fun bindTools(bot: Bot) {
         ChatHistoryTool.bindBot(bot)
         UserProfileTool.bindBot(bot)
         MessageListTool.bindBot(bot)
+    }
+
+    /**
+     * 判断消息是否 @了机器人
+     */
+    private fun isAtMe(event: AnyMessageEvent, selfId: Long): Boolean {
+        val segments = event.arrayMsg ?: return false
+        return segments.any { seg ->
+            seg.type.toString().equals("at", ignoreCase = true) &&
+                seg.getStringData("qq")?.toLongOrNull() == selfId
+        }
+    }
+
+    /**
+     * 判断消息是否 @全体成员
+     */
+    private fun isAtAll(event: org.dlucxoket.lucatbot.model.event.message.MessageEvent): Boolean {
+        val msg = event.message
+        if (msg is ChatMessage) {
+            return msg.messageMembers.any {
+                it is AtMessageMember && (it.targetQqNumber == -1L || it.targetQqNumber == 0L)
+            }
+        }
+        return false
     }
 }
