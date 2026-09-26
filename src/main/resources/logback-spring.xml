@@ -13,7 +13,8 @@
     <logger name="com.mikuac.shiro" level="INFO"/>
     <logger name="org.springframework" level="WARN"/>
     <logger name="org.apache" level="WARN"/>
-    <logger name="io.github.classgraph" level="WARN"/>
+    <logger name="io.github.classgraph" level="ERROR"/>
+    <logger name="nonapi.io.github.classgraph" level="ERROR"/>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>

@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.bot.agent
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 
 /**
@@ -35,7 +36,7 @@ class AgentChain(
      * 执行完整的 Agent 调度链
      *
      * @param initialInput 初始上下文 JSON 字符串
-     * @return 最终汇总结果 JSON 字符串
+     * @return 最终回复文本（自然语言）
      */
     fun execute(initialInput: String): String {
         val allResults = mutableListOf<AgentExecutionResult>()
@@ -52,7 +53,7 @@ class AgentChain(
             val plans = AgentPlanParser.parse(llmOutput)
             if (plans == null || plans.isEmpty()) {
                 log.info("调度终止（done 或空计划）")
-                return contextBuilder.summarize(allResults)
+                return buildUserReply(allResults)
             }
 
             log.info("解析到 ${plans.size} 个调用计划: ${plans.map { it.agentName }}")
@@ -66,6 +67,43 @@ class AgentChain(
         }
 
         log.warn("超过最大调度轮次 ($maxRounds)，强制终止")
-        return contextBuilder.summarize(allResults)
+        return buildUserReply(allResults)
+    }
+
+    /**
+     * 构建发给用户的自然语言回复
+     *
+     * 从执行结果中提取最终回复文本，而不是暴露 JSON。
+     */
+    private fun buildUserReply(results: List<AgentExecutionResult>): String {
+        // 找最后一个成功的结果
+        val lastSuccess = results.lastOrNull { it.success }
+        if (lastSuccess != null) {
+            // 尝试从 JSON 结果中提取 reply 字段
+            val reply = extractReply(lastSuccess.output)
+            if (reply != null) return reply
+            return lastSuccess.output
+        }
+
+        // 有失败结果
+        val lastError = results.lastOrNull { it.error != null }
+        if (lastError != null) {
+            return "抱歉，处理消息时出了点问题：${lastError.error}"
+        }
+
+        // 没有执行任何 Agent
+        return ""
+    }
+
+    /**
+     * 从 JSON 输出中提取 reply 字段
+     */
+    private fun extractReply(json: String): String? {
+        return try {
+            val node = ObjectMapper().readTree(json)
+            node.get("reply")?.asText()
+        } catch (e: Exception) {
+            null
+        }
     }
 }
