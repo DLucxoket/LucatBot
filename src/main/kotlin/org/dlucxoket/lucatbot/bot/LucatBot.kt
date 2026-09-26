@@ -154,6 +154,20 @@ class LucatBot {
     }
 
     /**
+     * 某个会话是否有 @我 的未读
+     */
+    fun hasUnreadAtMe(conversationId: String): Boolean {
+        return unreadQueue.any { it.conversationId == conversationId && it.isAtMe }
+    }
+
+    /**
+     * 某个会话是否有 @全体 的未读
+     */
+    fun hasUnreadAtAll(conversationId: String): Boolean {
+        return unreadQueue.any { it.conversationId == conversationId && it.isAtAll }
+    }
+
+    /**
      * 获取并清除某个会话的未读消息
      */
     fun consumeUnread(conversationId: String): List<UnreadMessage> {
