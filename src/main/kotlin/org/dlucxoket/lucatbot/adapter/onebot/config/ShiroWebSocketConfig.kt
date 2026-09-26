@@ -1,8 +1,9 @@
 package org.dlucxoket.lucatbot.adapter.onebot.config
 
 import com.mikuac.shiro.adapter.WebSocketServerHandler
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.Ordered
+import org.springframework.core.annotation.Order
 import org.springframework.web.socket.CloseStatus
 import org.springframework.web.socket.WebSocketSession
 import org.springframework.web.socket.handler.WebSocketHandlerDecorator
@@ -13,7 +14,6 @@ import org.springframework.web.socket.WebSocketHandler
 import org.springframework.web.socket.config.annotation.EnableWebSocket
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
-import org.springframework.web.socket.handler.ExceptionWebSocketHandlerDecorator
 
 /**
  * Shiro WebSocket 兼容性修复配置
@@ -21,12 +21,15 @@ import org.springframework.web.socket.handler.ExceptionWebSocketHandlerDecorator
  * 解决 Shiro 2.5.0 + Spring Boot 4 / Tomcat 11 的 `request recycled` 兼容性问题。
  *
  * 修复方案：
- * 1. 禁用 Shiro 自动注册（application.yaml: shiro.ws.server.enable: false）
- * 2. 自行注册 WebSocket 端点，握手阶段通过 HandshakeInterceptor 提取 self_id
- * 3. 包装 Shiro handler，捕获 parseSelfId 的 IllegalStateException
+ * 1. @Order(HIGHEST_PRECEDENCE) 让本配置优先于 Shiro 自动注册
+ * 2. HandshakeInterceptor 在握手阶段提取 self_id（request 尚未回收）
+ * 3. SelfIdFixHandlerDecorator 捕获 parseSelfId 的 IllegalStateException
+ *
+ * 注意：需保持 shiro.ws.server.enable: true 让 Shiro 创建 handler bean
  */
 @Configuration
 @EnableWebSocket
+@Order(Ordered.HIGHEST_PRECEDENCE)
 class ShiroWebSocketConfig(
     private val shiroHandler: WebSocketServerHandler
 ) : WebSocketConfigurer {
@@ -39,7 +42,7 @@ class ShiroWebSocketConfig(
     }
 
     /**
-     * 握手拦截器：在 request 被回收前提取 self_id 和 token
+     * 握手拦截器：在 request 被回收前提取 self_id
      */
     class SelfIdCaptureInterceptor : HandshakeInterceptor {
         override fun beforeHandshake(
@@ -48,18 +51,15 @@ class ShiroWebSocketConfig(
             wsHandler: WebSocketHandler,
             attributes: MutableMap<String, Any>
         ): Boolean {
-            // 从 URL query 提取 self_id
             val uri = request.uri
             val query = uri.query ?: ""
             val selfId = query.split("&")
                 .firstOrNull { it.startsWith("self_id=") || it.startsWith("self-id=") }
                 ?.substringAfter("=")
-
             if (selfId != null) {
                 attributes["self_id"] = selfId
             }
 
-            // 从 header 提取 self_id（NapCat 会发 x-self-id header）
             val headers = request.headers
             val headerSelfId = headers.getFirst("x-self-id") ?: headers.getFirst("self_id")
             if (headerSelfId != null) {
@@ -74,15 +74,11 @@ class ShiroWebSocketConfig(
             response: ServerHttpResponse,
             wsHandler: WebSocketHandler,
             exception: Exception?
-        ) {
-            // no-op
-        }
+        ) {}
     }
 
     /**
-     * WebSocketHandler 装饰器：捕获 Shiro parseSelfId 的异常
-     *
-     * 将 Shiro handler 的异常吞掉，避免整个 WebSocket 会话被关闭。
+     * WebSocketHandler 装饰器：捕获 Shiro parseSelfId 的兼容性异常
      */
     class SelfIdFixHandlerDecorator(
         delegate: WebSocketHandler
@@ -92,8 +88,7 @@ class ShiroWebSocketConfig(
             try {
                 super.afterConnectionEstablished(session)
             } catch (e: IllegalStateException) {
-                // 兼容性异常：request recycled，但 self_id 已在握手阶段捕获
-                // Shiro 后续的 handleTextMessage 会从 session attributes 读 self_id
+                // Tomcat 11 request recycled 兼容性异常，忽略
             }
         }
 
@@ -101,7 +96,7 @@ class ShiroWebSocketConfig(
             try {
                 super.handleMessage(session, message)
             } catch (e: IllegalStateException) {
-                // 同样的兼容性异常，忽略
+                // 忽略
             }
         }
 
