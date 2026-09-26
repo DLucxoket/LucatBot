@@ -1,10 +1,12 @@
 package org.dlucxoket.lucatbot.bot.agent
 
 import io.github.classgraph.ClassGraph
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import org.dlucxoket.lucatbot.bot.tool.Tool
 import org.slf4j.LoggerFactory
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import kotlin.reflect.KClass
 import kotlin.reflect.full.createInstance
@@ -12,18 +14,18 @@ import kotlin.reflect.full.createInstance
 /**
  * Agent 调度执行引擎
  *
- * 核心调度循环：
- * 1. 调用 [DispatcherAgent] 生成调用计划
- * 2. 解析计划为 [AgentPlan] 列表（或 `done` 终止）
- * 3. 并行执行所有计划中的 Agent
- * 4. 收集结果，构建汇总上下文
- * 5. 将汇总上下文送回 DispatcherAgent 做下一轮决策
- * 6. 循环直到 `done` 或超过最大轮次
+ * 核心设计原则：**模拟真人在 QQ 中的真实行为**
+ * - 一次只关注一个会话，像真人不可能同时看两个对话
+ * - 先看概况再看内容，像人先扫一眼列表再点进去
+ * - 决策受性格/心情影响，像人挑会话看和回复都凭感觉
  *
- * 关键设计约束：
- * - 每轮所有 Agent 并行执行，互不等待
- * - 每个 Agent 的输入由 DispatcherAgent 显式指定，不塞全量上下文
- * - Agent 执行异常不中断链路，记入结果继续
+ * 调度循环（JSON 交互）：
+ * 1. 调用 [DispatcherAgent] 生成调用计划（JSON 格式）
+ * 2. 解析计划为 [AgentPlan] 列表（或 `done` 终止）
+ * 3. 并行执行所有计划中的 Agent/Tool
+ * 4. 收集结果，构建 JSON 汇总上下文
+ * 5. 将上下文送回 DispatcherAgent 做下一轮决策
+ * 6. 循环直到 `done` 或超过最大轮次
  *
  * @param dispatcher 调度器实例
  * @param maxRounds  最大调度轮次，防止无限循环（默认 5）
@@ -33,12 +35,13 @@ class AgentChain(
     private val maxRounds: Int = 5
 ) {
     private val log = LoggerFactory.getLogger(AgentChain::class.java)
+    private val mapper = ObjectMapper()
 
     /**
      * 执行完整的 Agent 调度链
      *
-     * @param initialInput 用户输入的初始上下文
-     * @return 最终汇总结果文本
+     * @param initialInput 初始上下文 JSON 字符串
+     * @return 最终汇总结果 JSON 字符串
      */
     fun execute(initialInput: String): String {
         val allResults = mutableListOf<AgentExecutionResult>()
@@ -51,17 +54,16 @@ class AgentChain(
             val llmOutput = dispatcher.process(currentContext)
             log.info("DispatcherAgent 输出: $llmOutput")
 
-            // 第二步：解析调用计划
+            // 第二步：解析调用计划（JSON 格式）
             val plans = AgentPlanParser.parse(llmOutput)
             if (plans == null) {
-                // done → 终止，返回已有结果汇总
                 log.info("DispatcherAgent 返回 done，链路终止")
-                return summarizeResults(allResults, currentContext)
+                return summarizeResults(allResults)
             }
 
             if (plans.isEmpty()) {
                 log.warn("第 ${round + 1} 轮解析出空计划，终止")
-                return summarizeResults(allResults, currentContext)
+                return summarizeResults(allResults)
             }
 
             log.info("解析到 ${plans.size} 个调用计划: ${plans.map { it.agentName }}")
@@ -70,22 +72,16 @@ class AgentChain(
             val roundResults = executeParallel(plans)
             allResults.addAll(roundResults)
 
-            // 第四步：构建下一轮上下文（结果汇总）
+            // 第四步：构建下一轮 JSON 上下文
             currentContext = buildNextContext(initialInput, allResults)
         }
 
-        // 超过最大轮次，强制终止
         log.warn("超过最大调度轮次 ($maxRounds)，强制终止")
-        return summarizeResults(allResults, currentContext)
+        return summarizeResults(allResults)
     }
 
     /**
      * 并行执行一组 Agent 调用计划
-     *
-     * 每个计划独立执行，单个失败不影响其他。
-     *
-     * @param plans 调用计划列表
-     * @return 执行结果列表（顺序与 plans 对应）
      */
     private fun executeParallel(plans: List<AgentPlan>): List<AgentExecutionResult> {
         val futures = plans.map { plan ->
@@ -94,14 +90,12 @@ class AgentChain(
             }
         }
 
-        // 等待全部完成，超时兜底
         return try {
             CompletableFuture.allOf(*futures.toTypedArray())
                 .get(60, TimeUnit.SECONDS)
             futures.map { it.get() }
         } catch (e: Exception) {
             log.error("并行执行超时或异常: ${e.message}")
-            // 超时的返回失败结果
             futures.mapIndexed { index, future ->
                 if (future.isDone && !future.isCompletedExceptionally) {
                     future.get()
@@ -120,9 +114,6 @@ class AgentChain(
 
     /**
      * 执行单个 Agent/Tool 调用
-     *
-     * @param plan 调用计划
-     * @return 执行结果（异常时返回失败结果）
      */
     private fun executeSingle(plan: AgentPlan): AgentExecutionResult {
         return try {
@@ -130,52 +121,25 @@ class AgentChain(
             val agent = findAgent(plan.agentName)
             if (agent != null) {
                 val output = agent.process(plan.input)
-                return AgentExecutionResult(
-                    agentName = plan.agentName,
-                    input = plan.input,
-                    output = output,
-                    success = true
-                )
+                return AgentExecutionResult(plan.agentName, plan.input, output, true)
             }
 
             // 再按 Tool 查找
             val tool = findTool(plan.agentName)
             if (tool != null) {
                 val output = tool.execute(plan.input)
-                return AgentExecutionResult(
-                    agentName = plan.agentName,
-                    input = plan.input,
-                    output = output,
-                    success = true
-                )
+                return AgentExecutionResult(plan.agentName, plan.input, output, true)
             }
 
-            AgentExecutionResult(
-                agentName = plan.agentName,
-                input = plan.input,
-                output = "",
-                success = false,
-                error = "未找到 Agent 或 Tool: ${plan.agentName}"
-            )
+            AgentExecutionResult(plan.agentName, plan.input, "", false, "未找到 Agent 或 Tool: ${plan.agentName}")
         } catch (e: Exception) {
             log.error("[${plan.agentName}] 执行异常: ${e.message}")
-            AgentExecutionResult(
-                agentName = plan.agentName,
-                input = plan.input,
-                output = "",
-                success = false,
-                error = e.message
-            )
+            AgentExecutionResult(plan.agentName, plan.input, "", false, e.message)
         }
     }
 
     /**
      * 根据 Agent 类名查找并实例化
-     *
-     * 通过 ClassGraph 扫描 classpath，匹配简单类名。
-     *
-     * @param agentName Agent 的简单类名
-     * @return Agent 实例，未找到返回 null
      */
     private fun findAgent(agentName: String): Agent? {
         val kClass = ClassGraph()
@@ -194,9 +158,6 @@ class AgentChain(
 
     /**
      * 根据 Tool 名称查找并实例化
-     *
-     * @param toolName Tool 的 name 属性或简单类名
-     * @return Tool 实例，未找到返回 null
      */
     private fun findTool(toolName: String): Tool? {
         val kClass = ClassGraph()
@@ -217,62 +178,65 @@ class AgentChain(
         return instance as? Tool
     }
 
-    /**
-     * 获取 Agent 实例（优先 object 单例，否则创建新实例）
-     */
     private fun getInstanceOf(kClass: KClass<out Agent>): Agent {
         return kClass.objectInstance ?: kClass.createInstance()
     }
 
     /**
-     * 构建下一轮调度上下文
+     * 构建下一轮调度上下文（JSON 格式）
      *
-     * 格式：
-     * ```
-     * 原始输入：
-     * xxx
-     *
-     * 已执行结果：
-     * [AgentName] 输入 → 输出
-     * [AgentName] 输入 → 输出
-     * ```
-     *
-     * @param originalInput 初始用户输入
-     * @param results       所有已执行的结果
-     * @return 下一轮调度上下文
+     * 模拟真人决策所需的全部信息显式传入：
+     * - 初始输入
+     * - 已执行的结果摘要
+     * - 当前轮次
      */
-    private fun buildNextContext(originalInput: String, results: List<AgentExecutionResult>): String {
-        val sb = StringBuilder()
-        sb.appendLine("原始输入：")
-        sb.appendLine(originalInput)
-        sb.appendLine()
-        sb.appendLine("已执行结果：")
+    private fun buildNextContext(initialInput: String, results: List<AgentExecutionResult>): String {
+        val root = mapper.createObjectNode()
+        root.put("initialInput", initialInput)
+        root.put("round", results.size)
+
+        val resultsArray = mapper.createArrayNode()
         results.forEach { r ->
+            val obj = mapper.createObjectNode()
+            obj.put("agent", r.agentName)
+            obj.put("input", r.input)
+            obj.put("success", r.success)
             if (r.success) {
-                sb.appendLine("[${r.agentName}] ${r.input} → ${r.output}")
+                obj.put("output", r.output)
             } else {
-                sb.appendLine("[${r.agentName}] ${r.input} → 执行失败: ${r.error}")
+                obj.put("error", r.error ?: "unknown")
             }
+            resultsArray.add(obj)
         }
-        return sb.toString().trim()
+        root.set<ArrayNode>("results", resultsArray)
+
+        return mapper.writeValueAsString(root)
     }
 
     /**
-     * 生成最终结果汇总
-     *
-     * @param results 所有执行结果
-     * @param context 最终上下文
-     * @return 最终回复文本
+     * 生成最终结果 JSON
      */
-    private fun summarizeResults(results: List<AgentExecutionResult>, context: String): String {
+    private fun summarizeResults(results: List<AgentExecutionResult>): String {
         if (results.isEmpty()) {
-            return context
+            return """{"status": "no_action", "message": "没有执行任何 Agent"}"""
         }
 
-        // 取最后一个成功的结果作为最终回复
-        val lastSuccess = results.lastOrNull { it.success }
-        return lastSuccess?.output ?: results.last().let {
-            if (it.success) it.output else "执行出错: ${it.error}"
+        val root = mapper.createObjectNode()
+        root.put("status", "completed")
+        root.put("totalAgents", results.size)
+        root.put("successCount", results.count { it.success })
+
+        val resultsArray = mapper.createArrayNode()
+        results.forEach { r ->
+            val obj = mapper.createObjectNode()
+            obj.put("agent", r.agentName)
+            obj.put("success", r.success)
+            obj.put("output", r.output)
+            if (!r.success) obj.put("error", r.error ?: "")
+            resultsArray.add(obj)
         }
+        root.set<ArrayNode>("results", resultsArray)
+
+        return mapper.writeValueAsString(root)
     }
 }

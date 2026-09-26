@@ -50,8 +50,10 @@ abstract class Agent {
     /**
      * 智能体核心处理逻辑（必填）
      *
-     * @param input 输入数据（由 DispatcherAgent 或上层调用方提供）
-     * @return 处理结果字符串
+     * 输入与输出均为 JSON 字符串，便于结构化解析和跨 Agent 传递。
+     *
+     * @param input JSON 字符串，由 DispatcherAgent 显式指定（包含该 Agent 需要的上下文）
+     * @return JSON 字符串，包含处理结果
      */
     abstract fun process(input: String): String
 }

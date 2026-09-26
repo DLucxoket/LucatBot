@@ -1,10 +1,13 @@
 package org.dlucxoket.lucatbot.bot.agent
 
 /**
- * 回声 Agent
+ * 回声 Agent（测试用）
  *
- * 将输入原样返回，用于验证 Agent 链路连通性。
- * 最简单的 Agent 实现，不依赖 LLM。
+ * 模拟真人行为验证：最简单的链路连通性测试，不代表真实用户行为。
+ * 真实行为由 [ReplyAgent] 和未来的 `SessionPickerAgent` 等承担。
+ *
+ * 输入：`{"text": "要回显的内容"}`
+ * 输出：`{"echo": "Echo: xxx"}`
  */
 object EchoAgent : Agent() {
     override val description: String = """
@@ -13,6 +16,15 @@ object EchoAgent : Agent() {
     """.trimIndent()
 
     override fun process(input: String): String {
-        return "Echo: $input"
+        // 解析 JSON 输入
+        val text = try {
+            val node = com.fasterxml.jackson.databind.ObjectMapper().readTree(input)
+            node.get("text")?.asText() ?: input
+        } catch (e: Exception) {
+            input
+        }
+
+        // 返回 JSON 结果
+        return """{"echo": "Echo: $text"}"""
     }
 }

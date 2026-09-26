@@ -1,50 +1,88 @@
 package org.dlucxoket.lucatbot.bot.agent
 
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ArrayNode
+
 /**
  * DispatcherAgent 输出解析器
  *
- * 将 LLM 返回的调用计划文本解析为 [AgentPlan] 列表。
+ * 将 LLM 返回的调用计划解析为 [AgentPlan] 列表。
  *
- * 解析规则：
- * - 每行格式为 `AgentName: 输入内容`
- * - 空行忽略
- * - 整体输出为 `done`（忽略大小写和首尾空白）表示终止
- * - 格式异常的行跳过并记警告
+ * 输出格式（JSON）：
+ * ```json
+ * [
+ *   {"agent": "EchoAgent", "input": {"text": "hello"}},
+ *   {"agent": "ReplyAgent", "input": {"context": "..."}}
+ * ]
+ * ```
+ * 或 `"done"` 表示终止。
  */
 object AgentPlanParser {
+
+    private val mapper = ObjectMapper()
 
     /**
      * 解析 LLM 输出的调用计划
      *
-     * @param llmOutput DispatcherAgent 返回的原始文本
+     * @param llmOutput DispatcherAgent 返回的 JSON 文本
      * @return 调用计划列表；若输出为 `done` 则返回 null
      */
     fun parse(llmOutput: String): List<AgentPlan>? {
         val trimmed = llmOutput.trim()
 
         // done → 终止
-        if (trimmed.equals("done", ignoreCase = true)) {
+        if (trimmed.equals("done", ignoreCase = true) || trimmed == "\"done\"") {
             return null
         }
 
-        val plans = mutableListOf<AgentPlan>()
-        for (line in trimmed.lines()) {
-            val t = line.trim()
-            if (t.isEmpty()) continue
+        return try {
+            val node: JsonNode = mapper.readTree(trimmed)
 
-            val separatorIndex = t.indexOf(':')
-            if (separatorIndex <= 0 || separatorIndex == t.length - 1) {
-                // 格式异常：缺少冒号、Agent 名为空、或冒号后无内容
-                continue
+            when {
+                node.isArray -> parseJsonArray(node as ArrayNode)
+                node.isObject -> listOfNotNull(toAgentPlan(node))
+                node.isTextual && node.asText().equals("done", true) -> null
+                else -> null
             }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-            val agentName = t.substring(0, separatorIndex).trim()
-            val input = t.substring(separatorIndex + 1).trim()
-            if (agentName.isEmpty() || input.isEmpty()) continue
+    /**
+     * 解析 JSON 数组中的调用计划
+     */
+    private fun parseJsonArray(array: ArrayNode): List<AgentPlan>? {
+        val plans = array.mapNotNull { element ->
+            if (element.isObject) toAgentPlan(element) else null
+        }
+        return plans.ifEmpty { null }
+    }
 
-            plans.add(AgentPlan(agentName, input))
+    /**
+     * 从 JSON 对象中提取 AgentPlan
+     *
+     * 格式：{"agent": "AgentName", "input": {...}}
+     */
+    private fun toAgentPlan(obj: JsonNode): AgentPlan? {
+        val agentName = obj.get("agent")?.asText()?.trim() ?: return null
+        if (agentName.isEmpty()) return null
+
+        val inputNode = obj.get("input")
+        val input = when {
+            inputNode == null || inputNode.isNull -> "{}"
+            inputNode.isTextual -> inputNode.asText()
+            else -> mapper.writeValueAsString(inputNode)
         }
 
-        return plans.ifEmpty { null }
+        return AgentPlan(agentName, input)
+    }
+
+    /**
+     * 将 AgentPlan 列表序列化为 JSON 字符串
+     */
+    fun toJson(plans: List<AgentPlan>): String {
+        return mapper.writeValueAsString(plans)
     }
 }
