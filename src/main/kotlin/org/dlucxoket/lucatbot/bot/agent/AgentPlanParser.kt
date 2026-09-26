@@ -29,11 +29,18 @@ object AgentPlanParser {
      * @return 调用计划列表；若输出为 `done` 则返回 null
      */
     fun parse(llmOutput: String): List<AgentPlan>? {
-        val trimmed = llmOutput.trim()
+        var trimmed = llmOutput.trim()
 
         // done → 终止
         if (trimmed.equals("done", ignoreCase = true) || trimmed == "\"done\"") {
             return null
+        }
+
+        // 剥掉外层引号（LLM 有时把 JSON 包在字符串里返回）
+        if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+            trimmed = trimmed.substring(1, trimmed.length - 1)
+                .replace("\\\"", "\"")   // 反转义
+                .replace("\\n", "\n")
         }
 
         return try {
@@ -42,7 +49,12 @@ object AgentPlanParser {
             when {
                 node.isArray -> parseJsonArray(node as ArrayNode)
                 node.isObject -> listOfNotNull(toAgentPlan(node))
-                node.isTextual && node.asText().equals("done", true) -> null
+                node.isTextual -> {
+                    // 还是一层字符串？递归解析
+                    val inner = node.asText().trim()
+                    if (inner.equals("done", true)) null
+                    else parse(inner)
+                }
                 else -> null
             }
         } catch (e: Exception) {
