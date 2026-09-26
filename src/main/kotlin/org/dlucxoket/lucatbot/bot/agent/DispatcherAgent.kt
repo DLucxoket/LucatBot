@@ -38,6 +38,13 @@ object DispatcherAgent : Agent<String, String>() {
 
     override val inputClass: Class<String> = String::class.java
 
+    /**
+     * DispatcherAgent 的输入是原始上下文（纯文本/JSON 均可），不走 JSON 反序列化
+     */
+    override fun fromJson(json: String): String {
+        return json
+    }
+
     override fun handle(input: String): String {
         return processDispatcher(input)
     }
