@@ -23,6 +23,9 @@ dependencies {
     
     /** Shiro OneBot 框架：QQ 机器人开发框架（2.5.3+ 修复了 Tomcat 11 request recycled 问题） */
     implementation("com.mikuac:shiro:2.5.5")
+
+    /** Jackson 3（Shiro 2.5.5 需要，强制升级以匹配 treeToValue API） */
+    implementation("tools.jackson.core:jackson-databind:3.2.3")
     
     /** ClassGraph 类路径扫描库：用于扫描所有 Agent 子类 */
     implementation("io.github.classgraph:classgraph:4.8.165")
