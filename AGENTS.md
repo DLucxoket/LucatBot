@@ -146,6 +146,13 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 | `io.github.classgraph:classgraph` | 运行时 Agent/Tool 类自动发现 |
 | `com.fasterxml.jackson` | JSON↔OOP 边界序列化（Shiro 传递依赖） |
 
+## Shiro 框架参考
+
+遇到 Shiro 相关问题（配置、API、兼容性）时查阅：
+
+- **GitHub 源码**：https://github.com/MisakaTAT/Shiro
+- **官方文档**：https://misakatat.github.io/shiro-docs/
+
 ## 容易搞错的地方
 
 - **Agent 发现是自动的**——不要手动注册。ClassGraph 扫描 classpath。
@@ -155,3 +162,6 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 - **Gradle 使用国内镜像**——`gradle-wrapper.properties` 指向 `mirrors.aliyun.com`。
 - **Spring Boot 4.0.3 + Kotlin 2.2.21**——版本很新，不要假设 Spring Boot 3.x 写法。
 - **Shiro API**：`ArrayMsg.type` 是 `MsgTypeEnum` 枚举；`sendMsg(event, msg, autoEscape)` 签名。
+- **Shiro 2.5.0 + Spring Boot 4 / Tomcat 11 兼容性**：Tomcat 11 在 WebSocket 升级后回收 request，导致 `ConnectionUtils.parseSelfId` 读 `getHandshakeHeaders()` 崩溃。已通过 `CachedHandshakeSessionDecorator` 缓存 handshake headers 修复（见 `adapter/onebot/config/ShiroWebSocketConfig.kt`）。
+- **Shiro WS 端点**：默认在 Spring Boot Tomcat 主端口（8080）的 `/ws/shiro` 路径，不是独立端口。
+- **NapCat 连接地址**：`ws://localhost:8080/ws/shiro?self_id=机器人QQ号`
