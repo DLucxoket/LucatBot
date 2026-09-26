@@ -10,7 +10,7 @@ shiro:
   plugin-list:
     - org.dlucxoket.lucatbot.adapter.onebot.MainPlugin
 
-# LLM 配置
+# LLM 配置（密钥通过环境变量注入，勿写入此文件）
 ai:
   qwen:
     base-url: ${LLM_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
