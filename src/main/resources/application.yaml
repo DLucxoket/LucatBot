@@ -6,6 +6,7 @@ shiro:
   ws:
     server:
       enable: true
+      port: 5800
     access-token: ZftVV~7_wFah3nCL
   plugin-list:
     - org.dlucxoket.lucatbot.adapter.onebot.MainPlugin
