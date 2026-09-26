@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot.bot
 
+import org.dlucxoket.lucatbot.bot.persona.BotMood
+import org.dlucxoket.lucatbot.bot.persona.BotPersona
 import org.dlucxoket.lucatbot.model.event.message.MessageEvent
 import org.springframework.stereotype.Component
 
@@ -71,6 +73,12 @@ class LucatBot {
 
     /** 当前状态 */
     var state: State = State.Idle
+
+    /** 机器人人格 */
+    val persona: BotPersona = BotPersona()
+
+    /** 当前心情 */
+    var mood: BotMood = BotMood.guessByTime()
 
     /** 未读消息队列（线程安全） */
     private val unreadQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()

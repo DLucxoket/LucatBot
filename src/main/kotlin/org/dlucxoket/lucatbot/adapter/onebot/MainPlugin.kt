@@ -13,6 +13,7 @@ import org.dlucxoket.lucatbot.bot.tool.MessageListTool
 import org.dlucxoket.lucatbot.bot.tool.UserProfileTool
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
+import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
@@ -36,6 +37,10 @@ internal class MainPlugin: BotPlugin() {
     /** 机器人状态机（Spring 注入，全局共享） */
     @Autowired
     private lateinit var lucatBot: LucatBot
+
+    /** 会话历史管理 */
+    @Autowired
+    private lateinit var sessionManager: SessionManager
 
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
@@ -70,16 +75,33 @@ internal class MainPlugin: BotPlugin() {
             // 执行 Agent 调度链
             log.info("收到消息: $plainText")
 
+            // 记录到会话历史
+            val convId = buildConversationId(modelEvent)
+            sessionManager.addMessage(convId, modelEvent.sender.nickname, plainText)
+
+            // 获取会话上下文（最近的历史）
+            val history = sessionManager.getContextSummary(convId)
+
             // 打字延迟（模拟真人不秒回）
-            if (org.dlucxoket.lucatbot.bot.persona.TimeAwareness.shouldDelay()) {
-                val delay = org.dlucxoket.lucatbot.bot.persona.TimeAwareness.typingDelay(plainText.length)
+            if (TimeAwareness.shouldDelay()) {
+                val delay = TimeAwareness.typingDelay(plainText.length)
                 log.info("模拟打字延迟 ${delay}ms")
                 Thread.sleep(delay)
             }
 
-            val reply = agentChain.execute(plainText)
+            // 构建带历史的上下文
+            val contextWithHistory = """
+                当前消息：$plainText
+
+                聊天记录：
+                $history
+            """.trimIndent()
+
+            val reply = agentChain.execute(contextWithHistory)
 
             if (reply.isNotBlank()) {
+                // 记录机器人的回复到历史
+                sessionManager.addMessage(convId, lucatBot.persona.name, reply, isBot = true)
                 bot.sendMsg(event, reply, false)
                 log.info("回复消息: $reply")
             } else {
@@ -102,6 +124,17 @@ internal class MainPlugin: BotPlugin() {
         ChatHistoryTool.bindBot(bot)
         UserProfileTool.bindBot(bot)
         MessageListTool.bindBot(bot)
+    }
+
+    /**
+     * 构建会话 ID
+     */
+    private fun buildConversationId(event: org.dlucxoket.lucatbot.model.event.message.MessageEvent): String {
+        return if (event is org.dlucxoket.lucatbot.model.event.message.GroupMessageEvent) {
+            "group:${event.group.groupNumber}"
+        } else {
+            "private:${event.sender.qqNumber}"
+        }
     }
 
     /**
