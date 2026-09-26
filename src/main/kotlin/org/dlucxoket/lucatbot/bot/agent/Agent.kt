@@ -33,15 +33,19 @@ abstract class Agent<I, O>(
 
     /**
      * 传递给 LLM 的系统提示开头
+     *
+     * lazy 延迟初始化——description 是 abstract val，子类构造完成后才可用
      */
-    val systemPromptHead: String = """
+    val systemPromptHead: String by lazy {
+        """
         你的信息：
         $description
         ===================================
-    """.trimIndent()
+        """.trimIndent()
+    }
 
-    /** description 的首行摘要 */
-    val shortDescription = description.substringBefore("\n")
+    /** description 的首行摘要（lazy，同上） */
+    val shortDescription: String by lazy { description.substringBefore("\n") }
 
     /**
      * 输入类型的 Class（用于 JSON 反序列化）
