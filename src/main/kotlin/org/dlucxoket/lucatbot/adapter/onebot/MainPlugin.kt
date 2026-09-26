@@ -63,9 +63,13 @@ internal class MainPlugin: BotPlugin() {
             // 执行 Agent 调度链
             val reply = agentChain.execute(plainText)
 
-            // 回复消息
-            bot.sendMsg(event, reply, false)
-            log.info("回复消息: $reply")
+            // 回复消息（空回复不发，避免 OneBot 解析失败）
+            if (reply.isNotBlank()) {
+                bot.sendMsg(event, reply, false)
+                log.info("回复消息: $reply")
+            } else {
+                log.info("AgentChain 返回空回复，跳过发送")
+            }
 
             return MESSAGE_BLOCK
         } catch (e: Exception) {

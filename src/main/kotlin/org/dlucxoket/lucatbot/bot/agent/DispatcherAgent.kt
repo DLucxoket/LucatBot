@@ -26,14 +26,14 @@ object DispatcherAgent : Agent<String, String>() {
      * 调度器的功能描述
      */
     override val description: String = """
-        一个Agent调度器，模拟真人决定接下来做什么。
-        根据上下文决定调用哪些Agent，输出JSON格式的调用计划：
+        一个Agent调度器，决定接下来调用哪些Agent来处理用户消息。
+        输出JSON格式的调用计划：
         [{"agent": "AgentName", "input": {...}}]
-        或者返回"done"表示不需要再调用任何Agent。
         
-        约束：
+        **重要规则**：
+        - 收到用户消息时，必须调用至少一个Agent来处理（通常是ReplyAgent）
+        - 只有在已经完成处理、无需进一步操作时才返回done
         - input由你显式指定，只传该Agent需要的信息
-        - 不需要就返回done
     """.trimIndent()
 
     override val inputClass: Class<String> = String::class.java
@@ -82,9 +82,11 @@ object DispatcherAgent : Agent<String, String>() {
             上下文：
             $input
 
-            请输出JSON格式的调用计划，例如：
-            [{"agent": "ReplyAgent", "input": {"context": "...", "messages": [...]}}]
-            或者直接输出 done 表示不需要再调用。
+            **你必须输出JSON格式的调用计划来处理上面的用户消息。**
+            至少调用 ReplyAgent 来回复用户。例如：
+            [{"agent": "ReplyAgent", "input": {"context": "用户发来的消息", "messages": []}}]
+            
+            只有在确认已处理完毕时才输出 done。
         """.trimIndent())
     }
 }
