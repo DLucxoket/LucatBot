@@ -65,6 +65,14 @@ internal class MainPlugin: BotPlugin() {
 
             // 执行 Agent 调度链
             log.info("收到消息: $plainText")
+
+            // 打字延迟（模拟真人不秒回）
+            if (org.dlucxoket.lucatbot.bot.persona.TimeAwareness.shouldDelay()) {
+                val delay = org.dlucxoket.lucatbot.bot.persona.TimeAwareness.typingDelay(plainText.length)
+                log.info("模拟打字延迟 ${delay}ms")
+                Thread.sleep(delay)
+            }
+
             val reply = agentChain.execute(plainText)
 
             if (reply.isNotBlank()) {
