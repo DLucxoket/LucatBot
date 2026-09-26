@@ -16,10 +16,10 @@ import org.springframework.stereotype.Component
  * - 本地部署的 Qwen、Llama 等（通过 Ollama、vLLM 等）
  * - 其他第三方兼容服务
  *
- * 配置来源：`application.yaml` 中的 `ai.qwen.*` 配置项
- * - base-url：API 端点地址（默认 Ollama 本地地址）
- * - api-key：API 密钥（Ollama 不需要真正的 Key，填任意值即可）
- * - model-name：模型名称（需与实际部署的模型匹配）
+ * 配置来源：`application.yaml` 中的 `llm.mimo.*` 配置项
+ * - base-url：API 端点地址
+ * - api-key：API 密钥（通过 LLM_API_KEY 环境变量注入）
+ * - model-name：模型名称
  *
  * 注意：每次 `ask()` 调用都会重新构建 `OpenAiChatModel` 实例。
  * 这在低频场景下没问题，但在高频调用时可能有性能开销。
