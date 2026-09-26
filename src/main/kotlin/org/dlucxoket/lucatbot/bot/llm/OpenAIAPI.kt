@@ -36,22 +36,22 @@ class OpenAIAPI: LLM {
         val DEFAULT: OpenAIAPI by lazy { OpenAIAPI() }
     }
 
-    /** API 端点地址（支持环境变量 LLM_BASE_URL / 配置项 ai.qwen.base-url） */
-    @Value($$"${ai.qwen.base-url:}")
+    /** API 端点地址（支持环境变量 LLM_BASE_URL / 配置项 llm.mimo.base-url） */
+    @Value($$"${llm.mimo.base-url:}")
     private var baseUrl: String = System.getenv("LLM_BASE_URL")
-        ?: System.getProperty("ai.qwen.base-url")
+        ?: System.getProperty("llm.mimo.base-url")
         ?: "https://token-plan-cn.xiaomimimo.com/v1"
 
-    /** API 密钥（支持环境变量 LLM_API_KEY / 配置项 ai.qwen.api-key） */
-    @Value($$"${ai.qwen.api-key:}")
+    /** API 密钥（支持环境变量 LLM_API_KEY / 配置项 llm.mimo.api-key） */
+    @Value($$"${llm.mimo.api-key:}")
     private var apiKey: String = System.getenv("LLM_API_KEY")
-        ?: System.getProperty("ai.qwen.api-key")
+        ?: System.getProperty("llm.mimo.api-key")
         ?: "ollama"
 
-    /** 模型名称（支持环境变量 LLM_MODEL_NAME / 配置项 ai.qwen.model-name） */
-    @Value($$"${ai.qwen.model-name:}")
+    /** 模型名称（支持环境变量 LLM_MODEL_NAME / 配置项 llm.mimo.model-name） */
+    @Value($$"${llm.mimo.model-name:}")
     private var modelName: String = System.getenv("LLM_MODEL_NAME")
-        ?: System.getProperty("ai.qwen.model-name")
+        ?: System.getProperty("llm.mimo.model-name")
         ?: "mimo-v2.5"
 
 

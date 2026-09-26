@@ -10,9 +10,9 @@ shiro:
   plugin-list:
     - org.dlucxoket.lucatbot.adapter.onebot.MainPlugin
 
-# LLM 配置（密钥通过环境变量注入，勿写入此文件）
-ai:
-  qwen:
-    base-url: ${LLM_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
+# LLM 配置（密钥通过 LLM_API_KEY 环境变量注入）
+llm:
+  mimo:
+    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
     api-key: ${LLM_API_KEY:ollama}
-    model-name: ${LLM_MODEL_NAME:mimo-v2.5}
+    model-name: "mimo-v2.5"
