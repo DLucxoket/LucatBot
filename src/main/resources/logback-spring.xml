@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <!-- 简洁格式：HH:mm:ss 级别 [线程] Logger名 : 消息 -->
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{20} : %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 只显示 LucatBot 包和关键框架的日志 -->
+    <logger name="org.dlucxoket.lucatbot" level="DEBUG"/>
+    <logger name="com.mikuac.shiro" level="INFO"/>
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="org.apache" level="WARN"/>
+    <logger name="io.github.classgraph" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>
