@@ -2,37 +2,59 @@
 
 ## 项目概览
 
-Kotlin Spring Boot 4.0.3 应用——基于 OneBot 协议（QQ）的即时回复聊天机器人，使用 Shiro 框架 + LangChain4j 的 LLM 智能体系统。
+Kotlin Spring Boot 4.0.3 应用——基于 OneBot 协议（QQ）的模拟真人聊天机器人，使用 Shiro 框架 + LangChain4j 的 LLM 智能体系统。
 
 ## 架构
 
 ### 智能体系统（核心设计）
 
-机器人使用自动发现的 Agent 链：
+机器人使用自动发现的 Agent 链，**核心设计原则：模拟真人在 QQ 中的真实行为**：
 
-- `Agent`（抽象类）——基类；每个 Agent 有 `description`（LLM 可读）和 `process(input): String`。
-- `DispatcherAgent`——单例，通过 **ClassGraph** 在运行时扫描所有 `Agent` 子类，构建描述列表，交给 LLM 决定下一步调用哪些 Agent。输出格式为每行 `AgentName: 输入`，或 `done`。
-- 添加新 Agent：在 `bot/agent/` 下创建继承 `Agent` 的类，实现 `description` 和 `process()`。会被自动发现——无需手动注册。
+- `Agent<I, O>`（泛型抽象类）——基类；每个 Agent 声明自己的输入/输出 OOP 类型，实现 `handle(input: I): O`。
+- `DispatcherAgent`——单例，通过 **ClassGraph** 在运行时扫描所有 `Agent`/`Tool` 子类，构建描述列表，交给 LLM 决策调用计划（JSON 格式），或 `done`。
+- 添加新 Agent：在 `bot/agent/` 下创建继承 `Agent<I, O>` 的类，实现 `description`、`inputClass`、`handle()`。会被自动发现——无需手动注册。
+
+### JSON ↔ OOP 边界约定
+
+```
+LLM API 边界（JSON 字符串）
+    ↓ fromJson() 反序列化
+Agent.handle(input: I): O   ← 纯 OOP 操作，类型安全
+    ↓ toJson() 序列化
+LLM API 边界（JSON 字符串）
+```
+
+- **LLM API 层**：输入/输出均为 JSON 字符串（LLM 天然读写文本）
+- **Agent 内部**：反序列化为 OOP 对象操作（data class，`val` 不可变）
+- **边界转换**：由 `Agent<I,O>` 基类的 `process()` 模板方法处理，子类只写 OOP 逻辑
+- **数据类**：放在 `bot/agent/data/` 包，每个 Agent 定义自己的 Request/Result
+
+### Tool 与 Agent 的区别
+
+- **Agent**：LLM 驱动的智能处理单元，可以调用 LLM 做判断和生成（如 ReplyAgent）
+- **Tool**：确定性的数据查询/交互操作，不调用 LLM（如 ChatHistoryTool）
+- 两者都通过 ClassGraph 自动发现，都可被 DispatcherAgent 调度
 
 ### 消息模型层级
 
 ```
 Event（接口）
-└─ MessageEvent（抽象类，持有 Message）
-   ├─ MessageEvent 子类
-   └─ message/ 子类型：ChatMessage、PokeMessage 等
+└─ MessageEvent（抽象类，持有 Message + sender + timestamp）
+   ├─ FriendMessageEvent
+   ├─ GroupMessageEvent（附加 group）
+   └─ PrivateMessageEvent
 
 Message（接口）
-└─ ChatMessage
-   └─ message/member/：TextMessageMember、ImageMessageMember、AtMessageMember、FaceMessageMember、MemeMessageMember
+└─ ChatMessage（持有 List<MessageMember>）
+   └─ message/member/：TextMessageMember、AtMessageMember、ImageMessageMember、FaceMessageMember、MemeMessageMember
 
 User：qqNumber、nickname、sex、level、signature
-Session：空占位符
+Session：会话上下文（预留）
 ```
 
 ### 入口点
 
-`adapter/onebot/MainPlugin`（Shiro BotPlugin）——目前是骨架；`onAnyMessage` 返回 `MESSAGE_IGNORE`。机器人自动通过好友请求。
+`adapter/onebot/MainPlugin`（Shiro BotPlugin）——`onAnyMessage` 调用 `ShiroConverter` 转换 → `AgentChain.execute()` 调度 → 回复消息。
 
 ### LLM 配置
 
@@ -46,6 +68,66 @@ ai.qwen.model-name: qwen2.5
 
 使用 LangChain4j 的 `OpenAiChatModel`——任何兼容 OpenAI 协议的端点均可。
 
+## OOP 设计原则（必须遵守）
+
+### 1. JSON 仅在 LLM API 边界
+
+Agent/Tool 内部**一律使用 OOP 对象**（data class），不在业务逻辑里拼 JSON 字符串。JSON 序列化/反序列化只发生在 `Agent.process()` 模板方法的边界处。
+
+```kotlin
+// ✅ 正确：handle() 用 OOP 对象
+override fun handle(input: ReplyRequest): ReplyResult {
+    val reply = llm.ask(systemPrompt, input.context)
+    return ReplyResult(reply = reply)
+}
+
+// ❌ 错误：业务逻辑里拼 JSON
+override fun handle(input: String): String {
+    return """{"reply": "hello"}"""
+}
+```
+
+### 2. 单一职责（SRP）
+
+每个类只做一件事。`AgentChain` 承担调度、发现、执行、上下文构建——过重，应拆分。新建类时思考："这个类是否只因一个原因而改变？"
+
+### 3. 依赖倒置（DIP）
+
+高层模块不依赖低层细节。`Agent.llm` 不应硬编码 `LLM.DEFAULT`——应支持构造注入或 setter。`Tool.bot` 同理。
+
+```kotlin
+// ✅ 正确：可替换的依赖
+abstract class Agent<I, O>(protected val llm: LLM = LLM.DEFAULT)
+
+// ❌ 错误：硬依赖全局单例
+val llm: LLM = LLM.DEFAULT  // 无法在测试中 mock
+```
+
+### 4. 开闭原则（OCP）
+
+加新 Agent/Tool 不应改已有代码。ClassGraph 自动发现已满足——新 Agent 继承基类即可，不改 DispatcherAgent/AgentChain。
+
+### 5. 不可变优先
+
+数据类一律用 `val`。需要修改时用 `copy()` 创建新实例。
+
+```kotlin
+data class ReplyResult(val reply: String, val action: String = "send")
+// ✅ val + data class，天然不可变
+```
+
+### 6. 接口隔离（ISP）
+
+`LLM` 接口只暴露 `ask()`——不要加无关方法。`Tool` 只暴露 `execute()` + 描述字段。
+
+### 7. 组合优于继承
+
+Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理。不要 `class MyAgent : OpenAIAPI()`。
+
+### 8. 模板方法模式
+
+`Agent<I,O>` 的 `process()` 是模板方法：`fromJson → handle → toJson`。子类只实现 `handle()`，不改边界流程。`fromJson`/`toJson` 可 override 做自定义转换。
+
 ## 开发命令
 
 ```bash
@@ -55,20 +137,21 @@ ai.qwen.model-name: qwen2.5
 ./gradlew compileKotlin    # 仅编译，不跑测试
 ```
 
-单个测试类：`src/test/kotlin/.../LucatBotApplicationTests.kt`
-
 ## 核心依赖
 
 | 库 | 用途 |
 |----|------|
 | `com.mikuac:shiro:2.5.0` | OneBot 协议（QQ 机器人框架） |
 | `dev.langchain4j:langchain4j-open-ai-spring-boot-starter` | OpenAI 兼容 LLM 客户端 |
-| `io.github.classgraph:classgraph` | 运行时 Agent 类发现 |
+| `io.github.classgraph:classgraph` | 运行时 Agent/Tool 类自动发现 |
+| `com.fasterxml.jackson` | JSON↔OOP 边界序列化（Shiro 传递依赖） |
 
 ## 容易搞错的地方
 
-- **Agent 发现是自动的**——不要在 `MainPlugin` 或任何配置里手动注册新 Agent。ClassGraph 会扫描 classpath。
-- **`LLM.DEFAULT` 是懒加载单例**（不是 Spring bean）——它使用 `OpenAIAPI.DEFAULT`，后者读取 Spring `@Value` 字段。`OpenAIAPI` 本身是 `@Component`，但 `DEFAULT` 伴生对象绕过了 DI。
-- **`DispatcherAgent` 是 Kotlin `object`**——不能被注入或实例化；当静态单例使用。
-- **Gradle 使用国内镜像**——`gradle-wrapper.properties` 指向 `mirrors.aliyun.com` 下载发行版。
-- **Spring Boot 4.0.3 + Kotlin 2.2.21**——版本很新；不要假设 Spring Boot 3.x 的写法。
+- **Agent 发现是自动的**——不要手动注册。ClassGraph 扫描 classpath。
+- **JSON 只在边界**——Agent `handle()` 方法里禁止拼 JSON，用 OOP 对象。
+- **`LLM.DEFAULT` 是懒加载单例**（不是 Spring bean）——绕过了 DI。
+- **`DispatcherAgent` 是 Kotlin `object`**——不能被注入或实例化。
+- **Gradle 使用国内镜像**——`gradle-wrapper.properties` 指向 `mirrors.aliyun.com`。
+- **Spring Boot 4.0.3 + Kotlin 2.2.21**——版本很新，不要假设 Spring Boot 3.x 写法。
+- **Shiro API**：`ArrayMsg.type` 是 `MsgTypeEnum` 枚举；`sendMsg(event, msg, autoEscape)` 签名。
