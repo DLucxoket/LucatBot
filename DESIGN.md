@@ -9,45 +9,52 @@
 ## 总览
 
 ```
-LucatBotApplication          Spring Boot 入口
+LucatBotApplication              Spring Boot 入口（@EnableScheduling）
 │
-├── adapter/                 协议适配层
-│   └── onebot/MainPlugin    OneBot 协议接入（Shiro 插件）
+├── adapter/onebot/              协议适配层
+│   ├── MainPlugin               OneBot 消息入口
+│   └── ShiroConverter           Shiro DTO → model 转换
 │
-├── bot/                     机器人核心
-│   ├── Bot                  机器人本体抽象
-│   ├── llm/                 LLM 调用层
-│   │   ├── LLM              抽象接口
-│   │   └── OpenAIAPI        OpenAI 协议实现
-│   └── agent/               智能体调度层
-│       ├── Agent            智能体抽象基类
-│       └── DispatcherAgent  智能体调度器（单例）
+├── bot/                         机器人核心
+│   ├── LucatBot                 机器人状态机（Idle/Viewing/InConversation）
+│   ├── persona/                 人格系统
+│   │   ├── BotPersona           性格/兴趣/说话风格
+│   │   ├── BotMood              心情（随时间变化）
+│   │   └── TimeAwareness        时间感知/打字延迟
+│   ├── llm/                     LLM 调用层
+│   │   ├── LLM                  抽象接口
+│   │   └── OpenAIAPI            OpenAI 协议实现
+│   ├── agent/                   智能体调度层
+│   │   ├── Agent<I,O>           泛型基类（JSON↔OOP 边界）
+│   │   ├── DispatcherAgent      调度器（LLM 决策）
+│   │   ├── SessionPickerAgent   会话选择（人格驱动）
+│   │   ├── ReplyAgent           智能回复
+│   │   ├── EchoAgent            测试用
+│   │   ├── AgentChain           调度循环
+│   │   ├── AgentExecutor        并行执行
+│   │   ├── AgentDiscovery       类发现缓存
+│   │   ├── ContextBuilder       上下文构建
+│   │   └── data/                OOP 数据类
+│   ├── tool/                    数据查询工具
+│   │   ├── Tool<I,O>            泛型基类
+│   │   ├── UnreadSummaryTool    未读概况
+│   │   ├── GetSessionContentTool 会话内容
+│   │   ├── SendMessageTool      发消息
+│   │   ├── SendEmojiTool        发表情
+│   │   ├── UserProfileTool      用户资料
+│   │   ├── ChatHistoryTool      聊天记录
+│   │   ├── MessageListTool      消息列表
+│   │   └── data/                OOP 数据类
+│   └── scheduler/
+│       └── ProactiveScheduler   定时主动查看消息
 │
-└── model/                   业务数据模型层（与 Shiro DTO 解耦）
-    ├── event/               事件模型
-    │   ├── Event
-    │   └── message/
-    │       ├── MessageEvent
-    │       ├── FriendMessageEvent
-    │       ├── GroupMessageEvent
-    │       └── PrivateMessageEvent
-    ├── message/             消息模型
-    │   ├── Message
-    │   ├── ChatMessage
-    │   ├── PokeMessage
-    │   └── member/          消息片段
-    │       ├── MessageMember
-    │       ├── TextMessageMember
-    │       ├── AtMessageMember
-    │       ├── ImageMessageMember
-    │       ├── FaceMessageMember
-    │       └── MemeMessageMember
-    ├── user/                用户模型
-    │   ├── User
-    │   └── Sex
-    ├── group/               群组模型
-    │   └── Group
-    └── session/             会话模型
+└── model/                       业务数据模型层
+    ├── event/                   事件（按来源）
+    ├── message/                 消息（按种类）+ member/
+    ├── user/                    User, Sex
+    ├── group/                   Group
+    └── session/                 SessionManager（多轮对话记忆）
+```
         └── Session
 ```
 
