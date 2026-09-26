@@ -4,14 +4,17 @@ import com.mikuac.shiro.core.Bot
 import com.mikuac.shiro.core.BotPlugin
 import com.mikuac.shiro.dto.event.message.AnyMessageEvent
 import com.mikuac.shiro.dto.event.request.FriendAddRequestEvent
+import com.mikuac.shiro.enums.MsgTypeEnum
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.AgentChain
+import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
 import org.dlucxoket.lucatbot.bot.tool.MessageListTool
 import org.dlucxoket.lucatbot.bot.tool.UserProfileTool
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 
 /**
@@ -30,8 +33,9 @@ internal class MainPlugin: BotPlugin() {
     /** Agent 调度执行引擎 */
     private val agentChain = AgentChain()
 
-    /** 机器人状态机（模拟真人 QQ 行为） */
-    private val lucatBot = LucatBot()
+    /** 机器人状态机（Spring 注入，全局共享） */
+    @Autowired
+    private lateinit var lucatBot: LucatBot
 
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
@@ -106,7 +110,7 @@ internal class MainPlugin: BotPlugin() {
     private fun isAtMe(event: AnyMessageEvent, selfId: Long): Boolean {
         val segments = event.arrayMsg ?: return false
         return segments.any { seg ->
-            seg.type.toString().equals("at", ignoreCase = true) &&
+            seg.type == MsgTypeEnum.at &&
                 seg.getStringData("qq")?.toLongOrNull() == selfId
         }
     }

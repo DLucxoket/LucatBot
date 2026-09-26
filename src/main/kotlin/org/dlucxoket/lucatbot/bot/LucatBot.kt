@@ -72,8 +72,8 @@ class LucatBot {
     /** 当前状态 */
     var state: State = State.Idle
 
-    /** 未读消息队列 */
-    private val unreadQueue = mutableListOf<UnreadMessage>()
+    /** 未读消息队列（线程安全） */
+    private val unreadQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()
 
     /**
      * 判断一条消息该怎么处理
