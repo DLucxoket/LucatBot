@@ -1,36 +1,34 @@
 package org.dlucxoket.lucatbot.bot.tool
 
+import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
+import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
+
 /**
  * 聊天记录查询工具
  *
  * 查询指定群或私聊的最近聊天记录。
- *
- * 输入格式：`群号 数量` 或 `用户QQ号 数量`
- * 输出格式：按时间排序的聊天记录摘要
+ * JSON 边界：`{"targetId": 123, "count": 10}` ↔ `ChatHistoryRequest`
+ * OOP 内部：`ChatHistoryRequest` → `ChatHistoryResult`
  */
-object ChatHistoryTool : Tool() {
+object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
     override val name: String = "ChatHistoryTool"
 
-    override val description: String = """
-        查询聊天记录。可以查群聊或私聊的最近消息。
-        返回按时间排序的消息列表，每条包含发送者和内容摘要。
-    """.trimIndent()
+    override val description: String = "查询聊天记录。返回指定会话的最近消息列表。"
 
-    override val parameterHint: String = "群号 数量（如：123456 10）或 用户QQ号 数量（如：123456789 10）"
+    override val parameterHint: String = "JSON: {\"targetId\": 123456, \"count\": 10}"
 
-    override fun execute(input: String): String {
-        val parts = input.trim().split(Regex("\\s+"))
-        if (parts.size < 2) {
-            return "参数格式错误，应为：群号 数量 或 用户QQ号 数量"
-        }
+    override val inputClass: Class<ChatHistoryRequest> = ChatHistoryRequest::class.java
 
-        val targetId = parts[0].toLongOrNull() ?: return "无效的ID: ${parts[0]}"
-        val count = parts[1].toIntOrNull() ?: 5
+    override fun handle(input: ChatHistoryRequest): ChatHistoryResult {
+        val b = bot ?: return ChatHistoryResult(
+            targetId = input.targetId, success = false, error = "Bot 未绑定"
+        )
 
-        val b = bot ?: return "Bot 未绑定，无法查询"
-
-        // TODO: 调用 Shiro Bot API 查询聊天记录
-        // 目前 Shiro 的 getGroupMsgHistory 需要 messageSeq，实际实现时补充
-        return "聊天记录查询：目标=$targetId，数量=$count（功能待接入 OneBot API）"
+        // TODO: 调用 OneBot API 查询聊天记录
+        return ChatHistoryResult(
+            targetId = input.targetId,
+            messages = emptyList(),
+            success = true
+        )
     }
 }

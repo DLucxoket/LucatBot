@@ -15,11 +15,12 @@ import org.dlucxoket.lucatbot.bot.llm.LLM
  *
  * @param I 输入类型（反序列化目标）
  * @param O 输出类型（序列化来源）
+ * @param llm LLM 实例（依赖注入，默认全局单例）
  */
-abstract class Agent<I, O> {
-    /** 该 Agent 绑定的 LLM 实例（默认使用全局 LLM.DEFAULT） */
-    val llm: LLM = LLM.DEFAULT
-
+abstract class Agent<I, O>(
+    /** LLM 实例——构造注入，支持测试时替换 */
+    protected val llm: LLM = LLM.DEFAULT
+) {
     /** Jackson ObjectMapper（线程安全） */
     protected val mapper: ObjectMapper = ObjectMapper()
 

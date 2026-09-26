@@ -1,0 +1,114 @@
+package org.dlucxoket.lucatbot.bot.agent
+
+import io.github.classgraph.ClassGraph
+import org.dlucxoket.lucatbot.bot.tool.Tool
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.reflect.KClass
+import kotlin.reflect.full.createInstance
+import kotlin.reflect.full.isSubclassOf
+
+/**
+ * Agent/Tool 自动发现器
+ *
+ * 通过 ClassGraph 扫描 classpath，缓存发现结果，避免每次调用重复扫描。
+ * 线程安全（ConcurrentHashMap + lazy 初始化）。
+ *
+ * 职责：
+ * - 缓存 Agent 子类列表（排除 DispatcherAgent 自身）
+ * - 缓存 Tool 子类列表
+ * - 按名称查找并实例化
+ */
+object AgentDiscovery {
+
+    /** Agent 类缓存（简单名 → KClass） */
+    private val agentCache: MutableMap<String, KClass<out Agent<*, *>>> by lazy {
+        scanAgents()
+    }
+
+    /** Tool 类缓存（名称 → KClass） */
+    private val toolCache: MutableMap<String, KClass<out Tool<*, *>>> by lazy {
+        scanTools()
+    }
+
+    /**
+     * 获取所有已发现的 Agent 类（排除 DispatcherAgent）
+     */
+    fun getAgentClasses(): List<KClass<out Agent<*, *>>> {
+        return agentCache.values.toList()
+    }
+
+    /**
+     * 获取所有已发现的 Tool 类
+     */
+    fun getToolClasses(): List<KClass<out Tool<*, *>>> {
+        return toolCache.values.toList()
+    }
+
+    /**
+     * 按名称查找 Agent 并实例化
+     */
+    fun findAgent(name: String): Agent<*, *>? {
+        val kClass = agentCache[name] ?: return null
+        return kClass.objectInstance ?: kClass.createInstance()
+    }
+
+    /**
+     * 按名称查找 Tool 并实例化
+     */
+    fun findTool(name: String): Tool<*, *>? {
+        val kClass = toolCache[name] ?: return null
+        return kClass.objectInstance ?: kClass.createInstance()
+    }
+
+    /**
+     * 扫描所有 Agent 子类（一次性）
+     */
+    private fun scanAgents(): MutableMap<String, KClass<out Agent<*, *>>> {
+        val cache = ConcurrentHashMap<String, KClass<out Agent<*, *>>>()
+        ClassGraph()
+            .enableClassInfo()
+            .scan()
+            .use { scanResult ->
+                scanResult.getSubclasses(Agent::class.java.name)
+                    .filter { !it.isAbstract && !it.isInterface }
+                    .forEach { cls ->
+                        val kClass = cls.loadClass().kotlin
+                        if (kClass.isSubclassOf(Agent::class)) {
+                            @Suppress("UNCHECKED_CAST")
+                            val typed = kClass as KClass<out Agent<*, *>>
+                            // 排除 DispatcherAgent 自身
+                            if (typed != DispatcherAgent::class) {
+                                cache[kClass.simpleName ?: cls.name] = typed
+                            }
+                        }
+                    }
+            }
+        return cache
+    }
+
+    /**
+     * 扫描所有 Tool 子类（一次性）
+     */
+    private fun scanTools(): MutableMap<String, KClass<out Tool<*, *>>> {
+        val cache = ConcurrentHashMap<String, KClass<out Tool<*, *>>>()
+        ClassGraph()
+            .enableClassInfo()
+            .scan()
+            .use { scanResult ->
+                scanResult.getSubclasses(Tool::class.java.name)
+                    .filter { !it.isAbstract && !it.isInterface }
+                    .forEach { cls ->
+                        val kClass = cls.loadClass().kotlin
+                        if (kClass.isSubclassOf(Tool::class)) {
+                            @Suppress("UNCHECKED_CAST")
+                            val typed = kClass as KClass<out Tool<*, *>>
+                            // 用 name 属性和简单名做双重 key
+                            val instance = kClass.objectInstance ?: kClass.createInstance()
+                            cache[instance.name] = typed
+                            cache[kClass.simpleName ?: cls.name] = typed
+                        }
+                    }
+            }
+        return cache
+    }
+}

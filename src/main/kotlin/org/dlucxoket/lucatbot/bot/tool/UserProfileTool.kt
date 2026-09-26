@@ -1,44 +1,52 @@
 package org.dlucxoket.lucatbot.bot.tool
 
+import org.dlucxoket.lucatbot.bot.tool.data.UserProfileRequest
+import org.dlucxoket.lucatbot.bot.tool.data.UserProfileResult
+
 /**
  * 用户主页查询工具
  *
  * 查看指定 QQ 号的用户资料。
- *
- * 输入格式：`QQ号`
- * 输出格式：用户资料（昵称、性别、年龄等）
+ * JSON 边界：`{"qqNumber": 123}` ↔ `UserProfileRequest`
+ * OOP 内部：`UserProfileRequest` → `UserProfileResult`
  */
-object UserProfileTool : Tool() {
+object UserProfileTool : Tool<UserProfileRequest, UserProfileResult>() {
     override val name: String = "UserProfileTool"
 
-    override val description: String = """
-        查看用户主页/资料。根据QQ号获取用户的昵称、性别等基本信息。
-    """.trimIndent()
+    override val description: String = "查看用户主页/资料。根据QQ号获取用户的基本信息。"
 
-    override val parameterHint: String = "QQ号（如：123456789）"
+    override val parameterHint: String = "JSON: {\"qqNumber\": 123456789}"
 
-    override fun execute(input: String): String {
-        val qqNumber = input.trim().toLongOrNull() ?: return "无效的QQ号: $input"
+    override val inputClass: Class<UserProfileRequest> = UserProfileRequest::class.java
 
-        val b = bot ?: return "Bot 未绑定，无法查询"
+    override fun handle(input: UserProfileRequest): UserProfileResult {
+        val b = bot ?: return UserProfileResult(
+            qqNumber = input.qqNumber, nickname = "", sex = "", age = 0,
+            found = false, error = "Bot 未绑定"
+        )
 
-        // 调用 OneBot API 获取用户信息
         return try {
-            val actionData = b.getStrangerInfo(qqNumber, false)
+            val actionData = b.getStrangerInfo(input.qqNumber, false)
             val userInfo = actionData?.data
             if (userInfo != null) {
-                """
-                用户资料：
-                QQ号：${userInfo.userId}
-                昵称：${userInfo.nickname}
-                性别：${userInfo.sex}
-                年龄：${userInfo.age}
-                """.trimIndent()
+                UserProfileResult(
+                    qqNumber = userInfo.userId,
+                    nickname = userInfo.nickname,
+                    sex = userInfo.sex,
+                    age = userInfo.age,
+                    found = true
+                )
             } else {
-                "未找到用户: $qqNumber"
+                UserProfileResult(
+                    qqNumber = input.qqNumber, nickname = "", sex = "", age = 0,
+                    found = false, error = "未找到用户"
+                )
             }
         } catch (e: Exception) {
-            "查询用户信息失败: ${e.message}"
+            UserProfileResult(
+                qqNumber = input.qqNumber, nickname = "", sex = "", age = 0,
+                found = false, error = e.message
+            )
         }
     }
 }
