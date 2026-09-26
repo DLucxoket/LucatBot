@@ -5,7 +5,7 @@ spring:
 shiro:
   ws:
     server:
-      enable: true
+      enable: false
     access-token: ZftVV~7_wFah3nCL
   plugin-list:
     - org.dlucxoket.lucatbot.adapter.onebot.MainPlugin
