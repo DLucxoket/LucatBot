@@ -26,6 +26,9 @@ dependencies {
     
     /** ClassGraph 类路径扫描库：用于扫描所有 Agent 子类 */
     implementation("io.github.classgraph:classgraph:4.8.196")
+
+    /** Jackson Kotlin 模块（支持 data class 默认值反序列化） */
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.0")
     
     /** LangChain4j OpenAI Starter：支持 OpenAI 协议的 AI 客户端 */
     implementation("dev.langchain4j:langchain4j-open-ai-spring-boot-starter:0.35.0")

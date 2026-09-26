@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.agent
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.dlucxoket.lucatbot.bot.llm.LLM
 
 /**
@@ -21,8 +22,8 @@ abstract class Agent<I, O>(
     /** LLM 实例——构造注入，支持测试时替换 */
     protected val llm: LLM = LLM.DEFAULT
 ) {
-    /** Jackson ObjectMapper（线程安全） */
-    protected val mapper: ObjectMapper = ObjectMapper()
+    /** Jackson ObjectMapper（Kotlin 模块，支持 data class 默认值） */
+    protected val mapper: ObjectMapper = jacksonObjectMapper()
 
     /**
      * 智能体功能描述（必填）

@@ -1,8 +1,8 @@
 package org.dlucxoket.lucatbot.bot.agent
 
 import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 
 /**
  * DispatcherAgent 输出解析器
@@ -20,7 +20,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode
  */
 object AgentPlanParser {
 
-    private val mapper = ObjectMapper()
+    private val mapper = jacksonObjectMapper()
 
     /**
      * 解析 LLM 输出的调用计划

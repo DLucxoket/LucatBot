@@ -1,6 +1,6 @@
 package org.dlucxoket.lucatbot.bot.agent
 
-import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.dlucxoket.lucatbot.bot.agent.data.DispatcherRequest
 import org.dlucxoket.lucatbot.bot.agent.data.DispatcherResult
 import org.slf4j.LoggerFactory
@@ -33,7 +33,7 @@ class AgentChain(
     private val maxRounds: Int = 5
 ) {
     private val log = LoggerFactory.getLogger(AgentChain::class.java)
-    private val mapper = ObjectMapper()
+    private val mapper = jacksonObjectMapper()
 
     /**
      * 执行完整的 Agent 调度链
@@ -99,7 +99,7 @@ class AgentChain(
      */
     private fun extractReply(json: String): String? {
         return try {
-            val node = ObjectMapper().readTree(json)
+            val node = mapper.readTree(json)
             node.get("reply")?.asText()
         } catch (e: Exception) {
             null
