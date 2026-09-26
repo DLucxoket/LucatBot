@@ -1,42 +1,37 @@
 package org.dlucxoket.lucatbot.bot.agent
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.dlucxoket.lucatbot.bot.llm.LLM
 
 /**
  * 智能体（Agent）抽象基类
  *
- * 所有智能体的统一契约。每个 Agent 负责一种能力：
- * - 向 LLM 提供自身的功能描述（[description]）
- * - 接收输入并返回处理结果（[process]）
+ * **核心设计原则**：模拟真人在 QQ 中的真实行为。
  *
- * 设计约定：
- * - [description] 会被 [DispatcherAgent] 收集并展示给 LLM，
- *   用于让 LLM 自动决定调用哪些 Agent，因此描述应当清晰说明"我能做什么"
- * - [systemPromptHead] 将 description 包装为 LLM 系统提示的开头，
- *   让 Agent 在被调用时知道自己的身份
- * - [shortDescription] 取 description 的第一行，用于在 Agent 列表中简要展示
+ * **JSON ↔ OOP 边界约定**：
+ * - LLM API 层面：输入/输出均为 JSON 字符串（LLM 天然读写文本）
+ * - Agent 内部：反序列化为 OOP 对象操作（类型安全、可维护）
+ * - 边界转换由 [fromJson]/[toJson] 模板方法处理，子类只需操作 OOP 对象
  *
- * 继承方式：
- * - 普通类：实现 [description] 和 [process]，Spring 或 ClassGraph 会创建实例
- * - 单例对象：用 Kotlin `object` 关键字，可直接通过 `objectInstance` 获取
+ * @param I 输入类型（反序列化目标）
+ * @param O 输出类型（序列化来源）
  */
-abstract class Agent {
+abstract class Agent<I, O> {
     /** 该 Agent 绑定的 LLM 实例（默认使用全局 LLM.DEFAULT） */
     val llm: LLM = LLM.DEFAULT
+
+    /** Jackson ObjectMapper（线程安全） */
+    protected val mapper: ObjectMapper = ObjectMapper()
 
     /**
      * 智能体功能描述（必填）
      *
      * 会被 DispatcherAgent 收集，以纯文本形式展示给 LLM，供其决策是否调用。
-     * 建议用简洁的中文说明：该 Agent 能处理什么类型的任务、适合什么场景。
      */
     abstract val description: String
 
     /**
      * 传递给 LLM 的系统提示开头
-     *
-     * 格式："你的信息：\n{description}\n==================================="
-     * 作用是让 LLM 在执行 Agent 任务时了解自身身份与能力边界。
      */
     val systemPromptHead: String = """
         你的信息：
@@ -44,16 +39,47 @@ abstract class Agent {
         ===================================
     """.trimIndent()
 
-    /** description 的首行摘要，用于 Agent 列表展示 */
+    /** description 的首行摘要 */
     val shortDescription = description.substringBefore("\n")
 
     /**
-     * 智能体核心处理逻辑（必填）
-     *
-     * 输入与输出均为 JSON 字符串，便于结构化解析和跨 Agent 传递。
-     *
-     * @param input JSON 字符串，由 DispatcherAgent 显式指定（包含该 Agent 需要的上下文）
-     * @return JSON 字符串，包含处理结果
+     * 输入类型的 Class（用于 JSON 反序列化）
      */
-    abstract fun process(input: String): String
+    protected abstract val inputClass: Class<I>
+
+    /**
+     * 智能体核心处理逻辑（子类实现 OOP 部分）
+     *
+     * @param input OOP 输入对象（已从 JSON 反序列化）
+     * @return OOP 输出对象（将被序列化为 JSON 返回）
+     */
+    protected abstract fun handle(input: I): O
+
+    /**
+     * JSON 边界入口（由 AgentChain 调用）
+     *
+     * 流程：JSON 字符串 → 反序列化为 OOP → 调用 [handle] → 序列化结果为 JSON
+     *
+     * @param json JSON 字符串
+     * @return JSON 字符串
+     */
+    fun process(json: String): String {
+        val input: I = fromJson(json)
+        val output: O = handle(input)
+        return toJson(output)
+    }
+
+    /**
+     * JSON → OOP（反序列化）
+     */
+    protected open fun fromJson(json: String): I {
+        return mapper.readValue(json, inputClass)
+    }
+
+    /**
+     * OOP → JSON（序列化）
+     */
+    protected open fun toJson(obj: O): String {
+        return mapper.writeValueAsString(obj)
+    }
 }

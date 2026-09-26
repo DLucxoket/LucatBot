@@ -9,24 +9,20 @@ import kotlin.reflect.full.isSubclassOf
 /**
  * 智能体调度器（DispatcherAgent）
  *
+ * **模拟真人的决策过程**：像人看一眼消息列表，决定点进哪个会话。
+ *
  * 核心职责：根据当前上下文，自动决定接下来应调用哪些 Agent，并生成调用计划。
  *
- * 工作流程：
- * 1. 通过 ClassGraph 在运行时扫描 classpath 上所有 [Agent] 子类
- * 2. 过滤出可实例化的类（排除抽象类、接口、自身）
- * 3. 构建 "AgentName: 简要描述" 的列表
- * 4. 将列表 + 上下文交给 LLM，由 LLM 决策输出调用计划
- *
- * LLM 输出格式（由 [description] 约定）：
+ * LLM 输出格式（JSON）：
+ * ```json
+ * [{"agent": "AgentName", "input": {...}}, ...]
  * ```
- * Agent1: 给Agent1的输入
- * Agent2: 给Agent2的输入
- * ```
- * 若无需继续调用，LLM 返回 `done`。
+ * 或 `"done"` 表示终止。
  *
- * 注意：这是一个 Kotlin `object`（单例），不能被 Spring 注入或手动实例化。
+ * 输入/输出均为 JSON 字符串（LLM API 边界）。
+ * 注意：这是一个 Kotlin `object`（单例）。
  */
-object DispatcherAgent : Agent() {
+object DispatcherAgent : Agent<String, String>() {
     /**
      * 调度器的功能描述
      *
@@ -37,26 +33,34 @@ object DispatcherAgent : Agent() {
      * - 无需继续调用时返回 "done"
      */
     override val description: String = """
-        一个Agent调度器，能根据输入的上下文来决定接下来该使用哪些Agent
-        输出格式为：
+        一个Agent调度器，模拟真人决定接下来做什么。
+        根据上下文决定调用哪些Agent，输出JSON格式的调用计划：
+        [{"agent": "AgentName", "input": {...}}]
+        或者返回"done"表示不需要再调用任何Agent。
         
-        Agent1: 给Agent1的输入
-        Agent2: 给Agent2的输入
-        
-        然后系统将并行调用所有Agent
-        其中给Agent的输入必须能够帮助Agent完成任务，每行之间用一个换行符隔开，不要有空行
-        如果某个Agent依照当前上下文的信息无法准确完成任务，不要调用他
-        只选择调用你认为该调用的即可，没必要每个都调用
-        若不需要再调用了，返回done
+        约束：
+        - input由你显式指定，只传该Agent需要的信息
+        - 每行一个调用，没有空行
+        - 不需要就返回done
     """.trimIndent()
+
+    override val inputClass: Class<String> = String::class.java
+
+    /**
+     * JSON 边界入口：直接将 LLM 输出作为结果
+     * （DispatcherAgent 的输出本身就是给 LLM 解析的调用计划）
+     */
+    override fun handle(input: String): String {
+        return processDispatcher(input)
+    }
 
     /**
      * 根据上下文，决策下一步应调用哪些 Agent
      *
-     * @param input 用户输入的上下文信息（原始消息、会话历史等）
-     * @return LLM 生成的调用计划：每行 "AgentName: 输入参数"，或 "done"
+     * @param input 用户输入的上下文 JSON
+     * @return LLM 生成的调用计划 JSON
      */
-    override fun process(input: String): String {
+    private fun processDispatcher(input: String): String {
         /**
          * 第一步：使用 ClassGraph 扫描所有 Agent 子类
          *
@@ -65,7 +69,7 @@ object DispatcherAgent : Agent() {
          * - 排除 DispatcherAgent 自身（避免自调用死循环）
          * - 通过 Kotlin 反射确认是 Agent 子类后，转换为 KClass<out Agent>
          */
-        val agentClasses: List<KClass<out Agent>> = ClassGraph()
+        val agentClasses: List<KClass<out Agent<*, *>>> = ClassGraph()
             .enableClassInfo()
             .scan()
             .use { scanResult ->
@@ -75,7 +79,7 @@ object DispatcherAgent : Agent() {
                         val kClass = it.loadClass().kotlin
                         if (kClass.isSubclassOf(Agent::class)) {
                             @Suppress("UNCHECKED_CAST")
-                            kClass as KClass<out Agent>
+                            kClass as KClass<out Agent<*, *>>
                         } else {
                             null
                         }
@@ -130,6 +134,10 @@ object DispatcherAgent : Agent() {
 
             上下文：
             $input
+
+            请输出JSON格式的调用计划，例如：
+            [{"agent": "ReplyAgent", "input": {"context": "...", "messages": [...]}}]
+            或者直接输出 done 表示不需要再调用。
         """.trimIndent())
 
         return reply
@@ -144,7 +152,7 @@ object DispatcherAgent : Agent() {
      * @param kClass Agent 的 KClass
      * @return 该类的实例
      */
-    private fun getInstanceOf(kClass: KClass<out Agent>): Agent {
+    private fun getInstanceOf(kClass: KClass<out Agent<*, *>>): Agent<*, *> {
         return kClass.objectInstance ?: kClass.createInstance()
     }
 }

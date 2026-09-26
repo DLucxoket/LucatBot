@@ -1,5 +1,8 @@
 package org.dlucxoket.lucatbot.bot.agent
 
+import org.dlucxoket.lucatbot.bot.agent.data.ReplyRequest
+import org.dlucxoket.lucatbot.bot.agent.data.ReplyResult
+
 /**
  * 智能回复 Agent
  *
@@ -8,23 +11,22 @@ package org.dlucxoket.lucatbot.bot.agent
  * - 说话自然、口语化，像在 QQ 聊天
  * - 会根据上下文判断该不该回、怎么回
  *
- * 输入 JSON：`{"context": "...", "messages": [...]}` 或纯文本场景的 `{"text": "..."}`
- * 输出 JSON：`{"reply": "回复内容", "action": "send"}`
+ * JSON 边界：`{"context": "...", "messages": [...], ...}` ↔ `ReplyRequest`
+ * OOP 内部：`ReplyRequest` → `ReplyResult`
  */
-object ReplyAgent : Agent() {
+object ReplyAgent : Agent<ReplyRequest, ReplyResult>() {
     override val description: String = """
         智能回复Agent，模拟真人的聊天方式，根据上下文生成自然的对话回复。
         适合用于回应用户的闲聊、提问或一般性对话。
         输出应该简洁、口语化、符合QQ聊天场景，像一个真实的人在打字。
     """.trimIndent()
 
+    override val inputClass: Class<ReplyRequest> = ReplyRequest::class.java
+
     /**
-     * 模拟真人生成智能回复
-     *
-     * @param input JSON 字符串，包含上下文和消息内容
-     * @return JSON 字符串，包含回复内容和动作类型
+     * OOP 处理：接收 [ReplyRequest]，调用 LLM 生成回复，返回 [ReplyResult]
      */
-    override fun process(input: String): String {
+    override fun handle(input: ReplyRequest): ReplyResult {
         val systemPrompt = """$systemPromptHead
 
 你是一个友善的QQ聊天机器人，正在模拟真实用户的聊天行为。
@@ -33,11 +35,24 @@ object ReplyAgent : Agent() {
 - 不要过于正式，不要像客服
 - 根据上下文判断该说什么
 - 可以用语气词（哈哈、嗯嗯、啊这）让对话更自然
-
-请根据输入的JSON数据生成回复。
+- 性格：${input.personality}
+- 当前心情：${input.mood}
 """
-        val reply = llm.ask(systemPrompt, input)
+        // 构造 LLM 输入（消息列表摘要）
+        val messageText = input.messages.joinToString("\n") { "${it.sender}: ${it.content}" }
+        val question = """上下文：${input.context}
 
-        return """{"reply": "$reply", "action": "send"}"""
+消息记录：
+$messageText
+
+请生成一条自然的回复。"""
+
+        val replyText = llm.ask(systemPrompt, question)
+
+        return ReplyResult(
+            reply = replyText,
+            action = "send",
+            confidence = 1.0
+        )
     }
 }

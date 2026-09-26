@@ -114,10 +114,12 @@ class AgentChain(
 
     /**
      * 执行单个 Agent/Tool 调用
+     *
+     * JSON 输入 → Agent 内部 OOP 处理 → JSON 输出
      */
     private fun executeSingle(plan: AgentPlan): AgentExecutionResult {
         return try {
-            // 优先按 Agent 查找
+            // 优先按 Agent 查找（Agent.process 处理 JSON 边界）
             val agent = findAgent(plan.agentName)
             if (agent != null) {
                 val output = agent.process(plan.input)
@@ -141,7 +143,7 @@ class AgentChain(
     /**
      * 根据 Agent 类名查找并实例化
      */
-    private fun findAgent(agentName: String): Agent? {
+    private fun findAgent(agentName: String): Agent<*, *>? {
         val kClass = ClassGraph()
             .enableClassInfo()
             .scan()
@@ -153,7 +155,7 @@ class AgentChain(
             } ?: return null
 
         @Suppress("UNCHECKED_CAST")
-        return getInstanceOf(kClass as KClass<out Agent>)
+        return getInstanceOf(kClass as KClass<out Agent<*, *>>)
     }
 
     /**
@@ -178,7 +180,7 @@ class AgentChain(
         return instance as? Tool
     }
 
-    private fun getInstanceOf(kClass: KClass<out Agent>): Agent {
+    private fun getInstanceOf(kClass: KClass<out Agent<*, *>>): Agent<*, *> {
         return kClass.objectInstance ?: kClass.createInstance()
     }
 
