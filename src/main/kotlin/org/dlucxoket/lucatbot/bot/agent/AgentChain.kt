@@ -1,6 +1,8 @@
 package org.dlucxoket.lucatbot.bot.agent
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.dlucxoket.lucatbot.bot.agent.data.DispatcherRequest
+import org.dlucxoket.lucatbot.bot.agent.data.DispatcherResult
 import org.slf4j.LoggerFactory
 
 /**
@@ -31,6 +33,7 @@ class AgentChain(
     private val maxRounds: Int = 5
 ) {
     private val log = LoggerFactory.getLogger(AgentChain::class.java)
+    private val mapper = ObjectMapper()
 
     /**
      * 执行完整的 Agent 调度链
@@ -45,21 +48,20 @@ class AgentChain(
         repeat(maxRounds) { round ->
             log.info("=== AgentChain 第 ${round + 1} 轮调度 ===")
 
-            // DispatcherAgent 决策
-            val llmOutput = dispatcher.process(currentContext)
-            log.info("DispatcherAgent 输出: $llmOutput")
+            // DispatcherAgent 决策（JSON 边界：String → DispatcherRequest → DispatcherResult → JSON）
+            val dispatcherJson = dispatcher.process(currentContext)
+            val dispatcherResult = mapper.readValue(dispatcherJson, DispatcherResult::class.java)
+            val planNames = dispatcherResult.plans.joinToString { p -> p.agentName }
+            log.info("DispatcherAgent: done=${dispatcherResult.done}, plans=[$planNames]")
 
-            // 解析调用计划
-            val plans = AgentPlanParser.parse(llmOutput)
-            if (plans == null || plans.isEmpty()) {
+            // 调度终止
+            if (dispatcherResult.done || dispatcherResult.plans.isEmpty()) {
                 log.info("调度终止（done 或空计划）")
                 return buildUserReply(allResults)
             }
 
-            log.info("解析到 ${plans.size} 个调用计划: ${plans.map { it.agentName }}")
-
             // 并行执行
-            val roundResults = executor.executeAll(plans)
+            val roundResults = executor.executeAll(dispatcherResult.plans)
             allResults.addAll(roundResults)
 
             // 构建下一轮上下文

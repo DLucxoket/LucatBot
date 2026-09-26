@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot.bot.agent
 
+import org.dlucxoket.lucatbot.bot.agent.data.DispatcherRequest
+import org.dlucxoket.lucatbot.bot.agent.data.DispatcherResult
 import org.dlucxoket.lucatbot.bot.tool.Tool
 import kotlin.reflect.full.createInstance
 
@@ -8,20 +10,15 @@ import kotlin.reflect.full.createInstance
  *
  * **模拟真人的决策过程**：像人看一眼消息列表，决定点进哪个会话。
  *
- * 核心职责：根据当前上下文，自动决定接下来应调用哪些 Agent/Tool，并生成调用计划。
+ * 核心职责：根据当前上下文，自动决定接下来应调用哪些 Agent，并生成调用计划。
  *
- * LLM 输出格式（JSON）：
- * ```json
- * [{"agent": "AgentName", "input": {...}}, ...]
- * ```
- * 或 `"done"` 表示终止。
+ * JSON 边界：`{"context": "..."}` ↔ `DispatcherRequest`
+ * OOP 内部：`DispatcherRequest` → `DispatcherResult`（包含调用计划或 done 状态）
  *
- * 输入/输出均为 JSON 字符串（LLM API 边界）。
  * 类发现委托给 [AgentDiscovery]（带缓存）。
- *
  * 注意：这是一个 Kotlin `object`（单例）。
  */
-object DispatcherAgent : Agent<String, String>() {
+object DispatcherAgent : Agent<DispatcherRequest, DispatcherResult>() {
     /**
      * 调度器的功能描述
      */
@@ -36,26 +33,23 @@ object DispatcherAgent : Agent<String, String>() {
         - input由你显式指定，只传该Agent需要的信息
     """.trimIndent()
 
-    override val inputClass: Class<String> = String::class.java
+    override val inputClass: Class<DispatcherRequest> = DispatcherRequest::class.java
 
     /**
-     * DispatcherAgent 的输入是原始上下文（纯文本/JSON 均可），不走 JSON 反序列化
+     * 原始上下文 → DispatcherRequest（不走 JSON 反序列化，直接包装）
      */
-    override fun fromJson(json: String): String {
-        return json
+    override fun fromJson(json: String): DispatcherRequest {
+        return DispatcherRequest(context = json)
     }
 
-    override fun handle(input: String): String {
+    override fun handle(input: DispatcherRequest): DispatcherResult {
         return processDispatcher(input)
     }
 
     /**
      * 根据上下文，决策下一步应调用哪些 Agent/Tool
-     *
-     * @param input 用户输入的上下文 JSON
-     * @return LLM 生成的调用计划 JSON
      */
-    private fun processDispatcher(input: String): String {
+    private fun processDispatcher(request: DispatcherRequest): DispatcherResult {
         val sb = StringBuilder()
 
         // Agent 列表（从缓存获取）
@@ -74,13 +68,13 @@ object DispatcherAgent : Agent<String, String>() {
         }
 
         // LLM 决策
-        return llm.ask("""
+        val llmOutput = llm.ask("""
             $systemPromptHead
 
             $sb
 
             上下文：
-            $input
+            ${request.context}
 
             **你必须输出JSON格式的调用计划来处理上面的用户消息。**
             至少调用 ReplyAgent 来回复用户。例如：
@@ -88,5 +82,13 @@ object DispatcherAgent : Agent<String, String>() {
             
             只有在确认已处理完毕时才输出 done。
         """.trimIndent())
+
+        // 解析 LLM 输出为 OOP 结果
+        val plans = AgentPlanParser.parse(llmOutput)
+        return if (plans == null) {
+            DispatcherResult(done = true)
+        } else {
+            DispatcherResult(done = false, plans = plans)
+        }
     }
 }
