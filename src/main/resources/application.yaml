@@ -10,14 +10,9 @@ shiro:
   plugin-list:
     - org.dlucxoket.lucatbot.adapter.onebot.MainPlugin
 
-# LLM 配置 - 本地 Qwen
+# LLM 配置
 ai:
   qwen:
-    # Ollama 本地部署地址
-    base-url: http://localhost:11434/v1
-    
-    # Ollama 不需要真正的 API Key
-    api-key: ollama
-    
-    # 模型名称，根据实际安装的模型修改
-    model-name: qwen2.5
+    base-url: ${LLM_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
+    api-key: ${LLM_API_KEY:ollama}
+    model-name: ${LLM_MODEL_NAME:mimo-v2.5}
