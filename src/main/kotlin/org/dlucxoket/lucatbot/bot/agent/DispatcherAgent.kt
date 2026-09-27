@@ -26,7 +26,7 @@ object DispatcherAgent : Agent<DispatcherRequest, DispatcherResult>() {
         一个Agent调度器，决定接下来调用哪些Agent来处理用户消息。
         输出JSON格式的调用计划：
         [{"agent": "AgentName", "input": {...}}]
-        
+
         **重要规则**：
         - 收到用户消息时，调用一个Agent来处理（通常是ReplyAgent）
         - 如果已有Agent成功回复了用户，直接返回done，不要再调用
@@ -81,7 +81,7 @@ object DispatcherAgent : Agent<DispatcherRequest, DispatcherResult>() {
             1. 如果还没有Agent回复过用户，调用ReplyAgent回复
             2. 如果已经有Agent成功回复了用户，输出done
             3. 不要重复调用同一个Agent处理同一件事
-            
+
             示例：
             [{"agent": "ReplyAgent", "input": {"context": "用户的消息", "messages": []}}]
             或者输出 done。
