@@ -15,8 +15,9 @@ data class UserProfileResult(
 
 /** 查询聊天记录的请求 */
 data class ChatHistoryRequest(
-    val targetId: Long,
-    val count: Int = 5
+    val targetId: Long = 0,
+    val count: Int = 5,
+    val type: String = "private"  // "group" 或 "private"
 )
 
 /** 查询聊天记录的响应 */
@@ -35,12 +36,16 @@ data class HistoryMessageItem(
 )
 
 /** 查询消息列表的请求 */
-data class MessageListRequest(val targetId: Long)
+data class MessageListRequest(
+    val targetId: Long = 0,
+    val type: String = "private"  // "group" 或 "private"
+)
 
 /** 查询消息列表的响应 */
 data class MessageListResult(
     val targetId: Long,
     val messageCount: Int = 0,
+    val lastMessage: String = "",
     val success: Boolean = true,
     val error: String? = null
 )

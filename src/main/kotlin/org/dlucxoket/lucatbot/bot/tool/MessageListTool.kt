@@ -6,16 +6,16 @@ import org.dlucxoket.lucatbot.bot.tool.data.MessageListResult
 /**
  * 消息列表查询工具
  *
- * 查看指定会话的消息列表摘要。
+ * 查看指定会话的消息概览（条数、最后一条等）。
  * JSON 边界：`{"targetId": 123}` ↔ `MessageListRequest`
  * OOP 内部：`MessageListRequest` → `MessageListResult`
  */
 object MessageListTool : Tool<MessageListRequest, MessageListResult>() {
     override val name: String = "MessageListTool"
 
-    override val description: String = "查看消息列表。获取指定会话的消息概览。"
+    override val description: String = "查看消息列表概览。获取指定会话的消息条数和最后一条内容。"
 
-    override val parameterHint: String = "JSON: {\"targetId\": 123456}"
+    override val parameterHint: String = "JSON: {\"targetId\": 123456, \"type\": \"group\"或\"private\"}"
 
     override val inputClass: Class<MessageListRequest> = MessageListRequest::class.java
 
@@ -24,7 +24,26 @@ object MessageListTool : Tool<MessageListRequest, MessageListResult>() {
             targetId = input.targetId, success = false, error = "Bot 未绑定"
         )
 
-        // TODO: 调用 OneBot API 获取消息列表
-        return MessageListResult(targetId = input.targetId, success = true)
+        return try {
+            val actionData = if (input.type == "group") {
+                b.getGroupMsgHistory(input.targetId, null, 20, true)
+            } else {
+                b.getFriendMsgHistory(input.targetId, null, 20, true)
+            }
+
+            val messages = actionData?.data?.messages ?: emptyList()
+            val lastMessage = messages.lastOrNull()
+
+            MessageListResult(
+                targetId = input.targetId,
+                messageCount = messages.size,
+                lastMessage = lastMessage?.message ?: "",
+                success = true
+            )
+        } catch (e: Exception) {
+            MessageListResult(
+                targetId = input.targetId, success = false, error = e.message
+            )
+        }
     }
 }
