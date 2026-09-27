@@ -7,6 +7,7 @@ import com.mikuac.shiro.dto.event.request.FriendAddRequestEvent
 import com.mikuac.shiro.enums.MsgTypeEnum
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.AgentChain
+import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
 import org.dlucxoket.lucatbot.bot.tool.MessageListTool
@@ -44,6 +45,9 @@ internal class MainPlugin: BotPlugin() {
 
     @Autowired
     private lateinit var sessionManager: SessionManager
+
+    @Autowired
+    private lateinit var memoryService: MemoryService
 
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
@@ -85,13 +89,17 @@ internal class MainPlugin: BotPlugin() {
                 Thread.sleep(delay)
             }
 
-            // 构建带历史的上下文（含疲劳提示）
+            // 构建带历史+记忆的上下文
             val fatigueHint = sessionManager.getFatigueHint(convId)
+            val memorySummary = memoryService.getMemorySummary(modelEvent.sender.qqNumber)
+
             val contextWithHistory = """
                 当前消息：$plainText
 
                 聊天记录：
                 $history
+
+                $memorySummary
                 $fatigueHint
             """.trimIndent()
 
@@ -99,6 +107,9 @@ internal class MainPlugin: BotPlugin() {
 
             if (reply.isNotBlank()) {
                 sessionManager.addMessage(convId, lucatBot.persona.name, reply, isBot = true)
+
+                // 自动提取并记忆（模拟真人记住聊天内容）
+                extractAndRemember(modelEvent.sender.qqNumber, plainText, reply)
 
                 // 模拟真人拆多条发送
                 val messages = splitReply(reply)
@@ -140,6 +151,32 @@ internal class MainPlugin: BotPlugin() {
         return segments.any { seg ->
             seg.type == MsgTypeEnum.at &&
                 seg.getStringData("qq")?.toLongOrNull() == selfId
+        }
+    }
+
+    /**
+     * 自动提取并记忆聊天内容
+     *
+     * 模拟真人自然地记住对话中的关键信息。
+     */
+    private fun extractAndRemember(userId: Long, userMessage: String, botReply: String) {
+        // 记住用户说了什么（事件记忆）
+        memoryService.rememberEvent(userId, "对我说了：$userMessage")
+
+        // 简单规则提取事实（"我叫XX"、"我是XX"、"我喜欢XX"）
+        val nameMatch = Regex("我叫(\\S+)").find(userMessage)
+        if (nameMatch != null) {
+            memoryService.rememberFact(userId, "他叫${nameMatch.groupValues[1]}", tags = listOf("名字"))
+        }
+
+        val likeMatch = Regex("我(喜欢|爱)(\\S+)").find(userMessage)
+        if (likeMatch != null) {
+            memoryService.rememberFact(userId, "他喜欢${likeMatch.groupValues[2]}", tags = listOf("喜好"))
+        }
+
+        // 定期持久化
+        if (Math.random() < 0.3) {
+            memoryService.flush()
         }
     }
 
