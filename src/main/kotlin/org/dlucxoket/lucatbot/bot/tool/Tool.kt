@@ -62,14 +62,6 @@ abstract class Tool<I, O> {
         return toJson(output)
     }
 
-    /**
-     * 兼容旧接口：接受简单字符串参数
-     * （对简单 Tool 提供便捷入口）
-     */
-    open fun execute(input: String): String {
-        return process(input)
-    }
-
     protected open fun fromJson(json: String): I {
         return mapper.readValue(json, inputClass)
     }

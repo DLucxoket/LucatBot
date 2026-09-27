@@ -186,6 +186,13 @@ class MemoryService(
     }
 
     /**
+     * 批量保存记忆
+     */
+    fun saveAll(memories: List<MemoryItem>) {
+        repository.saveAll(memories)
+    }
+
+    /**
      * 持久化到文件
      */
     fun flush() {
