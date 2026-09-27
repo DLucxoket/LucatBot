@@ -138,17 +138,35 @@ internal class MainPlugin: BotPlugin() {
     }
 
     /**
-     * 处理戳一戳（模拟真人被戳了会戳回去）
+     * 处理戳一戳（Agent 决策：戳回去/不理/问一句）
+     *
+     * 模拟真人的反应：看心情和关系决定怎么回应。
      */
     private fun handlePoke(bot: Bot, event: AnyMessageEvent) {
         try {
-            // 30% 概率戳回去（真人不总是回应）
-            if (Math.random() < 0.3) {
-                log.info("被戳一戳，戳回去")
-                // 用 sendPoke 或发个表情回应
-                bot.sendMsg(event, "[表情]", false)
+            log.info("被戳一戳")
+
+            val context = """
+                有人戳了我一下（QQ戳一戳）。
+                发起者：QQ号 ${event.userId}
+                当前心情：${lucatBot.mood.toPrompt()}
+
+                像真人一样决定怎么反应，可能的反应：
+                - 戳回去
+                - 不理（懒得回）
+                - 回一句"干嘛"或类似的话
+                - 回个表情
+
+                根据心情和场景自然选择。
+            """.trimIndent()
+
+            val reply = agentChain.execute(context)
+
+            if (reply.isNotBlank()) {
+                bot.sendMsg(event, reply, false)
+                log.info("戳一戳回应: $reply")
             } else {
-                log.info("被戳一戳，懒得理")
+                log.info("戳一戳：不回应")
             }
         } catch (e: Exception) {
             log.error("戳一戳处理异常: ${e.message}")
