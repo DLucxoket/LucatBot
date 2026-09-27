@@ -91,11 +91,4 @@ object AgentPlanParser {
 
         return AgentPlan(agentName, input)
     }
-
-    /**
-     * 将 AgentPlan 列表序列化为 JSON 字符串
-     */
-    fun toJson(plans: List<AgentPlan>): String {
-        return mapper.writeValueAsString(plans)
-    }
 }
