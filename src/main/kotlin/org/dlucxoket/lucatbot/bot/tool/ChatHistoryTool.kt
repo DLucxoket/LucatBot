@@ -1,15 +1,15 @@
 package org.dlucxoket.lucatbot.bot.tool
 
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
 import org.dlucxoket.lucatbot.bot.tool.data.HistoryMessageItem
 
 /**
- * 聊天记录查询工具
+ * 聊天记录查询工具（本地存储版）
  *
- * 查询指定群或私聊的最近聊天记录。
- * JSON 边界：`{"targetId": 123, "count": 10}` ↔ `ChatHistoryRequest`
- * OOP 内部：`ChatHistoryRequest` → `ChatHistoryResult`
+ * 从本地聊天记录存储查询，不依赖 OneBot API。
+ * JSON 边界：`{"targetId": 123, "count": 10, "type": "private"}` ↔ `ChatHistoryRequest`
  */
 object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
     override val name: String = "ChatHistoryTool"
@@ -20,35 +20,31 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
 
     override val inputClass: Class<ChatHistoryRequest> = ChatHistoryRequest::class.java
 
+    /** 聊天记录服务引用 */
+    var chatHistoryService: ChatHistoryService? = null
+
     override fun handle(input: ChatHistoryRequest): ChatHistoryResult {
-        val b = bot ?: return ChatHistoryResult(
-            targetId = input.targetId, success = false, error = "Bot 未绑定"
+        val service = chatHistoryService ?: return ChatHistoryResult(
+            targetId = input.targetId, success = false, error = "ChatHistoryService 未绑定"
         )
 
         return try {
-            val actionData = if (input.type == "group") {
-                b.getGroupMsgHistory(input.targetId, null, input.count, true)
-            } else {
-                b.getFriendMsgHistory(input.targetId, null, input.count, true)
-            }
-
-            val messages = actionData?.data?.messages?.map { msg ->
-                HistoryMessageItem(
-                    sender = msg.sender?.nickname ?: "未知",
-                    content = msg.message ?: "",
-                    timestamp = (msg.time ?: 0L) * 1000
-                )
-            } ?: emptyList()
+            val conversationId = "${input.type}:${input.targetId}"
+            val records = service.getHistory(conversationId, input.count)
 
             ChatHistoryResult(
                 targetId = input.targetId,
-                messages = messages,
+                messages = records.map {
+                    HistoryMessageItem(
+                        sender = it.senderName,
+                        content = it.content,
+                        timestamp = it.timestamp
+                    )
+                },
                 success = true
             )
         } catch (e: Exception) {
-            ChatHistoryResult(
-                targetId = input.targetId, success = false, error = e.message
-            )
+            ChatHistoryResult(targetId = input.targetId, success = false, error = e.message)
         }
     }
 }

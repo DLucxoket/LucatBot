@@ -7,6 +7,7 @@ import com.mikuac.shiro.dto.event.request.FriendAddRequestEvent
 import com.mikuac.shiro.enums.MsgTypeEnum
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.AgentChain
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
@@ -49,6 +50,9 @@ internal class MainPlugin: BotPlugin() {
     @Autowired
     private lateinit var memoryService: MemoryService
 
+    @Autowired
+    private lateinit var chatHistoryService: ChatHistoryService
+
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
             bindTools(bot)
@@ -79,6 +83,9 @@ internal class MainPlugin: BotPlugin() {
 
             log.info("收到消息: $plainText")
 
+            // 记录聊天历史
+            chatHistoryService.recordMessage(modelEvent, plainText)
+
             // 会话历史 + 记忆
             val convId = modelEvent.conversationId
             sessionManager.addMessage(convId, modelEvent.sender.nickname, plainText)
@@ -97,6 +104,7 @@ internal class MainPlugin: BotPlugin() {
 
             if (reply.isNotBlank()) {
                 sessionManager.addMessage(convId, lucatBot.persona.name, reply, isBot = true)
+                chatHistoryService.recordBotReply(convId, reply)
 
                 // 记忆提取
                 val memories = MemoryExtractor.extract(modelEvent.sender.qqNumber, plainText, reply)
