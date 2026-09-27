@@ -51,7 +51,10 @@ object AgentPlanParser {
             val node: JsonNode = mapper.readTree(trimmed)
 
             when {
-                node.isArray -> parseJsonArray(node as ArrayNode)
+                node.isArray -> {
+                    @Suppress("UNCHECKED_CAST")
+                    parseJsonArray(node as ArrayNode)
+                }
                 node.isObject -> listOfNotNull(toAgentPlan(node))
                 node.isTextual -> {
                     val inner = node.asText().trim()

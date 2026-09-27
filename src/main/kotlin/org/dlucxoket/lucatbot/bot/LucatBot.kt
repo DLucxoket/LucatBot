@@ -121,6 +121,7 @@ class LucatBot {
 
             // 在某个会话中
             is State.InConversation -> {
+                @Suppress("UNCHECKED_CAST")
                 val current = state as State.InConversation
                 if (conversationId == current.conversationId) {
                     // 当前会话的消息 → 处理，心情变好
