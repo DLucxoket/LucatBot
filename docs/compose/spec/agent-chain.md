@@ -1,14 +1,40 @@
 ---
 feature: agent-chain
-status: in-progress
-updated: 2026-09-26
+status: delivered
+updated: 2026-09-27
 branch: feature/agent-chain
-commits: 
+commits: b30fc93..1691097
 ---
 
 # Agent Chain — 消息主链路与调度执行引擎
 
 ## Report
+
+**What was built** — 完整的消息主链路与拟人化聊天系统。包含 Agent 调度引擎（AgentChain + DispatcherAgent + 并行执行）、JSON↔OOP 边界（Agent<I,O> 泛型模板方法）、人格系统（BotPersona/BotMood/TimeAwareness）、状态机（LucatBot）、会话管理（SessionManager）、定时轮询（ProactiveScheduler）和 8 个工具类。
+
+**Verification** — `./gradlew compileKotlin` BUILD SUCCESSFUL（零警告）。
+
+**Journey log**:
+- Shiro 2.5.0 与 Tomcat 11 不兼容（request recycled）→ 升级到 2.5.3 修复
+- Kotlin data class 反序列化需要 @JsonProperty + jackson-module-kotlin
+- LLM 返回的 JSON 可能被双层编码，解析器需剥外层引号
+- LLM.DEFAULT 绕过 Spring DI，配置要支持环境变量读取
+- ClassGraph 每次扫描太慢，缓存到 AgentDiscovery
+
+## Tasks
+
+- [x] T1: AgentPlan/AgentExecutionResult 数据类 (covers: S2.3)
+- [x] T2: AgentPlanParser 解析器 (covers: S2.3)
+- [x] T3: model 层字段补全 (covers: S2.4)
+- [x] T4: ShiroConverter 转换层 (covers: S2.3)
+- [x] T5: AgentChain 执行引擎 (covers: S2.2, S2.3, S2.7)
+- [x] T6: EchoAgent (covers: S2.5)
+- [x] T7: ReplyAgent (covers: S2.5)
+- [x] T8: MainPlugin 集成 (covers: S2.6)
+- [x] T9: 编译验证 + 文档更新 (covers: S2)
+- [x] T10: Tool 抽象基类 (covers: S2.8)
+- [x] T11: 3 个示例 Tool (covers: S2.8)
+- [x] T12: DispatcherAgent 集成 Tool 发现 (covers: S2.8)
 
 ## [S1] Problem
 
