@@ -38,6 +38,9 @@ import org.springframework.stereotype.Component
 internal class MainPlugin: BotPlugin() {
     private val log = LoggerFactory.getLogger(MainPlugin::class.java)
 
+    /** 多条消息之间的发送间隔（毫秒），模拟真人打字节奏 */
+    private val messageIntervalMs = 300..800L
+
     @Autowired
     private lateinit var agentChain: AgentChain
 
@@ -114,7 +117,7 @@ internal class MainPlugin: BotPlugin() {
                 val messages = ReplySplitter.split(reply)
                 for ((i, msg) in messages.withIndex()) {
                     bot.sendMsg(event, msg, false)
-                    if (i < messages.size - 1) Thread.sleep((300..800).random().toLong())
+                    if (i < messages.size - 1) Thread.sleep(messageIntervalMs.random())
                 }
                 log.info("回复消息: $reply")
             } else {
