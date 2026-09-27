@@ -22,7 +22,11 @@ object PokeTool : Tool<PokeRequest, PokeResult>() {
             if (parts.size != 2) return PokeResult(success = false, error = "会话ID格式错误")
 
             when (parts[0]) {
-                "group" -> b.sendGroupPoke(parts[1].toLongOrNull() ?: 0, input.userId)
+                "group" -> {
+                    val groupId = parts[1].toLongOrNull()
+                        ?: return PokeResult(success = false, error = "无效群号: ${parts[1]}")
+                    b.sendGroupPoke(groupId, input.userId)
+                }
                 "private" -> b.sendFriendPoke(input.userId)
                 else -> return PokeResult(success = false, error = "未知会话类型")
             }

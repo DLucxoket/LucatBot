@@ -1,7 +1,5 @@
 package org.dlucxoket.lucatbot.bot.tool
 
-import com.mikuac.shiro.common.utils.MsgUtils
-
 /**
  * 发送消息工具
  *
