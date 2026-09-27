@@ -14,10 +14,11 @@ import java.time.LocalTime
  */
 object TimeAwareness {
 
-    /** 当前是否是深夜（23:00-07:00） */
+    /** 当前是否是深夜（调试模式：暂时禁用） */
     fun isLateNight(): Boolean {
-        val hour = LocalTime.now().hour
-        return hour >= 23 || hour < 7
+        return false  // TODO: 调试用，正式版恢复时间判断
+        // val hour = LocalTime.now().hour
+        // return hour >= 23 || hour < 7
     }
 
     /** 当前是否是工作时间（周一到周五 9:00-18:00） */
