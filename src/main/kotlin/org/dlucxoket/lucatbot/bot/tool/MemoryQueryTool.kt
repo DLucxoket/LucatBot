@@ -20,7 +20,7 @@ object MemoryQueryTool : Tool<MemoryQueryRequest, MemoryQueryResult>() {
     override val inputClass: Class<MemoryQueryRequest> = MemoryQueryRequest::class.java
 
     /** 记忆服务引用 */
-    var memoryService: MemoryService? = null
+    @Volatile var memoryService: MemoryService? = null
 
     override fun handle(input: MemoryQueryRequest): MemoryQueryResult {
         val service = memoryService ?: return MemoryQueryResult(success = false, error = "MemoryService 未绑定")

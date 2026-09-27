@@ -26,7 +26,7 @@ object UnreadSummaryTool : Tool<UnreadSummaryRequest, UnreadSummaryResult>() {
     override val inputClass: Class<UnreadSummaryRequest> = UnreadSummaryRequest::class.java
 
     /** 机器人状态机引用（用于读取未读队列） */
-    var lucatBot: LucatBot? = null
+    @Volatile var lucatBot: LucatBot? = null
 
     override fun handle(input: UnreadSummaryRequest): UnreadSummaryResult {
         val bot = lucatBot ?: return UnreadSummaryResult(success = false, error = "Bot 未绑定")
