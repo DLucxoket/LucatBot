@@ -28,10 +28,10 @@ import org.springframework.stereotype.Component
 class OpenAIAPI: LLM {
     companion object {
         /**
-         * 默认实例（非 Spring Bean，手动创建）
+         * 默认实例（手动创建，非 Spring Bean）
          *
-         * 供 [LLM.DEFAULT] 懒加载引用。该实例不经过 Spring 代理，
-         * 因此 `@Value` 字段注入依赖 Spring 对 `@Component` 的扫描处理。
+         * 供 [LLM.DEFAULT] 懒加载引用。配置通过环境变量读取，
+         * 不依赖 Spring 的 @Value 注入。
          */
         val DEFAULT: OpenAIAPI by lazy { OpenAIAPI() }
     }

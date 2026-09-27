@@ -30,12 +30,12 @@ class SessionManager {
      */
     data class Session(
         val conversationId: String,
-        val entries: MutableList<SessionEntry> = mutableListOf(),
+        val entries: MutableList<SessionEntry> = java.util.concurrent.CopyOnWriteArrayList(),
         val lastActiveTime: Long = System.currentTimeMillis()
     )
 
-    /** 会话存储 */
-    private val sessions = mutableMapOf<String, Session>()
+    /** 会话存储（线程安全） */
+    private val sessions = java.util.concurrent.ConcurrentHashMap<String, Session>()
 
     /** 每个会话最多保留的历史条数 */
     private val maxHistory = 20

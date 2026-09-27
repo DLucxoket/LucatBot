@@ -28,7 +28,9 @@ object AgentPlanParser {
      * @param llmOutput DispatcherAgent 返回的 JSON 文本
      * @return 调用计划列表；若输出为 `done` 则返回 null
      */
-    fun parse(llmOutput: String): List<AgentPlan>? {
+    fun parse(llmOutput: String, depth: Int = 0): List<AgentPlan>? {
+        if (depth > 3) return null  // 防止无限递归
+
         var trimmed = llmOutput.trim()
 
         // done → 终止
@@ -39,7 +41,7 @@ object AgentPlanParser {
         // 剥掉外层引号（LLM 有时把 JSON 包在字符串里返回）
         if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
             trimmed = trimmed.substring(1, trimmed.length - 1)
-                .replace("\\\"", "\"")   // 反转义
+                .replace("\\\"", "\"")
                 .replace("\\n", "\n")
         }
 
@@ -50,10 +52,9 @@ object AgentPlanParser {
                 node.isArray -> parseJsonArray(node as ArrayNode)
                 node.isObject -> listOfNotNull(toAgentPlan(node))
                 node.isTextual -> {
-                    // 还是一层字符串？递归解析
                     val inner = node.asText().trim()
                     if (inner.equals("done", true)) null
-                    else parse(inner)
+                    else parse(inner, depth + 1)  // 递归 + 深度计数
                 }
                 else -> null
             }
