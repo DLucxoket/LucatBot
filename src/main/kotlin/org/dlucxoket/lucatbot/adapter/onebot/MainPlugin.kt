@@ -31,8 +31,9 @@ import org.springframework.stereotype.Component
 internal class MainPlugin: BotPlugin() {
     private val log = LoggerFactory.getLogger(MainPlugin::class.java)
 
-    /** Agent 调度执行引擎 */
-    private val agentChain = AgentChain()
+    /** Agent 调度执行引擎（Spring 注入） */
+    @Autowired
+    private lateinit var agentChain: AgentChain
 
     /** 机器人状态机（Spring 注入，全局共享） */
     @Autowired

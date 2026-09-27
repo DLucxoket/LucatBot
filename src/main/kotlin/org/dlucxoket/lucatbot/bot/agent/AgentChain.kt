@@ -4,6 +4,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.dlucxoket.lucatbot.bot.agent.data.DispatcherRequest
 import org.dlucxoket.lucatbot.bot.agent.data.DispatcherResult
 import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Component
 
 /**
  * Agent 调度执行引擎（编排器）
@@ -26,6 +27,7 @@ import org.slf4j.LoggerFactory
  * @param contextBuilder 上下文构建器
  * @param maxRounds  最大调度轮次（默认 5）
  */
+@Component
 class AgentChain(
     private val dispatcher: DispatcherAgent = DispatcherAgent,
     private val executor: AgentExecutor = AgentExecutor(),
