@@ -53,6 +53,12 @@ internal class MainPlugin: BotPlugin() {
         try {
             bindTools(bot)
 
+            // 戳一戳检测（模拟真人被戳了会戳回去）
+            if (isPoke(event)) {
+                handlePoke(bot, event)
+                return MESSAGE_BLOCK
+            }
+
             val modelEvent = ShiroConverter.toModelEvent(event)
             val plainText = ShiroConverter.extractPlainText(event)
             if (plainText.isBlank()) return MESSAGE_IGNORE
@@ -84,8 +90,9 @@ internal class MainPlugin: BotPlugin() {
                 Thread.sleep(delay)
             }
 
-            // 构建上下文（历史 + 记忆 + 疲劳）
-            val context = buildContext(convId, modelEvent.sender.qqNumber, plainText)
+            // 构建上下文——用 describe() 让 LLM 看到完整消息（含图片/表情）
+            val fullDescription = (modelEvent.message as? ChatMessage)?.describe() ?: plainText
+            val context = buildContext(convId, modelEvent.sender.qqNumber, fullDescription)
             val reply = agentChain.execute(context)
 
             if (reply.isNotBlank()) {
@@ -116,6 +123,36 @@ internal class MainPlugin: BotPlugin() {
     override fun onFriendAddRequest(bot: Bot, event: FriendAddRequestEvent): Int {
         bot.setFriendAddRequest(event.flag, true, null)
         return super.onFriendAddRequest(bot, event)
+    }
+
+    /**
+     * 判断是否戳一戳消息
+     */
+    private fun isPoke(event: AnyMessageEvent): Boolean {
+        // OneBot 戳一戳通常是 type=poke 的事件或消息中包含 poke 标记
+        val segments = event.arrayMsg ?: return false
+        return segments.any { seg ->
+            seg.type.toString().equals("poke", ignoreCase = true) ||
+                seg.getStringData("type") == "poke"
+        }
+    }
+
+    /**
+     * 处理戳一戳（模拟真人被戳了会戳回去）
+     */
+    private fun handlePoke(bot: Bot, event: AnyMessageEvent) {
+        try {
+            // 30% 概率戳回去（真人不总是回应）
+            if (Math.random() < 0.3) {
+                log.info("被戳一戳，戳回去")
+                // 用 sendPoke 或发个表情回应
+                bot.sendMsg(event, "[表情]", false)
+            } else {
+                log.info("被戳一戳，懒得理")
+            }
+        } catch (e: Exception) {
+            log.error("戳一戳处理异常: ${e.message}")
+        }
     }
 
     /**
