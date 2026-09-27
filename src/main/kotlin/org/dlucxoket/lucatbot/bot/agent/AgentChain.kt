@@ -104,6 +104,7 @@ class AgentChain(
             val node = mapper.readTree(json)
             node.get("reply")?.asText()
         } catch (e: Exception) {
+            log.debug("extractReply 解析失败: {}", e.message)
             null
         }
     }

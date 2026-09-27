@@ -62,7 +62,8 @@ ${input.unreadSummary}
                 reason = node.get("reason")?.asText() ?: ""
             )
         } catch (e: Exception) {
-            // 解析失败时默认不看（保守行为）
+            org.slf4j.LoggerFactory.getLogger(SessionPickerAgent::class.java)
+                .warn("SessionPickerAgent 解析失败: {}", e.message)
             SessionPickerResult(selected = "none", reason = "解析失败")
         }
     }
