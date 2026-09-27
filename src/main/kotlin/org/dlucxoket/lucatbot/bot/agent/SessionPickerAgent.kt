@@ -47,9 +47,13 @@ ${input.unreadSummary}
 - 社恐倾向于先看私聊而非群聊
 - 无聊时更愿意看群聊热闹
 
-请返回JSON：
-{"selected": "private:123456", "reason": "想找我？去看看"} 或
+**输出格式（必须严格遵守，不要包裹markdown代码块）**：
+直接输出一个JSON对象：
+{"selected": "private:123456", "reason": "想找我？去看看"}
+或
 {"selected": "none", "reason": "好累，不想看"}
+
+selected必须是具体的会话ID（如 private:123 或 group:456）或 none。
 """
 
         val llmOutput = llm.ask(systemPrompt, "请做出选择。")

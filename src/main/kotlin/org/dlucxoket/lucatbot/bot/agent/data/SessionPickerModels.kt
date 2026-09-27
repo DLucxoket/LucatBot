@@ -1,14 +1,14 @@
 package org.dlucxoket.lucatbot.bot.agent.data
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.BotPersona
 
 /**
  * 会话选择请求
- *
- * 模拟真人做决策时拥有的全部信息。
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SessionPickerRequest(
     @JsonProperty("unreadSummary")
     val unreadSummary: String = "",
@@ -20,7 +20,11 @@ data class SessionPickerRequest(
     val mood: BotMood = BotMood(),
 
     @JsonProperty("timeHint")
-    val timeHint: String = ""
+    val timeHint: String = "",
+
+    /** 兼容字段：LLM 可能传原始上下文 */
+    @JsonProperty("context")
+    val context: String = ""
 )
 
 /**

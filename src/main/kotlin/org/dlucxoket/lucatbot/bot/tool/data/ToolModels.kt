@@ -1,9 +1,12 @@
 package org.dlucxoket.lucatbot.bot.tool.data
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 
 /** 查询用户资料的请求 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class UserProfileRequest(val qqNumber: Long)
 
 /** 查询用户资料的响应 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class UserProfileResult(
     val qqNumber: Long,
     val nickname: String,
@@ -14,6 +17,7 @@ data class UserProfileResult(
 )
 
 /** 查询聊天记录的请求 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ChatHistoryRequest(
     val targetId: Long = 0,
     val count: Int = 5,
@@ -21,6 +25,7 @@ data class ChatHistoryRequest(
 )
 
 /** 查询聊天记录的响应 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ChatHistoryResult(
     val targetId: Long,
     val messages: List<HistoryMessageItem> = emptyList(),
@@ -29,6 +34,7 @@ data class ChatHistoryResult(
 )
 
 /** 聊天记录条目 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class HistoryMessageItem(
     val sender: String,
     val content: String,
@@ -36,12 +42,14 @@ data class HistoryMessageItem(
 )
 
 /** 查询消息列表的请求 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class MessageListRequest(
     val targetId: Long = 0,
     val type: String = "private"  // "group" 或 "private"
 )
 
 /** 查询消息列表的响应 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class MessageListResult(
     val targetId: Long,
     val messageCount: Int = 0,

@@ -31,9 +31,13 @@ object AgentPlanParser {
      * @return 调用计划列表；若输出为 `done` 则返回 null
      */
     fun parse(llmOutput: String, depth: Int = 0): List<AgentPlan>? {
-        if (depth > 3) return null  // 防止无限递归
+        if (depth > 3) return null
 
         var trimmed = llmOutput.trim()
+
+        // 剥掉 markdown 代码块标记（LLM 常用 ```json ... ``` 包裹）
+        trimmed = trimmed.removePrefix("```json").removePrefix("```")
+            .removeSuffix("```").trim()
 
         // done → 终止
         if (trimmed.equals("done", ignoreCase = true) || trimmed == "\"done\"") {

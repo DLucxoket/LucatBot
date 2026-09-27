@@ -24,14 +24,17 @@ object DispatcherAgent : Agent<DispatcherRequest, DispatcherResult>() {
      */
     override val description: String = """
         一个Agent调度器，决定接下来调用哪些Agent来处理用户消息。
-        输出JSON格式的调用计划：
-        [{"agent": "AgentName", "input": {...}}]
+
+        **输出格式（必须严格遵守，不要包裹markdown代码块）**：
+        直接输出一个JSON数组：[{"agent": "Agent名称", "input": {参数对象}}]
+        示例：[{"agent": "ReplyAgent", "input": {"context": "用户说的话", "messages": []}}]
+        如果不需要再调用任何Agent，只输出：done
 
         **重要规则**：
-        - 收到用户消息时，调用一个Agent来处理（通常是ReplyAgent）
-        - 如果已有Agent成功回复了用户，直接返回done，不要再调用
+        - 收到用户消息时，调用至少一个Agent来处理
+        - 如果已有Agent成功回复了用户，直接输出done
         - 不要重复调用同一个Agent处理同一件事
-        - input由你显式指定，只传该Agent需要的信息
+        - input的字段必须匹配该Agent的参数格式（参见Agent描述中的参数说明）
     """.trimIndent()
 
     override val inputClass: Class<DispatcherRequest> = DispatcherRequest::class.java

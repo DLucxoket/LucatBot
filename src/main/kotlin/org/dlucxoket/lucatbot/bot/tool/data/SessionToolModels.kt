@@ -1,14 +1,17 @@
 package org.dlucxoket.lucatbot.bot.tool
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 
 /** 未读概况请求 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class UnreadSummaryRequest(
     @JsonProperty("filter")
     val filter: String = ""
 )
 
 /** 未读概况响应 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class UnreadSummaryResult(
     @JsonProperty("conversations")
     val conversations: List<UnreadConversation> = emptyList(),
@@ -21,6 +24,7 @@ data class UnreadSummaryResult(
 )
 
 /** 单个会话的未读信息 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class UnreadConversation(
     @JsonProperty("conversationId")
     val conversationId: String = "",
@@ -36,6 +40,7 @@ data class UnreadConversation(
 )
 
 /** 获取会话内容请求 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class GetSessionContentRequest(
     @JsonProperty("conversationId")
     val conversationId: String = "",
@@ -45,6 +50,7 @@ data class GetSessionContentRequest(
 )
 
 /** 获取会话内容响应 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class GetSessionContentResult(
     @JsonProperty("messages")
     val messages: List<SessionMessage> = emptyList(),
@@ -57,6 +63,7 @@ data class GetSessionContentResult(
 )
 
 /** 会话消息 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SessionMessage(
     @JsonProperty("sender")
     val sender: String = "",
@@ -69,6 +76,7 @@ data class SessionMessage(
 )
 
 /** 发送消息请求 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SendMessageRequest(
     @JsonProperty("conversationId")
     val conversationId: String = "",
@@ -78,6 +86,7 @@ data class SendMessageRequest(
 )
 
 /** 发送消息响应 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SendMessageResult(
     @JsonProperty("success")
     val success: Boolean = true,
@@ -87,6 +96,7 @@ data class SendMessageResult(
 )
 
 /** 发送表情请求 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SendEmojiRequest(
     @JsonProperty("conversationId")
     val conversationId: String = "",
@@ -96,6 +106,7 @@ data class SendEmojiRequest(
 )
 
 /** 发送表情响应 */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class SendEmojiResult(
     @JsonProperty("success")
     val success: Boolean = true,

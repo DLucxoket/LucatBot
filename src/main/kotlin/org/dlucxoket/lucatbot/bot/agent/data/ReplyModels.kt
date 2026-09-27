@@ -1,10 +1,12 @@
 package org.dlucxoket.lucatbot.bot.agent.data
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 
 /**
  * 智能回复 Agent 的请求
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ReplyRequest(
     @JsonProperty("context")
     val context: String = "",
@@ -22,6 +24,7 @@ data class ReplyRequest(
 /**
  * 聊天消息条目
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ChatMessageItem(
     @JsonProperty("sender")
     val sender: String = "",
@@ -36,6 +39,7 @@ data class ChatMessageItem(
 /**
  * 智能回复 Agent 的响应
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ReplyResult(
     @JsonProperty("reply")
     val reply: String = "",
