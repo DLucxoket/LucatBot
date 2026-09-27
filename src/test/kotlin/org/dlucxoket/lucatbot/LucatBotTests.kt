@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot
 import org.dlucxoket.lucatbot.adapter.onebot.ReplySplitter
 import org.dlucxoket.lucatbot.bot.agent.AgentPlan
 import org.dlucxoket.lucatbot.bot.agent.AgentPlanParser
+import org.dlucxoket.lucatbot.bot.agent.ContextBuilder
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
@@ -140,6 +141,69 @@ class BotMoodTest {
             val w = mood.replyWillingness()
             assertTrue(w in 0.0..1.0, "Mood $type willingness $w out of range")
         }
+    }
+}
+
+class SessionManagerTest {
+    private val manager = org.dlucxoket.lucatbot.model.session.SessionManager()
+
+    @Test
+    fun `add and get history`() {
+        manager.addMessage("private:1", "Alice", "hello")
+        manager.addMessage("private:1", "bot", "hi", isBot = true)
+        val history = manager.getHistory("private:1")
+        assertEquals(2, history.size)
+    }
+
+    @Test
+    fun `history limit works`() {
+        repeat(25) { manager.addMessage("private:1", "user", "msg$it") }
+        val history = manager.getHistory("private:1", limit = 10)
+        assertEquals(10, history.size)
+    }
+
+    @Test
+    fun `context summary for new session`() {
+        assertEquals("（新会话）", manager.getContextSummary("private:new"))
+    }
+
+    @Test
+    fun `fatigue increases with messages`() {
+        manager.addMessage("private:1", "user", "hi")
+        val f1 = manager.getFatigue("private:1")
+        repeat(20) { manager.addMessage("private:1", "user", "msg") }
+        val f2 = manager.getFatigue("private:1")
+        assertTrue(f2 > f1)
+    }
+
+    @Test
+    fun `fatigue hint changes`() {
+        assertTrue(manager.getFatigueHint("private:empty").isEmpty())
+    }
+}
+
+class ContextBuilderTest {
+    private val builder = ContextBuilder()
+
+    @Test
+    fun `build next context returns valid json`() {
+        val result = builder.buildNextContext("test", 1, emptyList())
+        assertTrue(result.contains("test"))
+    }
+
+    @Test
+    fun `summarize empty returns no_action`() {
+        val result = builder.summarize(emptyList())
+        assertTrue(result.contains("no_action"))
+    }
+
+    @Test
+    fun `summarize with results returns completed`() {
+        val results = listOf(
+            org.dlucxoket.lucatbot.bot.agent.AgentExecutionResult("Test", "{}", "{}", true)
+        )
+        val result = builder.summarize(results)
+        assertTrue(result.contains("completed"))
     }
 }
 
