@@ -18,4 +18,8 @@ abstract class MessageEvent(
     val sender: org.dlucxoket.lucatbot.model.user.User,
     val timestamp: Long
 ): org.dlucxoket.lucatbot.model.event.Event {
+    /**
+     * 会话 ID（子类实现，如 "group:123" 或 "private:456"）
+     */
+    abstract val conversationId: String
 }

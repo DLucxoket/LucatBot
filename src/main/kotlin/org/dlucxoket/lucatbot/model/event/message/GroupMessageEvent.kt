@@ -16,4 +16,5 @@ class GroupMessageEvent(
     val group: org.dlucxoket.lucatbot.model.group.Group,
     timestamp: Long
 ) : org.dlucxoket.lucatbot.model.event.message.MessageEvent(message, sender, timestamp) {
+    override val conversationId: String = "group:${group.groupNumber}"
 }

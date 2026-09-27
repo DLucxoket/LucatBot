@@ -30,35 +30,23 @@ class ProactiveScheduler(
     private val agentChain: AgentChain
 ) {
     private val log = LoggerFactory.getLogger(ProactiveScheduler::class.java)
-    private val persona = BotPersona()
-    private var mood: BotMood = BotMood.guessByTime()
 
-    /**
-     * 定时检查未读消息
-     *
-     * 深夜降低频率，模拟真人不一直盯着 QQ。
-     */
     @Scheduled(fixedDelay = 30000)  // 30秒
     fun checkUnread() {
         try {
-            // 深夜跳过（真人睡觉了）
             if (TimeAwareness.isLateNight()) {
                 log.debug("深夜模式，跳过主动检查")
                 return
             }
 
             // 更新心情
-            mood = BotMood.guessByTime()
+            lucatBot.mood = BotMood.guessByTime()
 
-            // 获取未读概况
             val summary = lucatBot.getUnreadSummary()
-            if (summary.isEmpty()) {
-                return  // 没有未读
-            }
+            if (summary.isEmpty()) return
 
             log.info("发现未读会话: $summary")
 
-            // 构建会话选择上下文
             val summaryText = summary.entries.joinToString("\n") { (convId, count) ->
                 val atMe = if (lucatBot.hasUnreadAtMe(convId)) "（@我）" else ""
                 val atAll = if (lucatBot.hasUnreadAtAll(convId)) "（@全体）" else ""
@@ -72,14 +60,13 @@ class ProactiveScheduler(
                 else -> "普通时间"
             }
 
-            // 调用 AgentChain 决定怎么处理
             val context = """
                 未读消息概况：
                 $summaryText
 
-                你是「${persona.name}」。
-                ${persona.toPrompt()}
-                ${mood.toPrompt()}
+                你是「${lucatBot.persona.name}」。
+                ${lucatBot.persona.toPrompt()}
+                ${lucatBot.mood.toPrompt()}
                 当前时间：$timeHint
 
                 请决定接下来做什么：

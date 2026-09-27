@@ -10,4 +10,10 @@ package org.dlucxoket.lucatbot.model.message.member
 class AtMessageMember(
     val targetQqNumber: Long
 ) : org.dlucxoket.lucatbot.model.message.member.MessageMember {
+    /**
+     * 是否 @全体成员
+     */
+    fun isAtAll(): Boolean {
+        return targetQqNumber == -1L || targetQqNumber == 0L
+    }
 }

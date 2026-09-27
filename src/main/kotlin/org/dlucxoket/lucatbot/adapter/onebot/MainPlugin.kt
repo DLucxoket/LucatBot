@@ -12,7 +12,6 @@ import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
 import org.dlucxoket.lucatbot.bot.tool.MessageListTool
 import org.dlucxoket.lucatbot.bot.tool.UserProfileTool
 import org.dlucxoket.lucatbot.model.message.ChatMessage
-import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -20,6 +19,12 @@ import org.springframework.stereotype.Component
 
 /**
  * Shiro 主插件——OneBot 消息处理入口
+ *
+ * 职责：协议适配 + 流程编排
+ * - 消息转换（Shiro → model）
+ * - 状态机决策（LucatBot）
+ * - 调度执行（AgentChain）
+ * - 回复发送
  *
  * 消息处理链路（模拟真人行为）：
  * 1. ShiroConverter 转为 model 层对象
@@ -31,15 +36,12 @@ import org.springframework.stereotype.Component
 internal class MainPlugin: BotPlugin() {
     private val log = LoggerFactory.getLogger(MainPlugin::class.java)
 
-    /** Agent 调度执行引擎（Spring 注入） */
     @Autowired
     private lateinit var agentChain: AgentChain
 
-    /** 机器人状态机（Spring 注入，全局共享） */
     @Autowired
     private lateinit var lucatBot: LucatBot
 
-    /** 会话历史管理 */
     @Autowired
     private lateinit var sessionManager: SessionManager
 
@@ -53,9 +55,9 @@ internal class MainPlugin: BotPlugin() {
                 return MESSAGE_IGNORE
             }
 
-            // 判断是否 @我 或 @全体
+            // 判断是否 @我 或 @全体（@全体判断在 model 层）
             val isAtMe = isAtMe(event, bot.selfId)
-            val isAtAll = isAtAll(modelEvent)
+            val isAtAll = (modelEvent.message as? ChatMessage)?.isAtAll() ?: false
 
             // LucatBot 状态机决策
             val action = lucatBot.handleMessage(modelEvent, isAtMe, isAtAll)
@@ -65,22 +67,15 @@ internal class MainPlugin: BotPlugin() {
                     log.info("消息进未读队列（状态：${lucatBot.state}）")
                     return MESSAGE_IGNORE
                 }
-                LucatBot.MessageAction.NOTIFY -> {
-                    log.info("收到 @我/@全体 消息，处理中...")
-                }
-                LucatBot.MessageAction.PROCESS -> {
-                    log.info("当前会话消息，处理中...")
-                }
+                LucatBot.MessageAction.NOTIFY -> log.info("收到 @我/@全体 消息，处理中...")
+                LucatBot.MessageAction.PROCESS -> log.info("当前会话消息，处理中...")
             }
 
-            // 执行 Agent 调度链
             log.info("收到消息: $plainText")
 
             // 记录到会话历史
-            val convId = buildConversationId(modelEvent)
+            val convId = modelEvent.conversationId
             sessionManager.addMessage(convId, modelEvent.sender.nickname, plainText)
-
-            // 获取会话上下文（最近的历史）
             val history = sessionManager.getContextSummary(convId)
 
             // 打字延迟（模拟真人不秒回）
@@ -101,7 +96,6 @@ internal class MainPlugin: BotPlugin() {
             val reply = agentChain.execute(contextWithHistory)
 
             if (reply.isNotBlank()) {
-                // 记录机器人的回复到历史
                 sessionManager.addMessage(convId, lucatBot.persona.name, reply, isBot = true)
                 bot.sendMsg(event, reply, false)
                 log.info("回复消息: $reply")
@@ -128,18 +122,7 @@ internal class MainPlugin: BotPlugin() {
     }
 
     /**
-     * 构建会话 ID
-     */
-    private fun buildConversationId(event: org.dlucxoket.lucatbot.model.event.message.MessageEvent): String {
-        return if (event is org.dlucxoket.lucatbot.model.event.message.GroupMessageEvent) {
-            "group:${event.group.groupNumber}"
-        } else {
-            "private:${event.sender.qqNumber}"
-        }
-    }
-
-    /**
-     * 判断消息是否 @了机器人
+     * 判断消息是否 @了机器人（Shiro DTO 层判断）
      */
     private fun isAtMe(event: AnyMessageEvent, selfId: Long): Boolean {
         val segments = event.arrayMsg ?: return false
@@ -147,18 +130,5 @@ internal class MainPlugin: BotPlugin() {
             seg.type == MsgTypeEnum.at &&
                 seg.getStringData("qq")?.toLongOrNull() == selfId
         }
-    }
-
-    /**
-     * 判断消息是否 @全体成员
-     */
-    private fun isAtAll(event: org.dlucxoket.lucatbot.model.event.message.MessageEvent): Boolean {
-        val msg = event.message
-        if (msg is ChatMessage) {
-            return msg.messageMembers.any {
-                it is AtMessageMember && (it.targetQqNumber == -1L || it.targetQqNumber == 0L)
-            }
-        }
-        return false
     }
 }

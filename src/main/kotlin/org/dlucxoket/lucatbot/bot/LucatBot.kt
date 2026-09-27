@@ -97,7 +97,7 @@ class LucatBot {
      * @return 处理动作
      */
     fun handleMessage(event: MessageEvent, isAtMe: Boolean, isAtAll: Boolean): MessageAction {
-        val conversationId = buildConversationId(event)
+        val conversationId = event.conversationId
 
         return when (state) {
             // 没在管 QQ → 全部进未读
@@ -205,25 +205,12 @@ class LucatBot {
     }
 
     /**
-     * 构建会话 ID
-     */
-    private fun buildConversationId(event: MessageEvent): String {
-        return if (event is org.dlucxoket.lucatbot.model.event.message.GroupMessageEvent) {
-            "group:${event.group.groupNumber}"
-        } else {
-            "private:${event.sender.qqNumber}"
-        }
-    }
-
-    /**
-     * 提取消息文本
+     * 提取消息文本（委托 model 层）
      */
     private fun extractText(event: MessageEvent): String {
         val msg = event.message
         return if (msg is org.dlucxoket.lucatbot.model.message.ChatMessage) {
-            msg.messageMembers
-                .filterIsInstance<org.dlucxoket.lucatbot.model.message.member.TextMessageMember>()
-                .joinToString("") { it.text }
+            msg.extractText()
         } else {
             ""
         }
