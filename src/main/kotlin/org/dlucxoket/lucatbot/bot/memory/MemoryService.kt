@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component
  */
 @Component
 class MemoryService(
-    private val repository: MemoryRepository = JsonFileMemoryRepository()
+    private val repository: MemoryRepository
 ) {
     private val log = LoggerFactory.getLogger(MemoryService::class.java)
 

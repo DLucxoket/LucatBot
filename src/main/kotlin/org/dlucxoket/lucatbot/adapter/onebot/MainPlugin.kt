@@ -137,10 +137,9 @@ internal class MainPlugin: BotPlugin() {
      * 判断是否戳一戳消息
      */
     private fun isPoke(event: AnyMessageEvent): Boolean {
-        // OneBot 戳一戳通常是 type=poke 的事件或消息中包含 poke 标记
         val segments = event.arrayMsg ?: return false
         return segments.any { seg ->
-            seg.type.toString().equals("poke", ignoreCase = true) ||
+            seg.type == MsgTypeEnum.poke ||
                 seg.getStringData("type") == "poke"
         }
     }

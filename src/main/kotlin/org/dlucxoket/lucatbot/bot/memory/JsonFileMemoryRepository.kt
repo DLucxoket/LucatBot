@@ -3,6 +3,8 @@ package org.dlucxoket.lucatbot.bot.memory
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 

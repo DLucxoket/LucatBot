@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component
  */
 @Component
 class ChatHistoryService(
-    private val repository: ChatHistoryRepository = JsonFileChatHistoryRepository()
+    private val repository: ChatHistoryRepository
 ) {
     private val log = LoggerFactory.getLogger(ChatHistoryService::class.java)
 

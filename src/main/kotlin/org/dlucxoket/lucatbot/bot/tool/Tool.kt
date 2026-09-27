@@ -36,7 +36,13 @@ abstract class Tool<I, O> {
     /** Jackson ObjectMapper */
     protected val mapper: ObjectMapper = ObjectMapper()
 
-    /** 绑定的 Shiro Bot 实例（用于调用 OneBot API） */
+    /**
+     * 绑定的 Shiro Bot 实例（用于调用 OneBot API）
+     *
+     * 两阶段初始化：Tool 由 ClassGraph 自动发现（object 单例），
+     * Bot 实例在消息到达时通过 [bindBot] 绑定。
+     * 这里用 var 是运行时注入的必要设计，不是滥用可变状态。
+     */
     protected var bot: Bot? = null
 
     /**
