@@ -86,4 +86,43 @@ data class BotMood(
             }
         }
     }
+
+    /**
+     * 被聊天——心情变好
+     *
+     * 模拟真人和朋友聊天后心情提升。
+     */
+    fun boost(): BotMood {
+        val newIntensity = (intensity + 0.1).coerceAtMost(1.0)
+        val newType = when {
+            type == MoodType.TIRED || type == MoodType.SLEEPY -> type  // 累了聊天也不会变精神
+            type == MoodType.ANNOYED -> MoodType.NORMAL               // 烦躁被安抚
+            newIntensity > 0.7 -> MoodType.HAPPY
+            else -> type
+        }
+        return copy(type = newType, intensity = newIntensity)
+    }
+
+    /**
+     * 被冷落——心情变差
+     *
+     * 模拟真人被已读不回/被忽视后心情下降。
+     */
+    fun drop(): BotMood {
+        val newIntensity = (intensity - 0.15).coerceAtLeast(0.1)
+        val newType = when {
+            type == MoodType.HAPPY && newIntensity < 0.5 -> MoodType.NORMAL
+            type == MoodType.NORMAL && newIntensity < 0.3 -> MoodType.BORED
+            type == MoodType.BORED && newIntensity < 0.2 -> MoodType.ANNOYED
+            else -> type
+        }
+        return copy(type = newType, intensity = newIntensity)
+    }
+
+    /**
+     * 自然衰减——心情随时间回归平常
+     */
+    fun decay(): BotMood {
+        return copy(intensity = (intensity * 0.95).coerceAtLeast(0.3))
+    }
 }

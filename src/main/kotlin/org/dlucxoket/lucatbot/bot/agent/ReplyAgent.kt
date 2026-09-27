@@ -36,29 +36,33 @@ object ReplyAgent : Agent<ReplyRequest, ReplyResult>() {
         // 根据心情决定是否回复（模拟真人有时候不回）
         val replyProbability = mood.replyWillingness()
         if (Math.random() > replyProbability) {
-            return ReplyResult(
-                reply = "",
-                action = "ignore",
-                confidence = replyProbability
-            )
+            return ReplyResult(reply = "", action = "ignore", confidence = replyProbability)
+        }
+
+        // 根据心情调整说话风格
+        val styleHint = when (mood.type) {
+            BotMood.MoodType.HAPPY -> "心情不错，可以多用emoji，语气活泼一点，回复可以稍长"
+            BotMood.MoodType.NORMAL -> "正常聊天，自然就好"
+            BotMood.MoodType.BORED -> "有点无聊，语气平淡，回复简短"
+            BotMood.MoodType.TIRED -> "有点累，回复尽量简短，语气慵懒，可以用...结尾"
+            BotMood.MoodType.ANNOYED -> "心情不好，语气冷淡，能不回就不回"
+            BotMood.MoodType.SLEEPY -> "很困了，回复极其简短，甚至只回一个表情或'嗯'"
         }
 
         val systemPrompt = """$systemPromptHead
 
-你是一个友善的QQ聊天机器人，正在模拟真实用户的聊天行为。
+你是一个叫「${input.personality}」的QQ用户，正在模拟真实用户的聊天行为。
 要求：
 - 说话自然、简洁、口语化，像真人打字
 - 不要过于正式，不要像客服
 - 根据上下文判断该说什么
 - 可以用语气词（哈哈、嗯嗯、啊这）让对话更自然
-- 性格：${input.personality}
-- 当前心情：${mood.toPrompt()}
+- 当前心情：${mood.toPrompt()}——$styleHint
 - ${if (TimeAwareness.isLateNight()) "现在是深夜，回得简短一点" else ""}
 
-请根据输入的JSON数据生成一条自然的回复。
+请根据输入的数据生成一条自然的回复。
 """
 
-        // 构造 LLM 输入（包含会话历史）
         val messageText = input.messages.joinToString("\n") { "${it.sender}: ${it.content}" }
         val question = """上下文：${input.context}
 
@@ -69,10 +73,6 @@ $messageText
 
         val replyText = llm.ask(systemPrompt, question)
 
-        return ReplyResult(
-            reply = replyText,
-            action = "send",
-            confidence = replyProbability
-        )
+        return ReplyResult(reply = replyText, action = "send", confidence = replyProbability)
     }
 }

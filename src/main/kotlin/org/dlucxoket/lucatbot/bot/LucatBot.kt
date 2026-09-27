@@ -100,18 +100,21 @@ class LucatBot {
         val conversationId = event.conversationId
 
         return when (state) {
-            // 没在管 QQ → 全部进未读
+            // 没在管 QQ → 全部进未读，心情衰减
             is State.Idle -> {
                 addUnread(event, conversationId, isAtMe, isAtAll)
+                mood = mood.decay()
                 MessageAction.IGNORE
             }
 
             // 在会话列表 → 看情况
             is State.ViewingConversations -> {
                 if (isAtMe || isAtAll) {
+                    mood = mood.boost()  // 有人找我，心情好一点
                     MessageAction.NOTIFY
                 } else {
                     addUnread(event, conversationId, isAtMe, isAtAll)
+                    mood = mood.decay()
                     MessageAction.IGNORE
                 }
             }
@@ -120,14 +123,17 @@ class LucatBot {
             is State.InConversation -> {
                 val current = state as State.InConversation
                 if (conversationId == current.conversationId) {
-                    // 当前会话的消息 → 处理
+                    // 当前会话的消息 → 处理，心情变好
+                    mood = mood.boost()
                     MessageAction.PROCESS
                 } else if (isAtMe || isAtAll) {
-                    // 其他会话但 @我/@全体 → 通知（模拟真人被打断）
+                    // 其他会话但 @我/@全体 → 通知
+                    mood = mood.boost()
                     MessageAction.NOTIFY
                 } else {
-                    // 其他会话普通消息 → 未读（模拟真人不管）
+                    // 其他会话普通消息 → 未读（被冷落，心情微降）
                     addUnread(event, conversationId, isAtMe, isAtAll)
+                    mood = mood.drop()
                     MessageAction.IGNORE
                 }
             }

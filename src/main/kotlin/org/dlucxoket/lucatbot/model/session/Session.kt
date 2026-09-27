@@ -87,4 +87,29 @@ class SessionManager {
         val elapsed = System.currentTimeMillis() - session.lastActiveTime
         return elapsed < withinMinutes * 60 * 1000
     }
+
+    /**
+     * 会话疲劳度（0.0-1.0）
+     *
+     * 聊得越多越疲劳，模拟真人聊久了会变敷衍。
+     * - 0 条消息 → 0.0（新鲜）
+     * - 20 条消息 → 1.0（很疲劳）
+     */
+    fun getFatigue(conversationId: String): Double {
+        val session = sessions[conversationId] ?: return 0.0
+        return (session.entries.size.toDouble() / maxHistory).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * 获取疲劳提示（注入 LLM prompt）
+     */
+    fun getFatigueHint(conversationId: String): String {
+        val fatigue = getFatigue(conversationId)
+        return when {
+            fatigue < 0.3 -> ""
+            fatigue < 0.6 -> "（聊了一会儿了）"
+            fatigue < 0.8 -> "（聊得有点久了，回复可以简短些）"
+            else -> "（聊很久了，有点敷衍，回复尽量简短甚至用'嗯''哈哈'应付）"
+        }
+    }
 }

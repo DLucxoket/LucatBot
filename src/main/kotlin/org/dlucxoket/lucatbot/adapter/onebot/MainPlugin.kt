@@ -85,19 +85,30 @@ internal class MainPlugin: BotPlugin() {
                 Thread.sleep(delay)
             }
 
-            // 构建带历史的上下文
+            // 构建带历史的上下文（含疲劳提示）
+            val fatigueHint = sessionManager.getFatigueHint(convId)
             val contextWithHistory = """
                 当前消息：$plainText
 
                 聊天记录：
                 $history
+                $fatigueHint
             """.trimIndent()
 
             val reply = agentChain.execute(contextWithHistory)
 
             if (reply.isNotBlank()) {
                 sessionManager.addMessage(convId, lucatBot.persona.name, reply, isBot = true)
-                bot.sendMsg(event, reply, false)
+
+                // 模拟真人拆多条发送
+                val messages = splitReply(reply)
+                for ((i, msg) in messages.withIndex()) {
+                    bot.sendMsg(event, msg, false)
+                    // 多条之间加间隔（模拟打字）
+                    if (i < messages.size - 1) {
+                        Thread.sleep((300..800).random().toLong())
+                    }
+                }
                 log.info("回复消息: $reply")
             } else {
                 log.info("AgentChain 返回空回复，跳过发送")
@@ -129,6 +140,45 @@ internal class MainPlugin: BotPlugin() {
         return segments.any { seg ->
             seg.type == MsgTypeEnum.at &&
                 seg.getStringData("qq")?.toLongOrNull() == selfId
+        }
+    }
+
+    /**
+     * 拆分回复为多条短消息
+     *
+     * 模拟真人不会发一大段，而是拆几条：
+     * - 句号/换行处断开
+     * - 每条不超过 30 字
+     * - 最多拆 3 条
+     */
+    private fun splitReply(reply: String): List<String> {
+        // 短回复不拆
+        if (reply.length <= 15) return listOf(reply)
+
+        // 按句号/换行拆分
+        val sentences = reply.split(Regex("(?<=[。！？!?\\n])"))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        // 合并短句为不超过 30 字的段落
+        val result = mutableListOf<String>()
+        var current = StringBuilder()
+        for (sentence in sentences) {
+            if (current.length + sentence.length > 30 && current.isNotEmpty()) {
+                result.add(current.toString().trim())
+                current = StringBuilder()
+            }
+            current.append(sentence)
+        }
+        if (current.isNotEmpty()) {
+            result.add(current.toString().trim())
+        }
+
+        // 最多拆 3 条，多余的合并到最后一条
+        return if (result.size > 3) {
+            result.take(2) + result.drop(2).joinToString("")
+        } else {
+            result
         }
     }
 }
