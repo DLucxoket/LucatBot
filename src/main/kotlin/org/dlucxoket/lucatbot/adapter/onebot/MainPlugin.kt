@@ -58,6 +58,8 @@ internal class MainPlugin: BotPlugin() {
 
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
+            // 保存 Bot 引用供 ProactiveScheduler 发送消息
+            lucatBot.shiroBot = bot
             bindTools(bot)
 
             // 戳一戳检测（模拟真人被戳了会戳回去）
@@ -77,11 +79,11 @@ internal class MainPlugin: BotPlugin() {
 
             when (action) {
                 LucatBot.MessageAction.IGNORE -> {
-                    log.info("消息进未读队列（状态：${lucatBot.state}）")
+                    log.debug("消息进未读队列（状态：${lucatBot.state}）")
                     return MESSAGE_IGNORE
                 }
-                LucatBot.MessageAction.NOTIFY -> log.info("收到 @我/@全体 消息，处理中...")
-                LucatBot.MessageAction.PROCESS -> log.info("当前会话消息，处理中...")
+                LucatBot.MessageAction.NOTIFY -> log.debug("收到 @我/@全体 消息，处理中...")
+                LucatBot.MessageAction.PROCESS -> log.debug("当前会话消息，处理中...")
             }
 
             log.info("收到消息: $plainText")

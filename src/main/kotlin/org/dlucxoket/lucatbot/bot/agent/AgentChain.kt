@@ -52,6 +52,9 @@ class AgentChain(
 
             // DispatcherAgent 决策（JSON 边界：String → DispatcherRequest → DispatcherResult → JSON）
             val dispatcherJson = dispatcher.process(currentContext)
+            log.debug("[LLM →] 输入上下文: {}", currentContext.take(200))
+            log.debug("[LLM ←] 原始返回: {}", dispatcherJson.take(200))
+
             val dispatcherResult = mapper.readValue(dispatcherJson, DispatcherResult::class.java)
             val planNames = dispatcherResult.plans.joinToString { p -> p.agentName }
             log.info("DispatcherAgent: done=${dispatcherResult.done}, plans=[$planNames]")

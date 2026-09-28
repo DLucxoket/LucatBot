@@ -84,19 +84,23 @@ class ProactiveScheduler(
 
             val reply = agentChain.execute(context)
 
-            // 根据回复决定状态转换
+            // 发送回复到选中的会话
             if (reply.isNotBlank()) {
-                // 有回复 → 选中了某个会话，进入会话状态
                 val selectedConv = summary.keys.firstOrNull()
                 if (selectedConv != null) {
                     val parts = selectedConv.split(":")
                     val type = if (parts[0] == "group") LucatBot.ConversationType.GROUP else LucatBot.ConversationType.PRIVATE
                     lucatBot.enterConversation(selectedConv, type)
-                    log.info("状态切换 → InConversation($selectedConv)")
+                    log.info("进入会话: $selectedConv")
+
+                    // 发送消息
+                    sendMessage(selectedConv, reply)
 
                     // 标记已读
                     lucatBot.consumeUnread(selectedConv)
                 }
+            } else {
+                log.debug("无回复内容，跳过发送")
             }
 
             // 处理完回到空闲状态
@@ -106,6 +110,33 @@ class ProactiveScheduler(
         } catch (e: Exception) {
             log.error("主动检查异常: ${e.message}")
             lucatBot.goIdle()  // 异常时也恢复状态
+        }
+    }
+
+    /**
+     * 发送消息到指定会话
+     */
+    private fun sendMessage(conversationId: String, content: String) {
+        val bot = lucatBot.shiroBot
+        if (bot == null) {
+            log.warn("Bot 未绑定，无法发送消息")
+            return
+        }
+
+        try {
+            val parts = conversationId.split(":")
+            if (parts.size != 2) return
+
+            val id = parts[1].toLongOrNull() ?: return
+            val type = parts[0]
+
+            when (type) {
+                "group" -> bot.sendGroupMsg(id, content, false)
+                "private" -> bot.sendPrivateMsg(id, content, false)
+            }
+            log.info("发送消息到 $conversationId: {}", content.take(50))
+        } catch (e: Exception) {
+            log.error("发送消息失败: {}", e.message)
         }
     }
 

@@ -83,6 +83,10 @@ class LucatBot {
     /** 未读消息队列（线程安全） */
     private val unreadQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()
 
+    /** 当前 Shiro Bot 实例（用于发送消息） */
+    @Volatile
+    var shiroBot: com.mikuac.shiro.core.Bot? = null
+
     /**
      * 判断一条消息该怎么处理
      *
