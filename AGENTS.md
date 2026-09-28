@@ -8,11 +8,11 @@ Kotlin Spring Boot 4.0.3 应用——基于 OneBot 协议（QQ）的模拟真人
 
 ### 智能体系统（核心设计）
 
-机器人使用自动发现的 Agent 链，**核心设计原则：模拟真人在 QQ 中的真实行为**：
+机器人按**固定脚本的主循环**驱动，**核心设计原则：模拟真人在 QQ 中的真实行为**：
 
 - `Agent<I, O>`（泛型抽象类）——基类；每个 Agent 声明自己的输入/输出 OOP 类型，实现 `handle(input: I): O`。
-- `DispatcherAgent`——单例，通过 **ClassGraph** 在运行时扫描所有 `Agent`/`Tool` 子类，构建描述列表，交给 LLM 决策调用计划（JSON 格式），或 `done`。
-- 添加新 Agent：在 `bot/agent/` 下创建继承 `Agent<I, O>` 的类，实现 `description`、`inputClass`、`handle()`。会被自动发现——无需手动注册。
+- 主流程只有两个智能体：`SessionPickerAgent`（消息列表选会话）与 `ConversationAgent`（会话内决策），由 `MainLoopController` / `MessageListController` / `ConversationController` 按固定脚本调用。
+- 代码中不再保留自由调度链路（无 DispatcherAgent / AgentChain）。
 
 ### JSON ↔ OOP 边界约定
 
@@ -31,9 +31,9 @@ LLM API 边界（JSON 字符串）
 
 ### Tool 与 Agent 的区别
 
-- **Agent**：LLM 驱动的智能处理单元，可以调用 LLM 做判断和生成（如 ReplyAgent）
+- **Agent**：LLM 驱动的智能处理单元，可以调用 LLM 做判断和生成（如 `ConversationAgent`）
 - **Tool**：确定性的数据查询/交互操作，不调用 LLM（如 ChatHistoryTool）
-- 两者都通过 ClassGraph 自动发现，都可被 DispatcherAgent 调度
+- Tool 仍通过 ClassGraph 自动发现（`AgentDiscovery`），由 `ToolDependencyBinder` 绑定 Bot 依赖；主循环经 `processObject` 调用 Tool
 
 ### 消息模型层级
 
@@ -54,19 +54,21 @@ Session：会话上下文（预留）
 
 ### 入口点
 
-`adapter/onebot/MainPlugin`（Shiro BotPlugin）——`onAnyMessage` 调用 `ShiroConverter` 转换 → `AgentChain.execute()` 调度 → 回复消息。
+`adapter/onebot/MainPlugin`（Shiro BotPlugin）——`onAnyMessage` 走 `ShiroConverter` 转换 → 喂给状态机（`LucatBot.handleMessage`）并启动 `MainLoopController` 主循环；主循环按固定脚本调 `SessionPickerAgent` / `ConversationAgent` 与 Tool 完成回复。戳一戳旁路直接构造 `ConversationRequest` 调 `ConversationAgent`。
 
 ### LLM 配置
 
-默认：本地 Ollama（`http://localhost:11434/v1`）+ `qwen2.5`。通过 `application.yaml` 配置：
+默认：MiMo 端点（OpenAI 兼容）。通过 `application.yaml` 的 `llm.mimo.*` 配置：
 
 ```yaml
-ai.qwen.base-url: http://localhost:11434/v1
-ai.qwen.api-key: ollama
-ai.qwen.model-name: qwen2.5
+llm:
+  mimo:
+    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+    api-key: ${LLM_API_KEY:mimo}   # 走 LLM_API_KEY 环境变量
+    model-name: "mimo-v2.6-flash"
 ```
 
-使用 LangChain4j 的 `OpenAiChatModel`——任何兼容 OpenAI 协议的端点均可。
+使用自研 `OpenAIAPI`（`bot/llm/`）——任何兼容 OpenAI 协议的端点均可。
 
 ## OOP 设计原则（必须遵守）
 
@@ -76,9 +78,9 @@ Agent/Tool 内部**一律使用 OOP 对象**（data class），不在业务逻�
 
 ```kotlin
 // ✅ 正确：handle() 用 OOP 对象
-override fun handle(input: ReplyRequest): ReplyResult {
-    val reply = llm.ask(systemPrompt, input.context)
-    return ReplyResult(reply = reply)
+override fun handle(input: ConversationRequest): ConversationDecision {
+    val llmOutput = llm.ask(systemPrompt, "请做出选择。")
+    return ConversationDecision.parse(llmOutput)
 }
 
 // ❌ 错误：业务逻辑里拼 JSON
@@ -89,7 +91,7 @@ override fun handle(input: String): String {
 
 ### 2. 单一职责（SRP）
 
-每个类只做一件事。`AgentChain` 承担调度、发现、执行、上下文构建——过重，应拆分。新建类时思考："这个类是否只因一个原因而改变？"
+每个类只做一件事。新建类时思考："这个类是否只因一个原因而改变？"
 
 ### 3. 依赖倒置（DIP）
 
@@ -105,14 +107,14 @@ val llm: LLM = LLM.DEFAULT  // 无法在测试中 mock
 
 ### 4. 开闭原则（OCP）
 
-加新 Agent/Tool 不应改已有代码。ClassGraph 自动发现已满足——新 Agent 继承基类即可，不改 DispatcherAgent/AgentChain。
+加新 Tool 不应改已有代码——ClassGraph 自动发现已满足。主循环的编排改动集中在对应 Controller。
 
 ### 5. 不可变优先
 
 数据类一律用 `val`。需要修改时用 `copy()` 创建新实例。
 
 ```kotlin
-data class ReplyResult(val reply: String, val action: String = "send")
+data class ConversationDecision(val action: ConversationAction, val reason: String? = null)
 // ✅ val + data class，天然不可变
 ```
 
@@ -131,7 +133,7 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 ## 开发命令
 
 ```bash
-./gradlew run              # 运行机器人（需要 Ollama 或兼容的 LLM 端点）
+./gradlew run              # 运行机器人（需要 LLM_API_KEY 或兼容的 OpenAI 协议端点）
 ./gradlew test             # 运行所有测试
 ./gradlew build            # 构建（编译 + 测试 + jar）
 ./gradlew compileKotlin    # 仅编译，不跑测试
@@ -155,10 +157,9 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 
 ## 容易搞错的地方
 
-- **Agent 发现是自动的**——不要手动注册。ClassGraph 扫描 classpath。
+- **Tool 发现是自动的**——不要手动注册。ClassGraph 扫描 classpath（Agent 已不再自动发现，主流程两个智能体在 `LoopConfig` 显式构造）。
 - **JSON 只在边界**——Agent `handle()` 方法里禁止拼 JSON，用 OOP 对象。
 - **`LLM.DEFAULT` 是懒加载单例**（不是 Spring bean）——绕过了 DI。
-- **`DispatcherAgent` 是 Kotlin `object`**——不能被注入或实例化。
 - **Gradle 使用国内镜像**——`gradle-wrapper.properties` 指向 `mirrors.aliyun.com`。
 - **Spring Boot 4.0.3 + Kotlin 2.2.21**——版本很新，不要假设 Spring Boot 3.x 写法。
 - **Shiro API**：`ArrayMsg.type` 是 `MsgTypeEnum` 枚举；`sendMsg(event, msg, autoEscape)` 签名。

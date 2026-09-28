@@ -34,7 +34,7 @@ abstract class Agent<I, O>(
     /**
      * 智能体功能描述（必填）
      *
-     * 会被 DispatcherAgent 收集，以纯文本形式展示给 LLM，供其决策是否调用。
+     * 以纯文本形式描述该智能体的职责，作为文档/调试信息保留。
      */
     abstract val description: String
 

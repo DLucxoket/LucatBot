@@ -45,7 +45,7 @@ interface LLM {
          *   `ask()` 转发到 [OpenAIAPI.DEFAULT]（手 new 实例，读环境变量/系统属性）。
          *
          * 为什么是委托对象而非「每次 getter 返回当前实例」：Agent（如 LoopConfig 中的
-         * ConversationAgent、AgentChain 持有的 DispatcherAgent）在 Spring 启动期构造时
+         * ConversationAgent、MessageListController 的 SessionPickerAgent）在 Spring 启动期构造时
          * 会把 [DEFAULT] 作为默认构造参数捕获——若直接返回原始实例，捕获发生在注册之前
          * 就会永久拿到兜底实例。委托对象把解析推迟到 `ask()` 调用时，彻底消除注册顺序依赖。
          */

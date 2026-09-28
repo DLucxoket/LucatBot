@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory
 /**
  * 消息列表编排：读列表 → 选会话/空闲
  *
- * 固定脚本调专用 Agent + Tool，不走 DispatcherAgent 自由调度。
+ * 固定脚本调专用 Agent + Tool（SessionPickerAgent），无自由调度链路。
  * IO 经 Tool（processObject）；LLM JSON 只在 Agent 边界。
  */
 class MessageListController(

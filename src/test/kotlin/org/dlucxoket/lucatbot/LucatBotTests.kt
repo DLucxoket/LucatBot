@@ -1,9 +1,6 @@
 package org.dlucxoket.lucatbot
 
 import org.dlucxoket.lucatbot.adapter.onebot.ReplySplitter
-import org.dlucxoket.lucatbot.bot.agent.AgentPlan
-import org.dlucxoket.lucatbot.bot.agent.AgentPlanParser
-import org.dlucxoket.lucatbot.bot.agent.ContextBuilder
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
@@ -14,46 +11,6 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryItem
 import java.io.File
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
-
-class AgentPlanParserTest {
-
-    @Test
-    fun `parse done returns null`() {
-        assertNull(AgentPlanParser.parse("done"))
-        assertNull(AgentPlanParser.parse("DONE"))
-        assertNull(AgentPlanParser.parse("\"done\""))
-    }
-
-    @Test
-    fun `parse json array returns plans`() {
-        val json = """[{"agent": "ReplyAgent", "input": {"context": "hi"}}]"""
-        val plans = AgentPlanParser.parse(json)
-        assertNotNull(plans)
-        assertEquals(1, plans!!.size)
-        assertEquals("ReplyAgent", plans[0].agentName)
-    }
-
-    @Test
-    fun `parse json object returns single plan`() {
-        val json = """{"agent": "EchoAgent", "input": {"text": "hello"}}"""
-        val plans = AgentPlanParser.parse(json)
-        assertNotNull(plans)
-        assertEquals(1, plans!!.size)
-    }
-
-    @Test
-    fun `parse double encoded json works`() {
-        val json = "\"[{\\\"agent\\\": \\\"ReplyAgent\\\", \\\"input\\\": {\\\"context\\\": \\\"hi\\\"}}]\""
-        val plans = AgentPlanParser.parse(json)
-        assertNotNull(plans)
-    }
-
-    @Test
-    fun `parse invalid returns null`() {
-        assertNull(AgentPlanParser.parse("invalid json"))
-        assertNull(AgentPlanParser.parse(""))
-    }
-}
 
 class ReplySplitterTest {
 
@@ -180,31 +137,6 @@ class SessionManagerTest {
     @Test
     fun `fatigue hint changes`() {
         assertTrue(manager.getFatigueHint("private:empty").isEmpty())
-    }
-}
-
-class ContextBuilderTest {
-    private val builder = ContextBuilder()
-
-    @Test
-    fun `build next context returns valid json`() {
-        val result = builder.buildNextContext("test", 1, emptyList())
-        assertTrue(result.contains("test"))
-    }
-
-    @Test
-    fun `summarize empty returns no_action`() {
-        val result = builder.summarize(emptyList())
-        assertTrue(result.contains("no_action"))
-    }
-
-    @Test
-    fun `summarize with results returns completed`() {
-        val results = listOf(
-            org.dlucxoket.lucatbot.bot.agent.AgentExecutionResult("Test", emptyMap(), mapOf("ok" to true), true)
-        )
-        val result = builder.summarize(results)
-        assertTrue(result.contains("completed"))
     }
 }
 

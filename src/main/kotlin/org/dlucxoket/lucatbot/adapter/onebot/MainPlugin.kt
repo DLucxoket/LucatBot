@@ -6,9 +6,12 @@ import com.mikuac.shiro.dto.event.message.AnyMessageEvent
 import com.mikuac.shiro.dto.event.request.FriendAddRequestEvent
 import com.mikuac.shiro.enums.MsgTypeEnum
 import org.dlucxoket.lucatbot.bot.LucatBot
-import org.dlucxoket.lucatbot.bot.agent.AgentChain
+import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
+import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
+import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.loop.MainLoopController
+import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.tool.ToolDependencyBinder
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.session.SessionManager
@@ -24,15 +27,12 @@ import org.springframework.stereotype.Component
  * - 未读/待插入队列维护（LucatBot）
  * - 主循环启动与空闲唤醒信号（MainLoopController）
  *
- * 主路径的状态机编排在 [MainLoopController] / ConversationController / MessageListController，
- * 不在此处调用 AgentChain（AgentChain 仅保留给戳一戳等自由规划场景）。
+ * 主路径的状态机编排在 [MainLoopController] / ConversationController / MessageListController；
+ * 戳一戳等旁路事件直接构造请求调用 [ConversationAgent]，无自由调度链路。
  */
 @Component
 internal class MainPlugin: BotPlugin() {
     private val log = LoggerFactory.getLogger(MainPlugin::class.java)
-
-    @Autowired
-    private lateinit var agentChain: AgentChain
 
     @Autowired
     private lateinit var lucatBot: LucatBot
@@ -45,6 +45,9 @@ internal class MainPlugin: BotPlugin() {
 
     @Autowired
     private lateinit var mainLoopController: MainLoopController
+
+    /** 戳一戳旁路直接用的会话内决策智能体 */
+    private val conversationAgent = ConversationAgent()
 
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
@@ -113,35 +116,33 @@ internal class MainPlugin: BotPlugin() {
     }
 
     /**
-     * 处理戳一戳（Agent 决策：戳回去/不理/问一句）
+     * 处理戳一戳（ConversationAgent 决策：回应一句/不回应）
      *
-     * 模拟真人的反应：看心情和关系决定怎么回应。
+     * 模拟真人的反应：看心情和场景决定怎么回应。
      */
     private fun handlePoke(bot: Bot, event: AnyMessageEvent) {
         try {
             log.info("被戳一戳")
 
-            val context = """
-                有人戳了我一下（QQ戳一戳）。
-                发起者：QQ号 ${event.userId}
-                当前心情：${lucatBot.mood.toPrompt()}
+            val request = ConversationRequest(
+                persona = lucatBot.persona,
+                mood = lucatBot.mood,
+                timeHint = TimeAwareness.timeHint(),
+                conversationType = "私聊",
+                conversationName = event.userId.toString(),
+                conversationId = "private:${event.userId}",
+                newMessageNotes = listOf("（戳一戳）QQ号 ${event.userId} 戳了你一下"),
+                hint = "这是戳一戳场景：想回应就 send 一句短的（如「干嘛」「戳我干嘛」），不想理就 return"
+            )
 
-                像真人一样决定怎么反应，可能的反应：
-                - 戳回去
-                - 不理（懒得回）
-                - 回一句"干嘛"或类似的话
-                - 回个表情
+            val decision = conversationAgent.processObject(request)
 
-                根据心情和场景自然选择。
-            """.trimIndent()
-
-            val reply = agentChain.execute(context)
-
-            if (reply.isNotBlank()) {
-                bot.sendMsg(event, reply, false)
-                chatHistoryService.recordBotReply("private:${event.userId}", reply)
-                sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, reply, isBot = true)
-                log.info("戳一戳回应: $reply")
+            if (decision.action == ConversationAction.SEND) {
+                val content = decision.content.orEmpty()
+                bot.sendMsg(event, content, false)
+                chatHistoryService.recordBotReply("private:${event.userId}", content)
+                sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, content, isBot = true)
+                log.info("戳一戳回应: $content")
             } else {
                 log.info("戳一戳：不回应")
             }

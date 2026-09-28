@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component
  * 主循环编排（状态机驱动）
  *
  * 状态流转：消息列表 → 选会话/空闲；会话中 → 返回消息列表。
- * 固定脚本调专用 Agent + Tool，不依赖 DispatcherAgent 自由调度。
+ * 固定脚本调专用 Agent + Tool（SessionPickerAgent / ConversationAgent），无自由调度链路。
  */
 @Component
 class MainLoopController(
