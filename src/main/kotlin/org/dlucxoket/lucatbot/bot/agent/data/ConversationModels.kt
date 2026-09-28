@@ -31,6 +31,9 @@ enum class ConversationAction {
     /** 发一条消息 */
     SEND,
 
+    /** 在会话里停留一会儿，到时后重新决策 */
+    STAY,
+
     /** 退出本会话，回到消息列表 */
     RETURN
 }
@@ -39,7 +42,7 @@ enum class ConversationAction {
  * 会话内决策结果（统一信封的 OOP 形态）
  *
  * @param action 动作
- * @param params 工具入参：send → content；read_more → count
+ * @param params 工具入参：send → content；read_more → count；stay → seconds
  * @param reason 内心动机（不会发出去）
  * @param remember 值得长期记住的一句话（可选，写入短期记忆）
  * @param todo_add 新增待办内容（可选）
@@ -61,6 +64,9 @@ data class ConversationDecision(
 
     /** read_more 的条数（params.count，默认 10） */
     val readCount: Int get() = (params["count"] as? Number)?.toInt() ?: 10
+
+    /** stay 的停留秒数（params.seconds，默认 30；执行侧会再钳制到 1~1800） */
+    val staySeconds: Int get() = (params["seconds"] as? Number)?.toInt() ?: 30
 
     companion object {
         /** 解析失败兜底：RETURN，避免卡死在会话里 */
@@ -84,6 +90,7 @@ data class ConversationDecision(
             val action = when (actionText) {
                 "read_more", "readmore" -> ConversationAction.READ_MORE
                 "send" -> ConversationAction.SEND
+                "stay" -> ConversationAction.STAY
                 "return" -> ConversationAction.RETURN
                 else -> return FALLBACK
             }

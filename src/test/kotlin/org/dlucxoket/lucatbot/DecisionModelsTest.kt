@@ -86,6 +86,20 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `stay with seconds`() {
+        val d = ConversationDecision.parse("""{"action":"stay","params":{"seconds":45}}""")
+        assertEquals(ConversationAction.STAY, d.action)
+        assertEquals(45, d.staySeconds)
+    }
+
+    @Test
+    fun `stay default seconds 30`() {
+        val d = ConversationDecision.parse("""{"action":"stay"}""")
+        assertEquals(ConversationAction.STAY, d.action)
+        assertEquals(30, d.staySeconds)
+    }
+
+    @Test
     fun `invalid falls back to RETURN`() {
         assertEquals(ConversationAction.RETURN, ConversationDecision.parse("garbage").action)
         assertEquals(ConversationAction.RETURN, ConversationDecision.parse("""{"action":"dance"}""").action)

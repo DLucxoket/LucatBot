@@ -23,11 +23,13 @@ import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 
 /**
- * 会话内编排循环：读历史 → 决策 → read_more / send / return
+ * 会话内编排循环：读历史 → 决策 → read_more / send / stay / return
  *
  * 决策智能体只输出动作；IO 一律走 Tool 的 processObject。
  * read_more 无次数限制，prompt 里给出爬楼状态（次数/覆盖量/是否翻到头）由 LLM 自行决定去留；
- * 代码侧仅保留两条打断：连续爬楼期间有新消息、发送失败/等待超时、情绪拉满。
+ * 代码侧仅保留两条打断：连续爬楼期间有新消息、发送失败、情绪拉满。
+ * send 成功后**立即**进入下一轮决策（无阻塞等待），连发由 prompt 的 hint 约束；
+ * stay 由 LLM 自主决定停留秒数（钳制 1~1800s），期间新消息照常进待插入队列。
  */
 class ConversationController(
     private val lucatBot: LucatBot,
@@ -42,9 +44,7 @@ class ConversationController(
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
-    private val maxReadMoreWithInserts: Int = 3,
-    /** 发出消息后等待对方回话的超时（毫秒）；超时无人接话则离开会话，避免连发刷屏 */
-    private val replyWaitMs: Long = 45_000L
+    private val maxReadMoreWithInserts: Int = 3
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
 
@@ -82,10 +82,12 @@ class ConversationController(
         var readMoreRounds = 0
         var readMoreWithInsertStreak = 0
         var mustIcebreak = proactive
+        var justSent: String? = null // 本轮刚发出的消息（有新回应即清空，用于组装 hint）
 
         while (true) {
             // 1) 把待插入的新消息以系统注释形式合并
             val inserts = lucatBot.drainPendingInserts(conversationId)
+            if (inserts.isNotEmpty()) justSent = null // 有新回应就不再提示旧发送
             val newNotes = inserts.map {
                 "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]：${it.content}"
             }
@@ -128,9 +130,7 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
-                hint = if (readMoreWithInsertStreak >= maxReadMoreWithInserts) {
-                    "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
-                } else ""
+                hint = buildHint(readMoreWithInsertStreak, justSent, newNotes)
             )
 
             var decision = conversationAgent.processObject(request)
@@ -194,13 +194,22 @@ class ConversationController(
 
                     mustIcebreak = false
                     readMoreWithInsertStreak = 0
+                    // 发完不等待，立即进入下一轮决策；连发由 hint 约束
+                    justSent = content
+                }
 
-                    // 发完必须等对方接话，禁止立刻再决策连发（刷屏 bug）
-                    if (!waitForNewMessages(conversationId)) {
-                        actionLog.append("等待回应超时，结束会话")
-                        log.info("send 后 {}ms 内无人回应，离开会话", replyWaitMs)
+                ConversationAction.STAY -> {
+                    // 上限防病态值（非退出限制）；prompt 建议 LLM 通常给 10~120 秒
+                    val sec = decision.staySeconds.coerceIn(1, 1800)
+                    try {
+                        Thread.sleep(sec * 1000L)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        log.info("停留 {}s 被中断，退出会话", sec)
                         return
                     }
+                    actionLog.append("停留 ${sec}s")
+                    readMoreWithInsertStreak = 0 // 停留打断连续爬楼计数
                 }
 
                 ConversationAction.RETURN -> {
@@ -253,25 +262,24 @@ class ConversationController(
     }
 
     /**
-     * 发出消息后等待对方新消息
+     * 组装决策 prompt 的强制约束提示（可多段，换行连接）
      *
-     * @return true 表示有人接话，可以继续决策；false 超时应离开会话
+     * - 连续爬楼期间一直有新消息：打断爬楼，优先回应
+     * - 刚 send 完且暂无新回应：提示不要连发（stay / return / 确有必要再发）
      */
-    private fun waitForNewMessages(conversationId: String): Boolean {
-        if (lucatBot.hasPendingInserts(conversationId)) return true
-        if (replyWaitMs <= 0L) return false
-
-        val deadline = System.currentTimeMillis() + replyWaitMs
-        while (System.currentTimeMillis() < deadline) {
-            if (lucatBot.hasPendingInserts(conversationId)) return true
-            try {
-                Thread.sleep(200L)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return false
-            }
+    private fun buildHint(
+        readMoreWithInsertStreak: Int,
+        justSent: String?,
+        newNotes: List<String>
+    ): String {
+        val parts = mutableListOf<String>()
+        if (readMoreWithInsertStreak >= maxReadMoreWithInserts) {
+            parts += "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
         }
-        return lucatBot.hasPendingInserts(conversationId)
+        if (justSent != null && newNotes.isEmpty()) {
+            parts += "你刚发送了「$justSent」，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
+        }
+        return parts.joinToString("\n")
     }
 
     /** 空闲类情绪（累/困/烦）拉满 */
@@ -295,11 +303,16 @@ class ConversationController(
             ?: conversationId.substringAfter(":")
     }
 
+    /** 今天 → HH:mm；非今天 → yyyy-MM-dd HH:mm（让 LLM 能判断消息新旧） */
     private fun formatTime(ts: Long): String {
         if (ts <= 0L) return ""
-        return java.time.Instant.ofEpochMilli(ts)
-            .atZone(java.time.ZoneId.of("Asia/Shanghai"))
+        val zone = java.time.ZoneId.of("Asia/Shanghai")
+        val dateTime = java.time.Instant.ofEpochMilli(ts)
+            .atZone(zone)
             .toLocalDateTime()
-            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+        val pattern =
+            if (dateTime.toLocalDate() == java.time.LocalDate.now(zone)) "HH:mm"
+            else "yyyy-MM-dd HH:mm"
+        return dateTime.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
     }
 }

@@ -78,7 +78,6 @@ class ConversationControllerTest {
         llm: FakeLLM,
         sendTool: FakeSendMessageTool = FakeSendMessageTool(),
         historyCount: Int = 5,
-        replyWaitMs: Long = 0L,
         todoService: TodoService = TodoService(
             JsonFileTodoRepository(File.createTempFile("todos", ".json").apply { delete() }.absolutePath)
         )
@@ -103,8 +102,7 @@ class ConversationControllerTest {
             conversationAgent = ConversationAgent(llm),
             chatHistoryTool = historyTool,
             sendMessageTool = sendTool,
-            initialHistoryCount = 3,
-            replyWaitMs = replyWaitMs
+            initialHistoryCount = 3
         )
         return Triple(controller, lucatBot, sendTool)
     }
@@ -120,36 +118,39 @@ class ConversationControllerTest {
 
     @Test
     fun `send then return`() {
-        // replyWaitMs=0：send 后无人接话应直接离开，不会连发
-        val llm = FakeLLM(mutableListOf(
-            """{"action":"send","params":{"content":"在吗"}}""",
-            """{"action":"send","params":{"content":"别生气啦"}}"""
-        ))
-        val (controller, lucatBot, sendTool) = buildController(llm)
-
-        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
-        assertEquals(listOf("在吗"), sendTool.sent, "无人接话时不应连发")
-        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
-    }
-
-    @Test
-    fun `send waits for reply then continues`() {
+        // send 后不阻塞等待：立即进入下一轮决策，本轮 prompt 应带「刚发送」hint
         val llm = FakeLLM(mutableListOf(
             """{"action":"send","params":{"content":"在吗"}}""",
             """{"action":"return"}"""
         ))
-        val (controller, lucatBot, sendTool) = buildController(llm, replyWaitMs = 3_000L)
-
-        val feeder = Thread {
-            Thread.sleep(150L)
-            lucatBot.enqueuePendingInsert("private:123", 123L, "用户A", "在的")
-        }
-        feeder.isDaemon = true
-        feeder.start()
+        val (controller, lucatBot, sendTool) = buildController(llm)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
-        assertEquals(listOf("在吗"), sendTool.sent)
+        assertEquals(listOf("在吗"), sendTool.sent, "send 后应立即再决策并按脚本 return，不再连发")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+
+        val secondPrompt = llm.prompts[1]
+        assertTrue(secondPrompt.contains("刚发送"), "send 后那轮 prompt 应含「刚发送」hint：$secondPrompt")
+        // 历史时间戳是 1970 年（非今天）→ 必须带 yyyy-MM-dd 日期前缀
+        assertTrue(secondPrompt.contains("1970-01-01"), "非今天的历史消息时间应带日期：$secondPrompt")
+    }
+
+    @Test
+    fun `stay delays then continues`() {
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"stay","params":{"seconds":1}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, lucatBot, _) = buildController(llm)
+
+        val start = System.currentTimeMillis()
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        val elapsed = System.currentTimeMillis() - start
+
+        assertTrue(elapsed >= 1_000L, "stay 应至少停留 1s，实际 ${elapsed}ms")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+        // actionLog 注入下一轮 prompt：应记录了停留动作
+        assertTrue(llm.prompts[1].contains("停留 1s"), "actionLog 应记录停留：${llm.prompts[1]}")
     }
 
     @Test
@@ -222,7 +223,7 @@ class ConversationControllerTest {
         val llm = FakeLLM(mutableListOf(
             """{"action":"send","params":{"content":"行，我帮你看着"},"todo_add":"帮他看群"}"""
         ))
-        val (controller, lucatBot, sendTool) = buildController(llm, replyWaitMs = 0L, todoService = todoService)
+        val (controller, lucatBot, sendTool) = buildController(llm, todoService = todoService)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
