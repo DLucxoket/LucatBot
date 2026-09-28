@@ -59,7 +59,7 @@ abstract class Tool<I, O> {
     protected abstract fun handle(input: I): O
 
     /**
-     * JSON 边界入口（模板方法，由 AgentChain 调用）
+     * JSON 边界入口（模板方法，LLM API 层调用）
      *
      * 流程：JSON → 反序列化 OOP → [handle] → 序列化 JSON
      */
@@ -67,6 +67,21 @@ abstract class Tool<I, O> {
         val input: I = fromJson(json)
         val output: O = handle(input)
         return toJson(output)
+    }
+
+    /**
+     * OOP 边界入口（Agent/Tool 链内部调用）
+     *
+     * 流程：Kotlin 对象 → 适配为 [I] → [handle] → 返回 [O] 对象
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun processObject(input: Any): O {
+        val typed: I = if (inputClass.isInstance(input)) {
+            input as I
+        } else {
+            mapper.convertValue(input, inputClass)
+        }
+        return handle(typed)
     }
 
     protected open fun fromJson(json: String): I {

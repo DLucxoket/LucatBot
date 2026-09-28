@@ -9,7 +9,8 @@ import java.util.concurrent.TimeUnit
  * 单一职责：执行调用计划，收集结果。
  * 不负责发现、解析、上下文构建。
  *
- * **模拟真人行为**：所有 Agent 并行处理（像人一次处理一件事，但系统可并行多路）。
+ * **OOP 约定**：计划与结果均为 Kotlin 对象（[AgentPlan] / [AgentExecutionResult]），
+ * 链内不传递 JSON 字符串。
  */
 class AgentExecutor(
     private val discovery: AgentDiscovery = AgentDiscovery,
@@ -40,7 +41,7 @@ class AgentExecutor(
                     AgentExecutionResult(
                         agentName = plans[index].agentName,
                         input = plans[index].input,
-                        output = "",
+                        output = null,
                         success = false,
                         error = "执行超时或异常: ${e.message}"
                     )
@@ -57,21 +58,21 @@ class AgentExecutor(
             // 优先 Agent
             val agent = discovery.findAgent(plan.agentName)
             if (agent != null) {
-                val output = agent.process(plan.input)
+                val output = agent.processObject(plan.input)
                 return AgentExecutionResult(plan.agentName, plan.input, output, true)
             }
 
             // 再 Tool
             val tool = discovery.findTool(plan.agentName)
             if (tool != null) {
-                val output = tool.process(plan.input)
+                val output = tool.processObject(plan.input)
                 return AgentExecutionResult(plan.agentName, plan.input, output, true)
             }
 
-            AgentExecutionResult(plan.agentName, plan.input, "", false, "未找到 Agent 或 Tool: ${plan.agentName}")
+            AgentExecutionResult(plan.agentName, plan.input, null, false, "未找到 Agent 或 Tool: ${plan.agentName}")
         } catch (e: Exception) {
             log.error("[${plan.agentName}] 执行异常: ${e.message}")
-            AgentExecutionResult(plan.agentName, plan.input, "", false, e.message)
+            AgentExecutionResult(plan.agentName, plan.input, null, false, e.message)
         }
     }
 }

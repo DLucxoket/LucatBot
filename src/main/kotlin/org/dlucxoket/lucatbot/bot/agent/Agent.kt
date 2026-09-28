@@ -62,7 +62,7 @@ abstract class Agent<I, O>(
     protected abstract fun handle(input: I): O
 
     /**
-     * JSON 边界入口（由 AgentChain 调用）
+     * JSON 边界入口（LLM API 层调用）
      *
      * 流程：JSON 字符串 → 反序列化为 OOP → 调用 [handle] → 序列化结果为 JSON
      *
@@ -73,6 +73,25 @@ abstract class Agent<I, O>(
         val input: I = fromJson(json)
         val output: O = handle(input)
         return toJson(output)
+    }
+
+    /**
+     * OOP 边界入口（Agent/Tool 链内部调用）
+     *
+     * 流程：Kotlin 对象 → 适配为 [I] → 调用 [handle] → 返回 [O] 对象
+     * 不经过 JSON 序列化。
+     *
+     * @param input 输入对象（通常是 Map 或已是 [I] 类型）
+     * @return 输出对象
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun processObject(input: Any): O {
+        val typed: I = if (inputClass.isInstance(input)) {
+            input as I
+        } else {
+            mapper.convertValue(input, inputClass)
+        }
+        return handle(typed)
     }
 
     /**

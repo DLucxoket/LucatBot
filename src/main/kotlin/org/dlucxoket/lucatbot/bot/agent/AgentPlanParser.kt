@@ -100,18 +100,44 @@ object AgentPlanParser {
      * 从 JSON 对象中提取 AgentPlan
      *
      * 格式：{"agent": "AgentName", "input": {...}}
+     * input 在此转换为 Kotlin Map，链内传递不再使用 JSON 字符串。
      */
     private fun toAgentPlan(obj: JsonNode): AgentPlan? {
         val agentName = obj.get("agent")?.asText()?.trim() ?: return null
         if (agentName.isEmpty()) return null
 
-        val inputNode = obj.get("input")
-        val input = when {
-            inputNode == null || inputNode.isNull -> "{}"
-            inputNode.isTextual -> inputNode.asText()
-            else -> mapper.writeValueAsString(inputNode)
+        return AgentPlan(agentName, toInputMap(obj.get("input")))
+    }
+
+    /**
+     * JsonNode → Kotlin Map（OOP 对象）
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun toInputMap(inputNode: JsonNode?): Map<String, Any?> {
+        if (inputNode == null || inputNode.isNull) return emptyMap()
+
+        // 对象节点：直接转 Map
+        if (inputNode.isObject) {
+            return mapper.convertValue(inputNode, Map::class.java) as Map<String, Any?>
         }
 
-        return AgentPlan(agentName, input)
+        // 文本节点：LLM 有时把 JSON 包在字符串里
+        if (inputNode.isTextual) {
+            val text = inputNode.asText().trim()
+            if (text.isEmpty()) return emptyMap()
+            return try {
+                val parsed = mapper.readTree(text)
+                if (parsed.isObject) {
+                    mapper.convertValue(parsed, Map::class.java) as Map<String, Any?>
+                } else {
+                    mapOf("text" to text)
+                }
+            } catch (e: Exception) {
+                mapOf("text" to text)
+            }
+        }
+
+        // 标量/数组：包一层
+        return mapOf("value" to mapper.convertValue(inputNode, Any::class.java))
     }
 }

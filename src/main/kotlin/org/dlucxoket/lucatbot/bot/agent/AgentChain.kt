@@ -87,7 +87,7 @@ class AgentChain(
         val lastSuccess = results.lastOrNull { it.success }
         if (lastSuccess != null) {
             val reply = extractReply(lastSuccess.output)
-            return reply ?: lastSuccess.output
+            return reply ?: textOf(lastSuccess.output)
         }
 
         // 有失败结果——只打 log，不发给用户
@@ -100,15 +100,31 @@ class AgentChain(
     }
 
     /**
-     * 从 JSON 输出中提取 reply 字段
+     * 从输出对象中提取 reply 字段（OOP 对象，不是 JSON 字符串）
      */
-    private fun extractReply(json: String): String? {
+    private fun extractReply(output: Any?): String? {
+        if (output == null) return null
         return try {
-            val node = mapper.readTree(json)
-            node.get("reply")?.asText()
+            val node = mapper.valueToTree<com.fasterxml.jackson.databind.JsonNode>(output)
+            node.get("reply")?.takeIf { !it.isNull }?.asText()
         } catch (e: Exception) {
-            log.debug("extractReply 解析失败: {}", e.message)
+            log.debug("extractReply 提取失败: {}", e.message)
             null
+        }
+    }
+
+    /**
+     * 输出对象 → 可发送文本（兜底）
+     */
+    private fun textOf(output: Any?): String {
+        return when (output) {
+            null -> ""
+            is String -> output
+            else -> try {
+                mapper.writeValueAsString(output)
+            } catch (e: Exception) {
+                output.toString()
+            }
         }
     }
 }

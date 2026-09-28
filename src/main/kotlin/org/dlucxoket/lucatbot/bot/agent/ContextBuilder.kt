@@ -10,12 +10,12 @@ import org.dlucxoket.lucatbot.bot.agent.data.ChainSummary
  * 上下文构建器
  *
  * 单一职责：将执行结果构建为下一轮调度上下文 / 最终汇总。
- * 手拼 JSON → OOP data class + mapper 序列化。
+ * 链内传递 Kotlin 对象；仅在喂给 LLM 时序列化为 JSON。
  */
 class ContextBuilder(private val mapper: ObjectMapper = jacksonObjectMapper()) {
 
     /**
-     * 构建下一轮调度上下文（OOP → JSON）
+     * 构建下一轮调度上下文（OOP 对象 → JSON，供 LLM 阅读）
      */
     fun buildNextContext(initialInput: String, round: Int, results: List<AgentExecutionResult>): String {
         val context = ChainContext(

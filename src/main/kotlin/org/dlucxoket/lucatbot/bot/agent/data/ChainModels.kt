@@ -16,12 +16,15 @@ data class ChainSummary(
 
 /**
  * 单个 Agent/Tool 执行结果条目
+ *
+ * output 是 Kotlin 对象（通常是 Agent 的 Result data class），
+ * 仅在需要喂给 LLM 时才序列化为 JSON。
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class ChainResultItem(
     val agent: String,
     val success: Boolean,
-    val output: String = "",
+    val output: Any? = null,
     val error: String? = null
 )
 

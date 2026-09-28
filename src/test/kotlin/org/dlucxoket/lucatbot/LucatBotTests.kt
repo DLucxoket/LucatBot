@@ -200,7 +200,7 @@ class ContextBuilderTest {
     @Test
     fun `summarize with results returns completed`() {
         val results = listOf(
-            org.dlucxoket.lucatbot.bot.agent.AgentExecutionResult("Test", "{}", "{}", true)
+            org.dlucxoket.lucatbot.bot.agent.AgentExecutionResult("Test", emptyMap(), mapOf("ok" to true), true)
         )
         val result = builder.summarize(results)
         assertTrue(result.contains("completed"))
