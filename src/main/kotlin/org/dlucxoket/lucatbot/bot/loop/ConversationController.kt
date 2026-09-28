@@ -196,8 +196,7 @@ class ConversationController(
                     memoryService.saveAll(
                         MemoryExtractor.extract(
                             conversationId.substringAfter(":").toLongOrNull() ?: 0L,
-                            recentLines.lastOrNull()?.content.orEmpty(),
-                            content
+                            recentLines.lastOrNull()?.content.orEmpty()
                         )
                     )
                     actionLog.append("回复：$content")

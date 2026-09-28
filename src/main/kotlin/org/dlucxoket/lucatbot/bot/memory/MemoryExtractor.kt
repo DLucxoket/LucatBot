@@ -51,22 +51,15 @@ object MemoryExtractor {
     /**
      * 从对话中提取记忆
      *
-     * @param userId 用户 QQ 号
+     * 只在命中提取策略（名字、喜好等）时产出记忆；
+     * **不再**把每条消息都存成 EVENT——那会把记忆文件刷成聊天记录副本。
+     *
+     * @param userId 用户 QQ 号（群聊场景当前传群号）
      * @param userMessage 用户消息
-     * @param botReply 机器人回复
-     * @return 提取到的记忆列表
+     * @return 提取到的记忆列表（可能为空）
      */
-    fun extract(userId: Long, userMessage: String, botReply: String): List<MemoryItem> {
+    fun extract(userId: Long, userMessage: String): List<MemoryItem> {
         val memories = mutableListOf<MemoryItem>()
-
-        // 总是记录对话事件
-        memories.add(
-            MemoryItem(
-                userId = userId,
-                type = MemoryItem.MemoryType.EVENT,
-                content = "对我说了：$userMessage"
-            )
-        )
 
         // 应用所有提取策略
         strategies.forEach { strategy ->
