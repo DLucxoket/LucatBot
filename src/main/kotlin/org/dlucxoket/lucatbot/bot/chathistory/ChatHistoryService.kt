@@ -85,9 +85,52 @@ class ChatHistoryService(
 
     /**
      * 获取某个会话的聊天历史
+     *
+     * 读取时按「物理消息」去重：同一发送者、10s 内、归一化内容相同、且至少一条来自
+     * 爬楼（hist: id）的记录视为同一消息——实时入档与爬楼入档各写一条，
+     * 不去重会让 LLM 看到人人复读的假象。两条都非 hist 的同内容记录
+     * （疑似真实连发）保留。
      */
     fun getHistory(conversationId: String, limit: Int = 20): List<ChatMessageRecord> {
-        return repository.findByConversation(conversationId, limit)
+        // limit=0 表示全量（JsonFileChatHistoryRepository 约定），先去重再截断
+        val all = repository.findByConversation(conversationId, 0)
+        val deduped = dedupeByPhysicalMessage(all)
+        return if (limit > 0) deduped.takeLast(limit) else deduped
+    }
+
+    /** CQ 码段（[CQ:at,qq=1] 等），比较内容前剥掉 */
+    private val cqCodeRegex = Regex("""\[CQ:[^\]]*]""")
+
+    /** 同一物理消息的时间容差（实时入档用本地时钟，爬楼用服务端秒级时间戳） */
+    private val duplicateWindowMs = 10_000L
+
+    private fun normalize(content: String): String =
+        content.replace(cqCodeRegex, "").trim()
+
+    /** bot 记录 senderId 不一致（实时 0 / 爬楼 selfId），用 isFromBot 区分即可 */
+    private fun sameSender(a: ChatMessageRecord, b: ChatMessageRecord): Boolean =
+        a.isFromBot == b.isFromBot && (a.isFromBot || a.senderId == b.senderId)
+
+    private fun dedupeByPhysicalMessage(records: List<ChatMessageRecord>): List<ChatMessageRecord> {
+        val kept = mutableListOf<ChatMessageRecord>()
+        for (record in records.sortedBy { it.timestamp }) {
+            val dupIndex = kept.indexOfFirst { existing ->
+                sameSender(existing, record) &&
+                    kotlin.math.abs(existing.timestamp - record.timestamp) <= duplicateWindowMs &&
+                    normalize(existing.content) == normalize(record.content) &&
+                    (record.id.startsWith("hist:") || existing.id.startsWith("hist:"))
+            }
+            if (dupIndex < 0) {
+                kept += record
+            } else {
+                // 保留更干净的版本（不含 CQ 码的对 prompt 友好），位置不变
+                val existing = kept[dupIndex]
+                if (existing.content.contains("[CQ:") && !record.content.contains("[CQ:")) {
+                    kept[dupIndex] = record
+                }
+            }
+        }
+        return kept
     }
 
     /**

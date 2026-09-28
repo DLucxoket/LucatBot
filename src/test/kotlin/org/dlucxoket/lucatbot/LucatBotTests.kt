@@ -8,6 +8,7 @@ import org.dlucxoket.lucatbot.model.message.member.ImageMessageMember
 import org.dlucxoket.lucatbot.model.message.member.TextMessageMember
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import java.io.File
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -194,5 +195,87 @@ class ChatHistoryPersistenceTest {
         val history = service.getHistory("private:1", 10)
         assertEquals(1, history.size, "同一历史消息重复写入应去重")
         assertEquals("爬楼看到的", history.first().content)
+    }
+}
+
+class ChatHistoryReadDedupTest {
+
+    private fun newService(): org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService {
+        val file = File.createTempFile("hist-readdup", ".json")
+        return org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService(
+            org.dlucxoket.lucatbot.bot.chathistory.JsonFileChatHistoryRepository(file.absolutePath)
+        )
+    }
+
+    @Test
+    fun `bot message recorded live and via crawl collapses to one`() {
+        val service = newService()
+        service.recordBotReply("group:9", "行行行，是我这儿的问题")
+        service.recordHistoryMessage(
+            conversationId = "group:9", senderId = 3046673325L,
+            senderName = "bot", content = "行行行，是我这儿的问题",
+            timestamp = System.currentTimeMillis() + 300, isFromBot = true
+        )
+        val history = service.getHistory("group:9", 10)
+        assertEquals(1, history.size, "实时入档 + 爬楼入档应折叠为一条")
+        assertFalse(history.single().content.contains("[CQ:"))
+    }
+
+    @Test
+    fun `incoming plain record and crawled cq record collapse keeping plain`() {
+        val service = newService()
+        // 实时入档（UUID id、纯文本）经仓库直写模拟
+        val repoField = ChatHistoryService::class.java.getDeclaredField("repository").apply { isAccessible = true }
+        val repoObj = repoField.get(service) as org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryRepository
+        repoObj.save(
+            org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord(
+                conversationId = "group:9", senderId = 123L, senderName = "张三",
+                content = "你发个问号干啥", timestamp = 5000L, isFromBot = false
+            )
+        )
+        // 爬楼入档（hist id、带 CQ 码）
+        service.recordHistoryMessage(
+            conversationId = "group:9", senderId = 123L, senderName = "张三",
+            content = "[CQ:reply,id=1]你发个问号干啥",
+            timestamp = 5500L, isFromBot = false
+        )
+        val history = service.getHistory("group:9", 10)
+        assertEquals(1, history.size, "纯文本版与 CQ 版应折叠")
+        assertEquals("你发个问号干啥", history.single().content, "应保留无 CQ 的干净版本")
+    }
+
+    @Test
+    fun `two live records with same content are both kept`() {
+        val service = newService()
+        val repoField = ChatHistoryService::class.java.getDeclaredField("repository").apply { isAccessible = true }
+        val repoObj = repoField.get(service) as org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryRepository
+        repeat(2) {
+            repoObj.save(
+                org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord(
+                    conversationId = "group:9", senderId = 123L, senderName = "张三",
+                    content = "666", timestamp = 5000L + it, isFromBot = false
+                )
+            )
+        }
+        val history = service.getHistory("group:9", 10)
+        assertEquals(2, history.size, "两条均非爬楼的同内容记录（疑似真实连发）应保留")
+    }
+
+    @Test
+    fun `same content from different senders is kept`() {
+        val service = newService()
+        val repoField = ChatHistoryService::class.java.getDeclaredField("repository").apply { isAccessible = true }
+        val repoObj = repoField.get(service) as org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryRepository
+        repoObj.save(
+            org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord(
+                conversationId = "group:9", senderId = 1L, senderName = "A",
+                content = "哈哈哈", timestamp = 5000L, isFromBot = false
+            )
+        )
+        service.recordHistoryMessage(
+            conversationId = "group:9", senderId = 2L, senderName = "B",
+            content = "哈哈哈", timestamp = 5200L, isFromBot = false
+        )
+        assertEquals(2, service.getHistory("group:9", 10).size, "不同发送者不折叠")
     }
 }
