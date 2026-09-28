@@ -67,6 +67,8 @@ class OpenAIAPI: LLM {
             .baseUrl(baseUrl)
             .apiKey(apiKey)
             .modelName(modelName)
+            .timeout(java.time.Duration.ofSeconds(120))  // 2 分钟超时
+            .maxRetries(2)
             .build()
     }
 
