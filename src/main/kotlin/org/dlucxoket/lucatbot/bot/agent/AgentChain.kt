@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.agent
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import jakarta.annotation.PreDestroy
 import org.dlucxoket.lucatbot.bot.agent.data.DispatcherRequest
 import org.dlucxoket.lucatbot.bot.agent.data.DispatcherResult
 import org.slf4j.LoggerFactory
@@ -75,6 +76,14 @@ class AgentChain(
 
         log.warn("超过最大调度轮次 ($maxRounds)，强制终止")
         return buildUserReply(allResults)
+    }
+
+    /**
+     * Spring 关闭时回收 AgentExecutor 的共享线程池
+     */
+    @PreDestroy
+    fun shutdown() {
+        executor.shutdown()
     }
 
     /**

@@ -17,8 +17,13 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
 
     override val inputClass: Class<SendMessageRequest> = SendMessageRequest::class.java
 
-    /** 聊天记录服务（发送成功后写入自身发言） */
-    @Volatile var chatHistoryService: ChatHistoryService? = null
+    /** 聊天记录服务（发送成功后写入自身发言；启动时经 [bindServices] 注入） */
+    @Volatile
+    private var chatHistoryService: ChatHistoryService? = null
+
+    override fun bindServices(services: ToolServices) {
+        chatHistoryService = services.chatHistoryService
+    }
 
     override fun handle(input: SendMessageRequest): SendMessageResult {
         val b = bot ?: return SendMessageResult(success = false, error = "Bot 未绑定")

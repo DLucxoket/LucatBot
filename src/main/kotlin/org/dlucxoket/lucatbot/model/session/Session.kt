@@ -32,7 +32,8 @@ class SessionManager {
     data class Session(
         val conversationId: String,
         val entries: MutableList<SessionEntry> = java.util.concurrent.CopyOnWriteArrayList(),
-        val lastActiveTime: Long = System.currentTimeMillis()
+        // 主循环线程与消息线程都会读写，volatile 保证可见性且 Long 写入不撕裂
+        @Volatile var lastActiveTime: Long = System.currentTimeMillis()
     )
 
     /** 会话存储（线程安全） */
@@ -47,6 +48,8 @@ class SessionManager {
     fun addMessage(conversationId: String, sender: String, content: String, isBot: Boolean = false, senderId: Long = 0L) {
         val session = sessions.getOrPut(conversationId) { Session(conversationId) }
         session.entries.add(SessionEntry(sender, senderId, content, isBot))
+        // 刷新活跃时间：isActive / recentConversationIds 需要反映「最后一次说话」而非创建时间
+        session.lastActiveTime = System.currentTimeMillis()
         // 只保留最近 maxHistory 条
         if (session.entries.size > maxHistory) {
             session.entries.removeAt(0)

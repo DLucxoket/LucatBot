@@ -18,7 +18,13 @@ object GetSessionContentTool : Tool<GetSessionContentRequest, GetSessionContentR
 
     override val inputClass: Class<GetSessionContentRequest> = GetSessionContentRequest::class.java
 
-    @Volatile var lucatBot: LucatBot? = null
+    /** 机器人状态机引用（启动时经 [bindServices] 注入，不对外暴露） */
+    @Volatile
+    private var lucatBot: LucatBot? = null
+
+    override fun bindServices(services: ToolServices) {
+        lucatBot = services.lucatBot
+    }
 
     override fun handle(input: GetSessionContentRequest): GetSessionContentResult {
         val bot = lucatBot ?: return GetSessionContentResult(success = false, error = "Bot 未绑定")

@@ -6,7 +6,7 @@ package org.dlucxoket.lucatbot.bot.llm
  *
  * 设计意图：
  * - 对上层（Agent 等）屏蔽底层模型实现的差异，调用方只需关心 `ask()` 方法
- * - 通过 [LLM.DEFAULT] 提供全局默认实例，避免每次手动传递
+ * - 通过 [DEFAULT] 提供全局默认实例，避免每次手动传递
  *
  * 实现约定：
  * - `ask(systemPrompt, question)`：带系统提示的完整调用，systemPrompt 为空时退化为纯用户消息
@@ -17,13 +17,42 @@ package org.dlucxoket.lucatbot.bot.llm
 interface LLM {
     companion object {
         /**
-         * 全局默认 LLM 实例（懒加载，线程安全）
+         * Spring 容器管理的 LLM 实例。
          *
-         * 注意：这不是 Spring 管理的 Bean，而是通过 `OpenAIAPI.DEFAULT` 直接创建。
-         * 这意味着它绕过了 Spring 依赖注入，`@Value` 注入的配置可能在首次调用时
-         * 才通过反射生效（取决于 Spring 是否已完成对该 Bean 的后处理）。
+         * 由 [org.dlucxoket.lucatbot.bot.llm.LlmConfig] 在启动时通过 [install] 注册
+         * （即 `@Value` 配置注入完毕的 `OpenAIAPI` Bean）。
          */
-        val DEFAULT: LLM by lazy { OpenAIAPI.DEFAULT }
+        @Volatile
+        private var springInstance: LLM? = null
+
+        /**
+         * 注册 Spring 容器管理的 LLM Bean，作为 [DEFAULT] 的实际实现。
+         *
+         * 仅应由 Spring 环境调用一次；非 Spring 环境（单元测试）不注册，
+         * [DEFAULT] 会落到 [OpenAIAPI.DEFAULT] 兜底。
+         */
+        fun install(llm: LLM) {
+            springInstance = llm
+        }
+
+        /**
+         * 全局默认 LLM 实例——一个恒定的轻量委托对象。
+         *
+         * 设计要点（两条路径）：
+         * - Spring 环境：`springInstance` 已由 LlmConfig 注册，`ask()` 转发到容器
+         *   管理的 `OpenAIAPI` Bean（`@Value` 读取 application.yaml 的 llm.mimo.* 配置）。
+         * - 非 Spring 环境（单元测试直接 new Agent）：`springInstance` 为 null，
+         *   `ask()` 转发到 [OpenAIAPI.DEFAULT]（手 new 实例，读环境变量/系统属性）。
+         *
+         * 为什么是委托对象而非「每次 getter 返回当前实例」：Agent（如 LoopConfig 中的
+         * ConversationAgent、AgentChain 持有的 DispatcherAgent）在 Spring 启动期构造时
+         * 会把 [DEFAULT] 作为默认构造参数捕获——若直接返回原始实例，捕获发生在注册之前
+         * 就会永久拿到兜底实例。委托对象把解析推迟到 `ask()` 调用时，彻底消除注册顺序依赖。
+         */
+        val DEFAULT: LLM = object : LLM {
+            override fun ask(systemPrompt: String, question: String): String =
+                (springInstance ?: OpenAIAPI.DEFAULT).ask(systemPrompt, question)
+        }
     }
 
     /**

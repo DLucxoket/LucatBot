@@ -16,10 +16,14 @@ import org.springframework.stereotype.Component
  * - 本地部署的 Qwen、Llama 等（通过 Ollama、vLLM 等）
  * - 其他第三方兼容服务
  *
- * 配置来源：`application.yaml` 中的 `llm.mimo.*` 配置项
- * - base-url：API 端点地址
- * - api-key：API 密钥（通过 LLM_API_KEY 环境变量注入）
- * - model-name：模型名称
+ * 双路径语义（本类有两个实例来源，务必分清）：
+ *
+ * 1. **Spring Bean**（本类标注 `@Component`）：`@Value` 注入 `application.yaml`
+ *    中的 `llm.mimo.*` 配置。该实例由 `LlmConfig` 注册到 [LLM.install]，
+ *    Spring 环境下 [LLM.DEFAULT] 的实际调用目标。
+ * 2. **手 new 兜底实例**（[DEFAULT] companion，非 Bean）：供非 Spring 环境
+ *    （单元测试直接 new Agent）使用。不经 Spring 处理，`@Value` 不生效，
+ *    配置完全来自下方字段初始化器的环境变量/系统属性 fallback。
  *
  * 注意：每次 `ask()` 调用都会重新构建 `OpenAiChatModel` 实例。
  * 这在低频场景下没问题，但在高频调用时可能有性能开销。
@@ -28,27 +32,35 @@ import org.springframework.stereotype.Component
 class OpenAIAPI: LLM {
     companion object {
         /**
-         * 默认实例（手动创建，非 Spring Bean）
+         * 默认实例（手动创建，刻意非 Spring Bean）——仅作非 Spring 环境的兜底。
          *
-         * 供 [LLM.DEFAULT] 懒加载引用。配置通过环境变量读取，
-         * 不依赖 Spring 的 @Value 注入。
+         * [LLM.DEFAULT] 的委托在 `springInstance` 为 null（即未经过 Spring 启动）
+         * 时才转发到此实例。Spring 环境下本字段通常不会被创建。
          */
         val DEFAULT: OpenAIAPI by lazy { OpenAIAPI() }
     }
 
-    /** API 端点地址（支持环境变量 LLM_BASE_URL / 配置项 llm.mimo.base-url） */
+    /*
+     * 配置字段说明：
+     * - Spring 路径：@Value 在构造后注入。application.yaml 的 llm.mimo.* 三项齐全时
+     *   覆盖字段初始化器的值（正常生效路径）。若某项从 yaml 缺失，@Value 默认空串
+     *   也会覆盖初始化器——因此 yaml 三项必须保持齐全。
+     * - 非 Spring 路径：@Value 不被处理，字段初始化器的 env/系统属性 fallback 生效。
+     */
+
+    /** API 端点地址（Spring：yaml llm.mimo.base-url；兜底实例：LLM_BASE_URL 环境变量/系统属性） */
     @Value($$"${llm.mimo.base-url:}")
     private var baseUrl: String = System.getenv("LLM_BASE_URL")
         ?: System.getProperty("llm.mimo.base-url")
         ?: "https://token-plan-cn.xiaomimimo.com/v1"
 
-    /** API 密钥（支持环境变量 LLM_API_KEY / 配置项 llm.mimo.api-key） */
+    /** API 密钥（Spring：yaml llm.mimo.api-key；兜底实例：LLM_API_KEY 环境变量/系统属性） */
     @Value($$"${llm.mimo.api-key:}")
     private var apiKey: String = System.getenv("LLM_API_KEY")
         ?: System.getProperty("llm.mimo.api-key")
         ?: "ollama"
 
-    /** 模型名称（支持环境变量 LLM_MODEL_NAME / 配置项 llm.mimo.model-name） */
+    /** 模型名称（Spring：yaml llm.mimo.model-name；兜底实例：LLM_MODEL_NAME 环境变量/系统属性） */
     @Value($$"${llm.mimo.model-name:}")
     private var modelName: String = System.getenv("LLM_MODEL_NAME")
         ?: System.getProperty("llm.mimo.model-name")

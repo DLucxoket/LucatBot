@@ -20,6 +20,8 @@ import kotlin.reflect.full.isSubclassOf
  */
 object AgentDiscovery {
 
+    private val log = org.slf4j.LoggerFactory.getLogger(AgentDiscovery::class.java)
+
     /** Agent 类缓存（简单名 → KClass） */
     private val agentCache: MutableMap<String, KClass<out Agent<*, *>>> by lazy {
         scanAgents()
@@ -102,8 +104,14 @@ object AgentDiscovery {
                         if (kClass.isSubclassOf(Tool::class)) {
                             @Suppress("UNCHECKED_CAST")
                             val typed = kClass as KClass<out Tool<*, *>>
-                            // 用 name 属性和简单名做双重 key
-                            val instance = kClass.objectInstance ?: kClass.createInstance()
+                            // 用 name 属性和简单名做双重 key；
+                            // 实例化失败（如带必需构造参数的测试 Fake 子类）则跳过，不进发现缓存
+                            val instance = kClass.objectInstance
+                                ?: runCatching { kClass.createInstance() }.getOrNull()
+                            if (instance == null) {
+                                log.debug("跳过无法实例化的 Tool 子类: {}", cls.name)
+                                return@forEach
+                            }
                             cache[instance.name] = typed
                             cache[kClass.simpleName ?: cls.name] = typed
                         }

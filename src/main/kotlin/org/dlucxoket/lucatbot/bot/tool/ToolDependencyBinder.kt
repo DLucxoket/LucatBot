@@ -12,7 +12,9 @@ import org.springframework.stereotype.Component
  * Tool 依赖绑定器
  *
  * Tool 由 ClassGraph 发现（多为 Kotlin object 单例），无法走构造注入。
- * 在 Spring 启动时把服务依赖一次性绑到对应 Tool 上，避免运行时「未绑定」。
+ * Spring 启动时把服务依赖聚合成一个 [ToolServices]，遍历所有已发现的 Tool
+ * 调用 [Tool.bindServices] 自动绑定——新增带依赖的 Tool 只需 override
+ * bindServices，无需改这里的字段清单，也不会漏绑。
  *
  * Bot 实例在消息到达时由 [bindBot] 绑定（见 MainPlugin）。
  */
@@ -26,12 +28,18 @@ class ToolDependencyBinder(
 
     @PostConstruct
     fun bindServices() {
-        MemoryQueryTool.memoryService = memoryService
-        ChatHistoryTool.chatHistoryService = chatHistoryService
-        UnreadSummaryTool.lucatBot = lucatBot
-        GetSessionContentTool.lucatBot = lucatBot
-        SendMessageTool.chatHistoryService = chatHistoryService
-        log.info("Tool 服务依赖绑定完成")
+        val services = ToolServices(
+            memoryService = memoryService,
+            chatHistoryService = chatHistoryService,
+            lucatBot = lucatBot
+        )
+        var count = 0
+        org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getToolClasses().forEach { kClass ->
+            val tool = kClass.objectInstance ?: kClass.createInstance()
+            tool.bindServices(services)
+            count++
+        }
+        log.info("Tool 服务依赖绑定完成（{} 个 Tool）", count)
     }
 
     companion object {

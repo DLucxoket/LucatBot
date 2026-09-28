@@ -16,10 +16,16 @@ import org.dlucxoket.lucatbot.bot.llm.LLM
  *
  * @param I 输入类型（反序列化目标）
  * @param O 输出类型（序列化来源）
- * @param llm LLM 实例（依赖注入，默认全局单例）
+ * @param llm LLM 实例——构造注入，支持测试时替换
  */
 abstract class Agent<I, O>(
-    /** LLM 实例——构造注入，支持测试时替换 */
+    /**
+     * LLM 实例——构造注入，支持测试时替换。
+     *
+     * 默认 [LLM.DEFAULT] 是一个延迟解析的委托：非 Spring 环境（单元测试
+     * 直接 new Agent）走 OpenAIAPI 兜底实例；Spring 环境下 LlmConfig 已注册
+     * 容器管理的 OpenAIAPI Bean，ask() 调用会转发到该 Bean（@Value 配置生效）。
+     */
     protected val llm: LLM = LLM.DEFAULT
 ) {
     /** Jackson ObjectMapper（Kotlin 模块，支持 data class 默认值） */

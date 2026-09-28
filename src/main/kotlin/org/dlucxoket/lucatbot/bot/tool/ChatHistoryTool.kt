@@ -22,8 +22,13 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
 
     override val inputClass: Class<ChatHistoryRequest> = ChatHistoryRequest::class.java
 
-    /** 聊天记录服务引用 */
-    @Volatile var chatHistoryService: ChatHistoryService? = null
+    /** 聊天记录服务引用（启动时经 [bindServices] 注入，不对外暴露） */
+    @Volatile
+    private var chatHistoryService: ChatHistoryService? = null
+
+    override fun bindServices(services: ToolServices) {
+        chatHistoryService = services.chatHistoryService
+    }
 
     override fun handle(input: ChatHistoryRequest): ChatHistoryResult {
         val service = chatHistoryService ?: return ChatHistoryResult(

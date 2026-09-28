@@ -3,6 +3,23 @@ package org.dlucxoket.lucatbot.bot.tool
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.mikuac.shiro.core.Bot
+import org.dlucxoket.lucatbot.bot.LucatBot
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.bot.memory.MemoryService
+
+/**
+ * Tool 层共享服务聚合
+ *
+ * Tool 由 ClassGraph 发现（多为 object 单例），无法构造注入。
+ * [ToolDependencyBinder] 在 Spring 启动时构造一次本对象，
+ * 逐个调用 [Tool.bindServices] 完成绑定——新增带依赖的 Tool 只需
+ * override [Tool.bindServices]，无需改 Binder 的字段清单。
+ */
+data class ToolServices(
+    val memoryService: MemoryService,
+    val chatHistoryService: ChatHistoryService,
+    val lucatBot: LucatBot
+)
 
 /**
  * 工具（Tool）抽象基类
@@ -52,6 +69,15 @@ abstract class Tool<I, O> {
     fun bindBot(bot: Bot) {
         this.bot = bot
     }
+
+    /**
+     * 绑定应用服务依赖（启动时由 [ToolDependencyBinder] 自动遍历调用）
+     *
+     * 默认空实现：无服务依赖的 Tool 无需关心。
+     * 需要依赖的 Tool override 本方法，把引用存到自己的 private 字段，
+     * 对外只暴露语义方法。
+     */
+    open fun bindServices(services: ToolServices) {}
 
     /**
      * OOP 处理逻辑（子类实现）
