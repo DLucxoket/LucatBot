@@ -10,6 +10,7 @@ import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.bot.loop.ActionLog
 import org.dlucxoket.lucatbot.bot.loop.MainLoopController
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.tool.ToolDependencyBinder
@@ -45,6 +46,9 @@ internal class MainPlugin: BotPlugin() {
 
     @Autowired
     private lateinit var mainLoopController: MainLoopController
+
+    @Autowired
+    private lateinit var actionLog: ActionLog
 
     /** 戳一戳旁路直接用的会话内决策智能体 */
     private val conversationAgent = ConversationAgent()
@@ -143,12 +147,14 @@ internal class MainPlugin: BotPlugin() {
                 if (resp?.status == "ok") {
                     chatHistoryService.recordBotReply("private:${event.userId}", content)
                     sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, content, isBot = true)
+                    actionLog.append("戳一戳回应：$content")
                     log.info("戳一戳回应: $content")
                 } else {
                     // 被禁言等发送失败（Shiro 已打 ERROR 日志）——不写记录，直接返回
                     log.warn("戳一戳回应发送失败 status={} retCode={}（可能被禁言）", resp?.status, resp?.retCode)
                 }
             } else {
+                actionLog.append("戳一戳：不回应")
                 log.info("戳一戳：不回应")
             }
         } catch (e: Exception) {

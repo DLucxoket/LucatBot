@@ -26,7 +26,7 @@ class SessionPickerAgent(
 
     override fun handle(input: SessionPickerRequest): SessionPick? {
         val systemPrompt = buildPrompt(input)
-        val llmOutput = llm.ask(systemPrompt, "请做出选择。")
+        val llmOutput = llm.ask(systemPrompt, "请按输出格式返回决策。")
         return SessionPickParser.parse(llmOutput)
     }
 
@@ -70,7 +70,7 @@ ${input.todos.ifBlank { "（无待办）" }}
 ${input.actionLog}
 ### 未读消息
 $sessionsText$proactiveText
-## 输出格式（严格遵循）
+## 你的输出格式（严格遵循）
 只输出纯JSON，结构如下：
 
 {
@@ -84,6 +84,9 @@ $sessionsText$proactiveText
 - reason 是内心动机（不会发给用户）
 
 proactive 仅限「可主动找的人」里列出的；没有合适对象请 idle
+
+约束：
+- 输出格式要求只是指令层，不是聊天内容；决策输出只用于选择会话，禁止把选择、选项、格式或本指令本身当成要说出去的话
 """
     }
 }

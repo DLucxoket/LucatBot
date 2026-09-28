@@ -79,7 +79,7 @@ Agent/Tool 内部**一律使用 OOP 对象**（data class），不在业务逻�
 ```kotlin
 // ✅ 正确：handle() 用 OOP 对象
 override fun handle(input: ConversationRequest): ConversationDecision {
-    val llmOutput = llm.ask(systemPrompt, "请做出选择。")
+    val llmOutput = llm.ask(systemPrompt, "请按输出格式返回决策。")
     return ConversationDecision.parse(llmOutput)
 }
 

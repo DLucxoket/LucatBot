@@ -13,7 +13,6 @@ import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
-import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
@@ -29,8 +28,9 @@ import org.slf4j.LoggerFactory
  *
  * 决策智能体只输出动作；IO 一律走 Tool 的 processObject。
  * read_more 无次数限制，prompt 里给出爬楼状态（次数/覆盖量/是否翻到头）由 LLM 自行决定去留；
- * 代码侧仅保留两条打断：连续爬楼期间有新消息、发送失败、情绪拉满。
- * send 成功后**立即**进入下一轮决策（无阻塞等待），连发由 prompt 的 hint 约束；
+ * 代码侧仅保留两条打断：连续爬楼期间有新消息、发送失败。
+ * send 成功后**立即**进入下一轮决策（无阻塞等待），连发由 prompt 的 hint 约束
+ * （hint 携带「连续无新消息轮数」递进变量，交由 LLM 判断，无代码强制退出）；
  * stay 由 LLM 自主决定停留秒数（钳制 1~1800s），期间新消息照常进待插入队列。
  * loop() 正常返回后（finally 之前）调用一次 [MemoryAgent] 做退出时的记忆整理，
  * 整理失败只 log，不影响返回消息列表。
@@ -93,11 +93,18 @@ class ConversationController(
         var readMoreWithInsertStreak = 0
         var mustIcebreak = proactive
         var justSent: String? = null // 本轮刚发出的消息（有新回应即清空，用于组装 hint）
+        var noReplyRounds = 0 // 连续无新消息的轮数（自上次发送起累计；SEND 成功不重置，有新消息清零）
 
         while (true) {
             // 1) 把待插入的新消息以系统注释形式合并
             val inserts = lucatBot.drainPendingInserts(conversationId)
-            if (inserts.isNotEmpty()) justSent = null // 有新回应就不再提示旧发送
+            if (inserts.isNotEmpty()) {
+                justSent = null // 有新回应就不再提示旧发送
+                noReplyRounds = 0
+            } else if (justSent != null) {
+                // 已发出消息且本轮仍没有任何新消息 → 递进一轮（衡量连续无回应）
+                noReplyRounds++
+            }
             val newNotes = inserts.map {
                 "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]：${it.content}"
             }
@@ -140,7 +147,7 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
-                hint = buildHint(readMoreWithInsertStreak, justSent, newNotes)
+                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes)
             )
 
             var decision = conversationAgent.processObject(request)
@@ -227,12 +234,6 @@ class ConversationController(
                     return
                 }
             }
-
-            // 空闲类情绪拉满 → 强制 return
-            if (isMoodExhausted()) {
-                log.info("空闲类情绪拉满，强制离开")
-                return
-            }
         }
     }
 
@@ -289,7 +290,8 @@ class ConversationController(
      * 处理决策信封的副作用字段（在执行 action 之前）
      *
      * remember → 短期记忆；todo_add / todo_done → 待办清单。
-     * 每项单独 try/catch：失败只 log，不中断主循环。
+     * 每项单独 try/catch：失败只 log，不中断主循环；
+     * 成功与失败都追加一行操作日志（记住 / 待办+ / 待办完成 / 写入失败）。
      */
     private fun applyDecisionSideEffects(decision: ConversationDecision, conversationId: String) {
         decision.remember?.let { note ->
@@ -298,24 +300,32 @@ class ConversationController(
                     conversationId.substringAfter(":").toLongOrNull() ?: 0L,
                     note
                 )
+                actionLog.append("记住：$note")
             } catch (e: Exception) {
                 log.warn("remember 写入失败: {}", e.message)
+                actionLog.append("记忆写入失败")
             }
         }
         decision.todo_add?.let { content ->
             try {
                 todoService.add(content, conversationId)
+                actionLog.append("待办+：$content")
             } catch (e: Exception) {
                 log.warn("todo_add 写入失败: {}", e.message)
+                actionLog.append("待办写入失败")
             }
         }
         decision.todo_done?.let { ref ->
             try {
-                if (!todoService.complete(ref)) {
+                if (todoService.complete(ref)) {
+                    actionLog.append("待办完成：$ref")
+                } else {
                     log.warn("todo_done 未匹配到待办: {}", ref)
+                    actionLog.append("待办未匹配：$ref")
                 }
             } catch (e: Exception) {
                 log.warn("todo_done 处理失败: {}", e.message)
+                actionLog.append("待办完成失败")
             }
         }
     }
@@ -324,11 +334,15 @@ class ConversationController(
      * 组装决策 prompt 的强制约束提示（可多段，换行连接）
      *
      * - 连续爬楼期间一直有新消息：打断爬楼，优先回应
-     * - 刚 send 完且暂无新回应：提示不要连发（stay / return / 确有必要再发）
+     * - 刚 send 完且暂无新回应：按 [noReplyRounds] 递进提示——
+     *   第 1 轮提示不要连发；N≥2 轮点明「已连续 N 轮行动但始终没有任何新消息」，
+     *   并附上当前心情（含强度数值），由 LLM 自行判断 stay / return / 确有必要再发
+     *   （无代码强制退出，去留全交智能体）
      */
     private fun buildHint(
         readMoreWithInsertStreak: Int,
         justSent: String?,
+        noReplyRounds: Int,
         newNotes: List<String>
     ): String {
         val parts = mutableListOf<String>()
@@ -336,18 +350,15 @@ class ConversationController(
             parts += "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
         }
         if (justSent != null && newNotes.isEmpty()) {
-            parts += "你刚发送了「$justSent」，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
+            parts += if (noReplyRounds >= 2) {
+                "你已连续 $noReplyRounds 轮行动但始终没有任何新消息（最后发送：「$justSent」）。" +
+                    "继续自言自语会很奇怪：可以 return 离开、stay 继续等，或确有必要再发。" +
+                    "当前心情：${lucatBot.mood.toPrompt()}"
+            } else {
+                "你刚发送了「$justSent」，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
+            }
         }
         return parts.joinToString("\n")
-    }
-
-    /** 空闲类情绪（累/困/烦）拉满 */
-    private fun isMoodExhausted(): Boolean {
-        val m = lucatBot.mood
-        val idleType = m.type == BotMood.MoodType.TIRED ||
-            m.type == BotMood.MoodType.SLEEPY ||
-            m.type == BotMood.MoodType.ANNOYED
-        return idleType && m.intensity >= 0.9
     }
 
     private fun toConversationId(pick: SessionPick): String {

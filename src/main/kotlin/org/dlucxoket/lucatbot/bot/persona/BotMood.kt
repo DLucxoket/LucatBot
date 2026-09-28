@@ -32,12 +32,14 @@ data class BotMood(
     }
 
     /**
-     * 生成注入 LLM 的心情描述
+     * 生成注入 LLM 的心情描述：文字 + 强度数值（保留两位小数）
      *
      * 只用文字不用 emoji——prompt 里带 😊 会被 LLM 模仿、句末跟着输出笑脸。
+     * 强度以数值形式给智能体（如「困了（强度 0.90）」），
+     * 去留、回不回等行为判断交给 LLM，不在代码里写死阈值。
      */
     fun toPrompt(): String {
-        return when (type) {
+        val text = when (type) {
             MoodType.HAPPY -> "现在心情不错"
             MoodType.NORMAL -> "心情一般"
             MoodType.BORED -> "有点无聊"
@@ -45,6 +47,7 @@ data class BotMood(
             MoodType.ANNOYED -> "心情不太好"
             MoodType.SLEEPY -> "困了"
         }
+        return "$text（强度 ${String.format(java.util.Locale.ROOT, "%.2f", intensity)}）"
     }
 
     /**

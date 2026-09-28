@@ -101,6 +101,16 @@ class BotMoodTest {
             assertTrue(w in 0.0..1.0, "Mood $type willingness $w out of range")
         }
     }
+
+    @Test
+    fun `toPrompt appends intensity with two decimals`() {
+        assertEquals("困了（强度 0.90）", BotMood(BotMood.MoodType.SLEEPY, 0.9).toPrompt())
+        assertEquals("现在心情不错（强度 0.50）", BotMood(BotMood.MoodType.HAPPY, 0.5).toPrompt())
+        BotMood.MoodType.values().forEach { type ->
+            val p = BotMood(type, 0.7).toPrompt()
+            assertTrue(p.contains("强度 0.70"), "Mood $type prompt 应含强度数值：$p")
+        }
+    }
 }
 
 class SessionManagerTest {

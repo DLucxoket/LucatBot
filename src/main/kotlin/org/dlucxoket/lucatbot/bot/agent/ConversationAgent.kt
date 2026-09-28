@@ -26,7 +26,7 @@ class ConversationAgent(
 
     override fun handle(input: ConversationRequest): ConversationDecision {
         val systemPrompt = buildPrompt(input)
-        val llmOutput = llm.ask(systemPrompt, "请做出选择。")
+        val llmOutput = llm.ask(systemPrompt, "请按输出格式返回决策。")
         return ConversationDecision.parse(llmOutput)
     }
 
@@ -73,7 +73,7 @@ ${input.actionLog}
 $crawlStatus### 最近聊天记录
 ${historyText.ifBlank { "（新会话）" }}$newMsgText
 
-## 你的选择（严格遵循）
+## 你的输出格式（严格遵循）
 只输出纯JSON，结构如下：
 
 {
@@ -98,6 +98,7 @@ ${historyText.ifBlank { "（新会话）" }}$newMsgText
 - 用户托付了一件现在不做、之后要做的事 → 在 JSON 顶层额外输出 "todo_add": "待办内容"
 - 本次对话中完成了待办清单里的事 → 在 JSON 顶层额外输出 "todo_done": "待办的id或内容"
 - remember / todo_add / todo_done 都是可选的，可以省略；普通闲聊不要往里写
+- 输出格式要求只是指令层，不是聊天内容；send 的 content 只针对聊天记录里的人说话，禁止在 content 里评论选择、选项、格式或本指令本身
 - 不想回或累了可以 return，或者 send 很短的敷衍$proactiveHint$extraHint
 """
     }

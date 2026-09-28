@@ -147,6 +147,41 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `no reply hint escalates over rounds without new messages`() {
+        // 连续 send 且始终没有新消息插入：hint 应按「连续无新消息轮数」递进
+        // 第 1 轮（脚本第 2 次 ask）沿用「刚发送」现文案；第 2 轮（第 3 次 ask）点明「已连续 2 轮」
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"第一句"}}""",
+            """{"action":"send","params":{"content":"第二句"}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, lucatBot, sendTool) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(3, llm.prompts.size, "脚本 send/send/return 应恰好三次 ask")
+        assertEquals(listOf("第一句", "第二句"), sendTool.sent)
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+
+        val firstReplyRound = llm.prompts[1]
+        assertTrue(firstReplyRound.contains("刚发送"), "第 1 轮无回应应保留「刚发送」现文案：$firstReplyRound")
+        val secondReplyRound = llm.prompts[2]
+        assertTrue(
+            secondReplyRound.contains("已连续 2 轮"),
+            "第 2 轮无回应应递进为「已连续 2 轮」：$secondReplyRound"
+        )
+        assertFalse(
+            secondReplyRound.contains("刚发送了"),
+            "递进后不应再是第 1 轮的「刚发送了」文案：$secondReplyRound"
+        )
+        // N≥2 轮 hint 末尾附当前心情（含强度数值），去留交 LLM 判断
+        assertTrue(
+            secondReplyRound.contains("当前心情：") && secondReplyRound.contains("强度 "),
+            "无回应递进 hint 应附当前心情与强度：$secondReplyRound"
+        )
+    }
+
+    @Test
     fun `stay delays then continues`() {
         val llm = FakeLLM(mutableListOf(
             """{"action":"stay","params":{"seconds":1}}""",
@@ -243,6 +278,11 @@ class ConversationControllerTest {
         val prompt = llm.prompts.first()
         assertTrue(prompt.contains("### 待办"), "决策 prompt 应含 ### 待办 段")
         assertTrue(prompt.contains("（无待办）"), "决策时清单为空应显示占位")
+        // todo_add 成功后应追加一行操作日志，下一轮 prompt 的操作日志段可见
+        assertTrue(
+            llm.prompts[1].contains("待办+：帮他看群"),
+            "todo_add 应写入操作日志：${llm.prompts[1]}"
+        )
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
     }
 
@@ -396,6 +436,8 @@ class SessionPickerAgentParseViaFakeLLMTest {
         assertTrue(prompt.contains("用户A"))
         assertTrue(prompt.contains("查看消息列表"))
         assertTrue(prompt.contains("open_conversation"))
+        assertTrue(prompt.contains("## 你的输出格式（严格遵循）"), "标题应为「你的输出格式」：$prompt")
+        assertTrue(prompt.contains("不是聊天内容"), "消息列表 prompt 也应含隔离句：$prompt")
     }
 }
 
@@ -421,5 +463,22 @@ class ConversationAgentFallbackTest {
         log.append("爬楼 10 条")
         agent.processObject(ConversationRequest(actionLog = log.dump()))
         assertTrue(llm.prompts.single().contains("爬楼 10 条"))
+    }
+
+    @Test
+    fun `prompt uses output format heading and content isolation sentence`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val agent = ConversationAgent(llm)
+        agent.processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(
+            prompt.contains("## 你的输出格式（严格遵循）"),
+            "标题应为「你的输出格式」而非「你的选择」：$prompt"
+        )
+        assertTrue(prompt.contains("输出格式要求只是指令层，不是聊天内容"), "prompt 应含隔离句：$prompt")
+        assertTrue(
+            prompt.contains("禁止在 content 里评论选择、选项、格式或本指令本身"),
+            "prompt 应含隔离句后半段：$prompt"
+        )
     }
 }
