@@ -46,6 +46,13 @@ class ConversationAgent(
             ""
         }
         val extraHint = if (input.hint.isNotBlank()) "\n${input.hint}" else ""
+        val crawlStatus = buildString {
+            appendLine("### 爬楼状态")
+            appendLine("- 已爬楼 ${input.readMoreRounds} 次，累计覆盖最近 ${input.historyCovered} 条消息")
+            if (input.reachedHistoryStart) {
+                appendLine("- 已翻到最早消息，没有更早的历史了")
+            }
+        }
 
         return """你正在使用即时聊天工具，已经点进了一个会话。
 当前时间（北京时间）：${input.timeHint}
@@ -60,7 +67,7 @@ ${input.persona.toPrompt()}
 ${input.shortTermMemory.ifBlank { "（暂无）" }}
 ### 你最近的操作
 ${input.actionLog}
-### 最近聊天记录
+$crawlStatus### 最近聊天记录
 ${historyText.ifBlank { "（新会话）" }}$newMsgText
 
 ## 你的选择（严格遵循）
@@ -81,6 +88,7 @@ ${historyText.ifBlank { "（新会话）" }}$newMsgText
 - 一次只做一个动作
 - content 应口语、简短、像真人打字，不要像客服
 - 不要习惯性在句末加 emoji 或笑脸，绝大多数消息就是纯文字
+- 结合「爬楼状态」决定去留：看够了就 send 或 return；已翻到最早消息时不要再 read_more，也不要无休止地反复爬楼
 - 不想回或累了可以 return，或者 send 很短的敷衍$proactiveHint$extraHint
 """
     }

@@ -147,16 +147,20 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `endless read_more exits via stale rule not count cap`() {
-        // 永远 read_more 且无新消息 → read_more 本身无次数上限，
-        // 由「连续 6 轮无新消息且无 send」的 stale 规则兜底退出
-        val responses = MutableList(50) { """{"action":"read_more","params":{"count":5}}""" }
+    fun `read_more has no forced exit and prompt shows crawl stats`() {
+        // 10 次 read_more：旧 stale 上限（6 轮）会中途强制退出，现在应全部放行，
+        // 由 LLM 结合 prompt 里的爬楼状态自行决定（FakeLLM 耗尽后兜底 return）
+        val responses = MutableList(10) { """{"action":"read_more","params":{"count":5}}""" }
         val llm = FakeLLM(responses)
         val (controller, lucatBot, _) = buildController(llm)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        assertEquals(11, llm.prompts.size, "10 次 read_more 不应被代码强制打断，prompts=${llm.prompts.size}")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
-        assertTrue(llm.prompts.size in 6..8, "应由 stale 规则在第 6 轮左右退出，prompts=${llm.prompts.size}")
+        val lastPrompt = llm.prompts.last()
+        assertTrue(lastPrompt.contains("爬楼状态"), "prompt 应包含爬楼状态段")
+        assertTrue(lastPrompt.contains("已爬楼 10 次"), "应显示累计爬楼次数")
+        assertTrue(lastPrompt.contains("已翻到最早消息"), "应提示已翻到历史开头")
     }
 
     @Test

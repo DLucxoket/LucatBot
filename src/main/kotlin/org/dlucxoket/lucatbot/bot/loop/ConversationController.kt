@@ -25,7 +25,8 @@ import org.slf4j.LoggerFactory
  * 会话内编排循环：读历史 → 决策 → read_more / send / return
  *
  * 决策智能体只输出动作；IO 一律走 Tool 的 processObject。
- * 无 read_more 次数上限；退出由新消息待插入队列、无新消息轮数、强制 return 条件兜底。
+ * read_more 无次数限制，prompt 里给出爬楼状态（次数/覆盖量/是否翻到头）由 LLM 自行决定去留；
+ * 代码侧仅保留两条打断：连续爬楼期间有新消息、发送失败/等待超时、情绪拉满。
  */
 class ConversationController(
     private val lucatBot: LucatBot,
@@ -38,23 +39,12 @@ class ConversationController(
     private val sendMessageTool: Tool<SendMessageRequest, SendMessageResult>,
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
-    /** 连续无新消息且无 send 的强制离开轮数 */
-    private val maxStaleRounds: Int = 6,
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
     private val maxReadMoreWithInserts: Int = 3,
     /** 发出消息后等待对方回话的超时（毫秒）；超时无人接话则离开会话，避免连发刷屏 */
     private val replyWaitMs: Long = 45_000L
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
-
-    /** 本会话内决策循环的结果 */
-    enum class ExitReason {
-        DECISION_RETURN,
-        READ_MORE_LIMIT,
-        STALE_NO_SEND,
-        MOOD_EXHAUSTED,
-        SEND_FAILURE
-    }
 
     /**
      * 跑完整的会话内循环，直到离开
@@ -87,7 +77,7 @@ class ConversationController(
 
     private fun loop(conversationId: String, isGroup: Boolean, proactive: Boolean) {
         var historyCount = initialHistoryCount
-        var staleRounds = 0
+        var readMoreRounds = 0
         var readMoreWithInsertStreak = 0
         var mustIcebreak = proactive
 
@@ -116,7 +106,8 @@ class ConversationController(
                 )
             }
 
-            // 3) 组请求并决策
+            // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）
+            val reachedHistoryStart = historyResult.messages.size < historyCount
             val request = ConversationRequest(
                 persona = lucatBot.persona,
                 mood = lucatBot.mood,
@@ -131,6 +122,9 @@ class ConversationController(
                 recentMessages = recentLines,
                 newMessageNotes = newNotes,
                 proactive = mustIcebreak,
+                readMoreRounds = readMoreRounds,
+                historyCovered = historyCount,
+                reachedHistoryStart = reachedHistoryStart,
                 hint = if (readMoreWithInsertStreak >= maxReadMoreWithInserts) {
                     "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
                 } else ""
@@ -159,9 +153,9 @@ class ConversationController(
                 ConversationAction.READ_MORE -> {
                     val count = decision.readCount
                     historyCount += count
+                    readMoreRounds++
                     if (hadInserts) readMoreWithInsertStreak++ else readMoreWithInsertStreak = 0
                     if (!hadInserts) {
-                        staleRounds++
                         lucatBot.mood = lucatBot.mood.decay()
                     }
                     actionLog.append("爬楼 $count 条")
@@ -195,7 +189,6 @@ class ConversationController(
                     lucatBot.mood = lucatBot.mood.boost()
 
                     mustIcebreak = false
-                    staleRounds = 0
                     readMoreWithInsertStreak = 0
 
                     // 发完必须等对方接话，禁止立刻再决策连发（刷屏 bug）
@@ -212,11 +205,6 @@ class ConversationController(
                 }
             }
 
-            // 何时离开：连续 6 轮没有任何新消息且决策给不出 send
-            if (staleRounds >= maxStaleRounds) {
-                log.info("连续 {} 轮无新消息且无 send，强制离开", staleRounds)
-                return
-            }
             // 空闲类情绪拉满 → 强制 return
             if (isMoodExhausted()) {
                 log.info("空闲类情绪拉满，强制离开")
