@@ -12,7 +12,7 @@ object SendEmojiTool : Tool<SendEmojiRequest, SendEmojiResult>() {
 
     override val description: String = "向指定会话发送表情/表情包。"
 
-    override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"emojiName\": \"笑哭\"}"
+    override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"emojiName\": \"66\"}"
 
     override val inputClass: Class<SendEmojiRequest> = SendEmojiRequest::class.java
 
@@ -27,8 +27,8 @@ object SendEmojiTool : Tool<SendEmojiRequest, SendEmojiResult>() {
             val type = parts[0]
             val id = parts[1].toLongOrNull() ?: return SendEmojiResult(success = false, error = "无效ID")
 
-            // 使用 MsgUtils 构建表情消息
-            val msg = MsgUtils.builder().face(66).build() // 默认笑脸
+            val faceId = resolveFaceId(input.emojiName)
+            val msg = MsgUtils.builder().face(faceId).build()
 
             when (type) {
                 "group" -> b.sendGroupMsg(id, msg, false)
@@ -40,5 +40,13 @@ object SendEmojiTool : Tool<SendEmojiRequest, SendEmojiResult>() {
         } catch (e: Exception) {
             SendEmojiResult(success = false, error = e.message)
         }
+    }
+
+    /**
+     * 把 emojiName 解析为 QQ 表情 ID。
+     * 支持直接传数字 ID；其他情况退回默认笑脸 66。
+     */
+    private fun resolveFaceId(emojiName: String): Int {
+        return emojiName.trim().toIntOrNull() ?: 66
     }
 }

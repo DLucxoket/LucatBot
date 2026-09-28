@@ -1,0 +1,47 @@
+package org.dlucxoket.lucatbot.bot.tool
+
+import jakarta.annotation.PostConstruct
+import kotlin.reflect.full.createInstance
+import org.dlucxoket.lucatbot.bot.LucatBot
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Component
+
+/**
+ * Tool 依赖绑定器
+ *
+ * Tool 由 ClassGraph 发现（多为 Kotlin object 单例），无法走构造注入。
+ * 在 Spring 启动时把服务依赖一次性绑到对应 Tool 上，避免运行时「未绑定」。
+ *
+ * Bot 实例在消息到达时由 [bindBot] 绑定（见 MainPlugin）。
+ */
+@Component
+class ToolDependencyBinder(
+    private val memoryService: MemoryService,
+    private val chatHistoryService: ChatHistoryService,
+    private val lucatBot: LucatBot
+) {
+    private val log = LoggerFactory.getLogger(ToolDependencyBinder::class.java)
+
+    @PostConstruct
+    fun bindServices() {
+        MemoryQueryTool.memoryService = memoryService
+        ChatHistoryTool.chatHistoryService = chatHistoryService
+        UnreadSummaryTool.lucatBot = lucatBot
+        GetSessionContentTool.lucatBot = lucatBot
+        log.info("Tool 服务依赖绑定完成")
+    }
+
+    companion object {
+        /**
+         * 把 Bot 实例绑到所有已发现的 Tool（含未来新增）。
+         */
+        fun bindBotToAll(bot: com.mikuac.shiro.core.Bot) {
+            org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getToolClasses().forEach { kClass ->
+                val tool = kClass.objectInstance ?: kClass.createInstance()
+                tool.bindBot(bot)
+            }
+        }
+    }
+}

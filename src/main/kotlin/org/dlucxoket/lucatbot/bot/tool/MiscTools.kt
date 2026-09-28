@@ -45,7 +45,7 @@ object EmojiLikeTool : Tool<EmojiLikeRequest, EmojiLikeResult>() {
     override fun handle(input: EmojiLikeRequest): EmojiLikeResult {
         val b = bot ?: return EmojiLikeResult(error = "Bot 未绑定")
         return try {
-            b.setMsgEmojiLike(input.messageId, "1", true)  // 默认点赞
+            b.setMsgEmojiLike(input.messageId, input.code, input.isSet)
             EmojiLikeResult(success = true)
         } catch (e: Exception) { EmojiLikeResult(error = e.message) }
     }

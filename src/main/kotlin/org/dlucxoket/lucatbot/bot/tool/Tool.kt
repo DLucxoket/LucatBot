@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.tool
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.mikuac.shiro.core.Bot
 
 /**
@@ -33,8 +34,8 @@ abstract class Tool<I, O> {
     /** 输入类型的 Class（用于 JSON 反序列化） */
     protected abstract val inputClass: Class<I>
 
-    /** Jackson ObjectMapper */
-    protected val mapper: ObjectMapper = ObjectMapper()
+    /** Jackson ObjectMapper（Kotlin 模块，支持 data class 默认值） */
+    protected val mapper: ObjectMapper = jacksonObjectMapper()
 
     /**
      * 绑定的 Shiro Bot 实例（用于调用 OneBot API）

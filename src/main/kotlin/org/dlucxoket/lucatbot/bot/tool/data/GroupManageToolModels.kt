@@ -113,7 +113,9 @@ data class SendLikeResult(
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class EmojiLikeRequest(
-    @JsonProperty("messageId") val messageId: Int = 0
+    @JsonProperty("messageId") val messageId: Int = 0,
+    @JsonProperty("code") val code: String = "1",
+    @JsonProperty("isSet") val isSet: Boolean = true
 )
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class EmojiLikeResult(

@@ -11,9 +11,7 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
-import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
-import org.dlucxoket.lucatbot.bot.tool.MessageListTool
-import org.dlucxoket.lucatbot.bot.tool.UserProfileTool
+import org.dlucxoket.lucatbot.bot.tool.ToolDependencyBinder
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
@@ -205,9 +203,7 @@ internal class MainPlugin: BotPlugin() {
     }
 
     private fun bindTools(bot: Bot) {
-        ChatHistoryTool.bindBot(bot)
-        UserProfileTool.bindBot(bot)
-        MessageListTool.bindBot(bot)
+        ToolDependencyBinder.bindBotToAll(bot)
     }
 
     /**
