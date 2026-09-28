@@ -2,10 +2,12 @@ package org.dlucxoket.lucatbot.bot.loop
 
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
+import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationChatLine
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
+import org.dlucxoket.lucatbot.bot.agent.data.MemoryReflectRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
@@ -30,6 +32,8 @@ import org.slf4j.LoggerFactory
  * 代码侧仅保留两条打断：连续爬楼期间有新消息、发送失败、情绪拉满。
  * send 成功后**立即**进入下一轮决策（无阻塞等待），连发由 prompt 的 hint 约束；
  * stay 由 LLM 自主决定停留秒数（钳制 1~1800s），期间新消息照常进待插入队列。
+ * loop() 正常返回后（finally 之前）调用一次 [MemoryAgent] 做退出时的记忆整理，
+ * 整理失败只 log，不影响返回消息列表。
  */
 class ConversationController(
     private val lucatBot: LucatBot,
@@ -39,10 +43,13 @@ class ConversationController(
     private val todoService: TodoService,
     private val actionLog: ActionLog,
     private val conversationAgent: ConversationAgent = ConversationAgent(),
+    private val memoryAgent: MemoryAgent = MemoryAgent(),
     private val chatHistoryTool: Tool<ChatHistoryRequest, ChatHistoryResult>,
     private val sendMessageTool: Tool<SendMessageRequest, SendMessageResult>,
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
+    /** 退出会话时记忆整理读取的聊天记录条数 */
+    private val reflectHistoryCount: Int = 30,
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
     private val maxReadMoreWithInserts: Int = 3
 ) {
@@ -71,6 +78,9 @@ class ConversationController(
 
         try {
             loop(conversationId, isGroup, proactive)
+            // loop() 正常返回（含内部 return）→ 退出前整理一次记忆；
+            // loop() 抛异常则跳过整理，直接走 finally
+            reflectMemory(conversationId)
         } finally {
             actionLog.append("返回消息列表")
             lucatBot.backToConversationList()
@@ -223,6 +233,55 @@ class ConversationController(
                 log.info("空闲类情绪拉满，强制离开")
                 return
             }
+        }
+    }
+
+    /**
+     * 退出会话时的记忆整理：把会话内容交给 [MemoryAgent] 判断有没有值得长期记住的信息，
+     * 按 kind 写入 [MemoryService]（fact → rememberFact / opinion → rememberOpinion / event → rememberEvent）。
+     *
+     * 整个过程 try/catch：失败只 log.warn，绝不影响后续 actionLog / backToConversationList。
+     */
+    private fun reflectMemory(conversationId: String) {
+        try {
+            val userId = conversationId.substringAfter(":").toLongOrNull() ?: 0L
+            val result = memoryAgent.processObject(
+                MemoryReflectRequest(
+                    conversationContent = chatHistoryService.getHistorySummary(
+                        conversationId, reflectHistoryCount
+                    ),
+                    existingMemory = memoryService.getMemorySummary(userId),
+                    timeHint = TimeAwareness.timeHint()
+                )
+            )
+            if (result.memories.isEmpty()) {
+                log.debug("退出时记忆整理：无值得记录的内容")
+                return
+            }
+            var written = 0
+            for (item in result.memories) {
+                when (item.kind.lowercase()) {
+                    "fact" -> {
+                        memoryService.rememberFact(userId, item.content, item.tags)
+                        written++
+                    }
+                    "opinion" -> {
+                        memoryService.rememberOpinion(userId, item.content)
+                        written++
+                    }
+                    "event" -> {
+                        memoryService.rememberEvent(userId, item.content)
+                        written++
+                    }
+                    else -> log.debug("退出时记忆整理：跳过未知 kind={}（content={}）", item.kind, item.content)
+                }
+            }
+            log.info("退出时记忆整理：写入 {} 条", written)
+            if (written > 0) {
+                actionLog.append("整理记忆 $written 条")
+            }
+        } catch (e: Exception) {
+            log.warn("退出时记忆整理失败（忽略，不影响返回消息列表）: {}", e.message)
         }
     }
 

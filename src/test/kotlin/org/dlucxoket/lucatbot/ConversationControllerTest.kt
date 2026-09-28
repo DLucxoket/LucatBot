@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot
 
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
+import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
@@ -15,6 +16,7 @@ import org.dlucxoket.lucatbot.bot.llm.LLM
 import org.dlucxoket.lucatbot.bot.loop.ActionLog
 import org.dlucxoket.lucatbot.bot.loop.ConversationController
 import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
+import org.dlucxoket.lucatbot.bot.memory.MemoryItem
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
 import org.dlucxoket.lucatbot.bot.todo.TodoService
@@ -80,14 +82,22 @@ class ConversationControllerTest {
         historyCount: Int = 5,
         todoService: TodoService = TodoService(
             JsonFileTodoRepository(File.createTempFile("todos", ".json").apply { delete() }.absolutePath)
-        )
+        ),
+        memoryService: MemoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
+        ),
+        chatHistoryService: ChatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist", ".json").absolutePath)
+        ),
+        /**
+         * 退出时记忆整理阶段专用的 FakeLLM——与决策脚本队列隔离：
+         * 共用一个实例会让每次 run() 多消耗一次 ask（打乱 prompts.size / 脚本顺序断言），
+         * 这里默认耗尽（返回 {"action":"return"} → 解析为空记忆）。
+         */
+        memoryLLM: FakeLLM = FakeLLM(mutableListOf())
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
-        val memoryService = MemoryService(JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath))
-        val chatHistoryService = ChatHistoryService(
-            JsonFileChatHistoryRepository(File.createTempFile("hist", ".json").absolutePath)
-        )
         val actionLog = ActionLog()
         val historyTool = FakeChatHistoryTool(
             (1..historyCount).map { HistoryMessageItem("用户A", "消息$it", it * 1000L) }
@@ -100,6 +110,7 @@ class ConversationControllerTest {
             todoService = todoService,
             actionLog = actionLog,
             conversationAgent = ConversationAgent(llm),
+            memoryAgent = MemoryAgent(memoryLLM),
             chatHistoryTool = historyTool,
             sendMessageTool = sendTool,
             initialHistoryCount = 3
@@ -249,6 +260,95 @@ class ConversationControllerTest {
         val prompt = llm.prompts.first()
         assertTrue(prompt.contains("### 待办"))
         assertTrue(prompt.contains("提醒他交房租"), "pending 待办应注入 prompt")
+    }
+
+    @Test
+    fun `exit reflect writes fact and opinion into memory service`() {
+        val decisionLLM = FakeLLM(mutableListOf("""{"action":"return","reason":"聊完了"}"""))
+        val memoryLLM = FakeLLM(mutableListOf(
+            """{"memories":[{"kind":"fact","content":"他最喜欢的颜色是蓝色","tags":["喜好"]},{"kind":"opinion","content":"这人挺有趣"}]}"""
+        ))
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
+        )
+        // 预置一条现有记忆：应作为「读取参考」出现在记忆整理 prompt 里
+        memoryService.rememberFact(123L, "他在上海工作")
+        val chatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist", ".json").absolutePath)
+        )
+        chatHistoryService.recordHistoryMessage(
+            conversationId = "private:123",
+            senderId = 123L,
+            senderName = "用户A",
+            content = "我最喜欢的颜色是蓝色",
+            timestamp = 1_000_000L,
+            isFromBot = false
+        )
+        val (controller, lucatBot, _) = buildController(
+            decisionLLM,
+            memoryService = memoryService,
+            chatHistoryService = chatHistoryService,
+            memoryLLM = memoryLLM
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+        val items = memoryService.getMemoriesOf(123L)
+        assertTrue(
+            items.any {
+                it.type == MemoryItem.MemoryType.FACT &&
+                    it.content == "他最喜欢的颜色是蓝色" &&
+                    it.tags == listOf("喜好")
+            },
+            "fact 应写入并带 tags：$items"
+        )
+        assertTrue(
+            items.any { it.type == MemoryItem.MemoryType.OPINION && it.content == "这人挺有趣" },
+            "opinion 应写入：$items"
+        )
+        assertEquals(3, items.size, "预置 1 条 + 新写 2 条：$items")
+
+        // 记忆整理 prompt 应同时带现有记忆（读取参考）与本次会话内容
+        val reflectPrompt = memoryLLM.prompts.single()
+        assertTrue(reflectPrompt.contains("他在上海工作"), "prompt 应含现有记忆：$reflectPrompt")
+        assertTrue(reflectPrompt.contains("我最喜欢的颜色是蓝色"), "prompt 应含会话内容：$reflectPrompt")
+    }
+
+    @Test
+    fun `exit reflect with empty memories writes nothing`() {
+        val decisionLLM = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val memoryLLM = FakeLLM(mutableListOf("""{"memories":[]}"""))
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
+        )
+        val (controller, lucatBot, _) = buildController(
+            decisionLLM, memoryService = memoryService, memoryLLM = memoryLLM
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+        assertTrue(memoryService.getMemoriesOf(123L).isEmpty(), "空 memories 不应新增记忆")
+        assertEquals("", memoryService.getMemorySummary(123L))
+    }
+
+    @Test
+    fun `memory reflect garbage does not affect exit flow`() {
+        val decisionLLM = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val memoryLLM = FakeLLM(mutableListOf("totally not json"))
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
+        )
+        val (controller, lucatBot, _) = buildController(
+            decisionLLM, memoryService = memoryService, memoryLLM = memoryLLM
+        )
+
+        // 记忆整理返回垃圾：不抛异常、照常回到消息列表
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+        assertTrue(memoryService.getMemoriesOf(123L).isEmpty())
     }
 }
 
