@@ -46,7 +46,7 @@ class MainLoopController(
     }
 
     /**
-     * 空闲唤醒信号：@我/@全体 缩短休眠（最少再等 30s）
+     * 空闲唤醒信号：@我/@全体 缩短休眠（最少再等 5s）
      */
     fun notifyUrgent() {
         synchronized(lock) {
@@ -110,7 +110,7 @@ class MainLoopController(
     }
 
     /**
-     * 进入空闲并休眠 3~20min（按心情加权）；@我/@全体 可缩短（最少再等 30s）
+     * 进入空闲并休眠 10~60s（按心情加权，测试用短值）；@我/@全体 可缩短（最少再等 5s）
      */
     private fun enterIdleAndSleep() {
         lucatBot.goIdle()
@@ -128,8 +128,8 @@ class MainLoopController(
                 lock.wait(remaining)
             }
             if (wakeRequested && running) {
-                // 最少再等 30s，模拟真人不会秒醒
-                lock.wait(30_000L)
+                // 最少再等 5s，模拟真人不会秒醒（测试用短值，正式可恢复 30s）
+                lock.wait(5_000L)
             }
         }
 
@@ -139,8 +139,9 @@ class MainLoopController(
     }
 
     companion object {
-        const val MIN_IDLE_MS = 3 * 60 * 1000L
-        const val MAX_IDLE_MS = 20 * 60 * 1000L
+        // 测试用短休眠（正式可恢复 3min / 20min）
+        const val MIN_IDLE_MS = 10 * 1000L
+        const val MAX_IDLE_MS = 60 * 1000L
 
         /**
          * 心情加权的空闲时长：累/困/烦 → 更久，开心 → 更短。
