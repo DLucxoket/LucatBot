@@ -33,17 +33,11 @@ data class BotMood(
 
     /**
      * 生成注入 LLM 的心情描述
+     *
+     * 只用文字不用 emoji——prompt 里带 😊 会被 LLM 模仿、句末跟着输出笑脸。
      */
     fun toPrompt(): String {
-        val emoji = when (type) {
-            MoodType.HAPPY -> "😊"
-            MoodType.NORMAL -> ""
-            MoodType.BORED -> "😑"
-            MoodType.TIRED -> "😫"
-            MoodType.ANNOYED -> "😤"
-            MoodType.SLEEPY -> "😴"
-        }
-        val desc = when (type) {
+        return when (type) {
             MoodType.HAPPY -> "现在心情不错"
             MoodType.NORMAL -> "心情一般"
             MoodType.BORED -> "有点无聊"
@@ -51,7 +45,6 @@ data class BotMood(
             MoodType.ANNOYED -> "心情不太好"
             MoodType.SLEEPY -> "困了"
         }
-        return "$desc $emoji"
     }
 
     /**

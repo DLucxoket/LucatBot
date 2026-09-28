@@ -41,7 +41,7 @@ object ReplyAgent : Agent<ReplyRequest, ReplyResult>() {
 
         // 根据心情调整说话风格
         val styleHint = when (mood.type) {
-            BotMood.MoodType.HAPPY -> "心情不错，可以多用emoji，语气活泼一点，回复可以稍长"
+            BotMood.MoodType.HAPPY -> "心情不错，语气活泼一点，回复可以稍长"
             BotMood.MoodType.NORMAL -> "正常聊天，自然就好"
             BotMood.MoodType.BORED -> "有点无聊，语气平淡，回复简短"
             BotMood.MoodType.TIRED -> "有点累，回复尽量简短，语气慵懒，可以用...结尾"
@@ -57,6 +57,7 @@ object ReplyAgent : Agent<ReplyRequest, ReplyResult>() {
 - 不要过于正式，不要像客服
 - 根据上下文判断该说什么
 - 可以用语气词（哈哈、嗯嗯、啊这）让对话更自然
+- 不要习惯性在句末加 emoji 或笑脸，绝大多数消息就是纯文字
 - 当前心情：${mood.toPrompt()}——$styleHint
 - ${if (TimeAwareness.isLateNight()) "现在是深夜，回得简短一点" else ""}
 

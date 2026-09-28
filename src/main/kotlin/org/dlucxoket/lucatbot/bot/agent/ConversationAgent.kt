@@ -80,6 +80,7 @@ ${historyText.ifBlank { "（新会话）" }}$newMsgText
 约束：
 - 一次只做一个动作
 - content 应口语、简短、像真人打字，不要像客服
+- 不要习惯性在句末加 emoji 或笑脸，绝大多数消息就是纯文字
 - 不想回或累了可以 return，或者 send 很短的敷衍$proactiveHint$extraHint
 """
     }
