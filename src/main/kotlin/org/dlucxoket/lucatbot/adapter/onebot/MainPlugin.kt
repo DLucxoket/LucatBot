@@ -78,12 +78,9 @@ internal class MainPlugin: BotPlugin() {
             val action = lucatBot.handleMessage(modelEvent, isAtMe, isAtAll)
 
             when (action) {
-                LucatBot.MessageAction.IGNORE -> {
-                    log.debug("消息进未读队列（状态：${lucatBot.state}）")
-                    return MESSAGE_IGNORE
-                }
-                LucatBot.MessageAction.NOTIFY -> log.debug("收到 @我/@全体 消息，处理中...")
-                LucatBot.MessageAction.PROCESS -> log.debug("当前会话消息，处理中...")
+                LucatBot.MessageAction.IGNORE -> return MESSAGE_IGNORE
+                LucatBot.MessageAction.NOTIFY -> log.debug("收到 @我/@全体 消息")
+                LucatBot.MessageAction.PROCESS -> log.debug("当前会话消息")
             }
 
             log.info("收到消息: $plainText")

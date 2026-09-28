@@ -10,7 +10,7 @@ package org.dlucxoket.lucatbot.bot.persona
  */
 data class BotPersona(
     /** 名字 */
-    val name: String = "小鹿",
+    val name: String = "牢洛",
 
     /** 性格关键词（影响说话风格） */
     val personality: String = "活泼开朗，偶尔犯懒，说话带点俏皮",

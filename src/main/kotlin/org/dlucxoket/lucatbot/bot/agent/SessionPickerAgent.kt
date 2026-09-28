@@ -24,6 +24,18 @@ object SessionPickerAgent : Agent<SessionPickerRequest, SessionPickerResult>() {
 
     override val inputClass: Class<SessionPickerRequest> = SessionPickerRequest::class.java
 
+    /**
+     * 容错反序列化：LLM 可能传字符串而非对象
+     */
+    override fun fromJson(json: String): SessionPickerRequest {
+        return try {
+            super.fromJson(json)
+        } catch (e: Exception) {
+            // 解析失败时用默认值
+            SessionPickerRequest()
+        }
+    }
+
     override fun handle(input: SessionPickerRequest): SessionPickerResult {
         val systemPrompt = """$systemPromptHead
 

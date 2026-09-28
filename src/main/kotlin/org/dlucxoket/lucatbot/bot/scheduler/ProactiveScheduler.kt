@@ -84,8 +84,10 @@ class ProactiveScheduler(
 
             val reply = agentChain.execute(context)
 
-            // 发送回复到选中的会话
-            if (reply.isNotBlank()) {
+            // 判断是否真的要回复（排除"不想理"的内心独白）
+            val shouldReply = reply.isNotBlank() && !isInnerThought(reply)
+
+            if (shouldReply) {
                 val selectedConv = summary.keys.firstOrNull()
                 if (selectedConv != null) {
                     val parts = selectedConv.split(":")
@@ -93,14 +95,11 @@ class ProactiveScheduler(
                     lucatBot.enterConversation(selectedConv, type)
                     log.info("进入会话: $selectedConv")
 
-                    // 发送消息
                     sendMessage(selectedConv, reply)
-
-                    // 标记已读
                     lucatBot.consumeUnread(selectedConv)
                 }
             } else {
-                log.debug("无回复内容，跳过发送")
+                log.info("决定不回复（内心独白）：{}", reply.take(50))
             }
 
             // 处理完回到空闲状态
@@ -111,6 +110,19 @@ class ProactiveScheduler(
             log.error("主动检查异常: ${e.message}")
             lucatBot.goIdle()  // 异常时也恢复状态
         }
+    }
+
+    /**
+     * 判断是否是内心独白（不是要发出去的消息）
+     *
+     * 真人看到消息可能只是心里想想"懒得回"，不会真的发出去。
+     */
+    private fun isInnerThought(reply: String): Boolean {
+        val innerMarkers = listOf(
+            "先不点", "懒得", "不想看", "不想回", "算了", "不理",
+            "没什么好", "不感兴趣", "无所谓", "不重要", "跳过"
+        )
+        return innerMarkers.any { reply.contains(it) }
     }
 
     /**
