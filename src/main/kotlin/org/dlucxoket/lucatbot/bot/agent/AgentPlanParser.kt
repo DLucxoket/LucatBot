@@ -59,11 +59,24 @@ object AgentPlanParser {
                     @Suppress("UNCHECKED_CAST")
                     parseJsonArray(node as ArrayNode)
                 }
-                node.isObject -> listOfNotNull(toAgentPlan(node))
+                node.isObject -> {
+                    // 支持 {"done": true/false, "plans": [...]} 格式
+                    if (node.has("done")) {
+                        if (node.get("done").asBoolean()) return null
+                        val plans = node.get("plans")
+                        if (plans != null && plans.isArray) {
+                            parseJsonArray(plans as ArrayNode)
+                        } else {
+                            null
+                        }
+                    } else {
+                        listOfNotNull(toAgentPlan(node))
+                    }
+                }
                 node.isTextual -> {
                     val inner = node.asText().trim()
                     if (inner.equals("done", true)) null
-                    else parse(inner, depth + 1)  // 递归 + 深度计数
+                    else parse(inner, depth + 1)
                 }
                 else -> null
             }
