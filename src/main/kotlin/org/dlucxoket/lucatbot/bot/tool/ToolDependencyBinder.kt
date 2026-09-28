@@ -30,6 +30,7 @@ class ToolDependencyBinder(
         ChatHistoryTool.chatHistoryService = chatHistoryService
         UnreadSummaryTool.lucatBot = lucatBot
         GetSessionContentTool.lucatBot = lucatBot
+        SendMessageTool.chatHistoryService = chatHistoryService
         log.info("Tool 服务依赖绑定完成")
     }
 

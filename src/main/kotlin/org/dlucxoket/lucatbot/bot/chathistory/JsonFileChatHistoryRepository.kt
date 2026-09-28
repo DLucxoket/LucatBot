@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot.bot.chathistory
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import org.dlucxoket.lucatbot.bot.storage.DebouncedFlusher
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -10,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap
  * JSON 文件聊天记录仓库
  *
  * 存储格式：`data/chat-history.json`
- * 内存缓存 + 延迟写入。
+ * 内存缓存 + 防抖落盘（写入后约 5s 批量 flush，进程退出兜底写盘）。
  */
 class JsonFileChatHistoryRepository(
     private val filePath: String = "data/chat-history.json"
@@ -25,6 +26,13 @@ class JsonFileChatHistoryRepository(
     @Volatile
     private var dirty = false
 
+    /** 防抖落盘：save 后约 5s 批量写，shutdown 兜底 */
+    private val flusher = DebouncedFlusher(
+        flushAction = { doFlush() },
+        delayMs = 5_000L,
+        name = "chat-history-flush"
+    )
+
     init {
         load()
     }
@@ -32,11 +40,13 @@ class JsonFileChatHistoryRepository(
     override fun save(record: ChatMessageRecord) {
         cache[record.id] = record
         dirty = true
+        flusher.markDirty()
     }
 
     override fun saveAll(records: List<ChatMessageRecord>) {
         records.forEach { cache[it.id] = it }
         dirty = true
+        flusher.markDirty()
     }
 
     override fun findByConversation(conversationId: String, limit: Int, before: Long): List<ChatMessageRecord> {
@@ -81,6 +91,7 @@ class JsonFileChatHistoryRepository(
             .filter { it.conversationId == conversationId && !it.isRead }
             .forEach { cache[it.id] = it.copy(isRead = true) }
         dirty = true
+        flusher.markDirty()
     }
 
     override fun markOneAsRead(id: String) {
@@ -88,6 +99,7 @@ class JsonFileChatHistoryRepository(
             if (!it.isRead) {
                 cache[id] = it.copy(isRead = true)
                 dirty = true
+                flusher.markDirty()
             }
         }
     }
@@ -95,6 +107,7 @@ class JsonFileChatHistoryRepository(
     override fun delete(id: String) {
         cache.remove(id)
         dirty = true
+        flusher.markDirty()
     }
 
     override fun cleanup(keepPerConversation: Int) {
@@ -107,9 +120,19 @@ class JsonFileChatHistoryRepository(
             }
         }
         dirty = true
+        flusher.markDirty()
     }
 
     override fun flush() {
+        doFlush()
+    }
+
+    /** 进程退出兜底：立即写盘并关闭防抖调度器 */
+    fun shutdown() {
+        flusher.shutdown()
+    }
+
+    private fun doFlush() {
         if (!dirty) return
         try {
             val file = File(filePath)

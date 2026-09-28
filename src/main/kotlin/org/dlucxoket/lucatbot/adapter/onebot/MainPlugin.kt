@@ -8,9 +8,7 @@ import com.mikuac.shiro.enums.MsgTypeEnum
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.AgentChain
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
-import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
-import org.dlucxoket.lucatbot.bot.memory.MemoryService
-import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
+import org.dlucxoket.lucatbot.bot.loop.MainLoopController
 import org.dlucxoket.lucatbot.bot.tool.ToolDependencyBinder
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.session.SessionManager
@@ -21,23 +19,17 @@ import org.springframework.stereotype.Component
 /**
  * Shiro 主插件——OneBot 消息处理入口
  *
- * 职责：协议适配 + 流程编排（不包含具体业务逻辑）
+ * 职责：协议适配 + 事件喂给状态机（不包含业务决策）
  * - 消息转换（ShiroConverter）
- * - 状态机决策（LucatBot）
- * - 调度执行（AgentChain）
- * - 回复发送
+ * - 未读/待插入队列维护（LucatBot）
+ * - 主循环启动与空闲唤醒信号（MainLoopController）
  *
- * 具体逻辑委托给专职类：
- * - 拆分回复 → [ReplySplitter]
- * - 记忆提取 → [MemoryExtractor]
- * - @判断 → [isAtMe]（Shiro 层）
+ * 主路径的状态机编排在 [MainLoopController] / ConversationController / MessageListController，
+ * 不在此处调用 AgentChain（AgentChain 仅保留给戳一戳等自由规划场景）。
  */
 @Component
 internal class MainPlugin: BotPlugin() {
     private val log = LoggerFactory.getLogger(MainPlugin::class.java)
-
-    /** 多条消息之间的发送间隔（毫秒），模拟真人打字节奏 */
-    private val messageIntervalMs = 300..800L
 
     @Autowired
     private lateinit var agentChain: AgentChain
@@ -49,16 +41,17 @@ internal class MainPlugin: BotPlugin() {
     private lateinit var sessionManager: SessionManager
 
     @Autowired
-    private lateinit var memoryService: MemoryService
+    private lateinit var chatHistoryService: ChatHistoryService
 
     @Autowired
-    private lateinit var chatHistoryService: ChatHistoryService
+    private lateinit var mainLoopController: MainLoopController
 
     override fun onAnyMessage(bot: Bot, event: AnyMessageEvent): Int {
         try {
-            // 保存 Bot 引用供 ProactiveScheduler 发送消息
+            // 保存 Bot 引用供发送工具/主动调度使用
             lucatBot.shiroBot = bot
             bindTools(bot)
+            mainLoopController.startIfNeeded()
 
             // 戳一戳检测（模拟真人被戳了会戳回去）
             if (isPoke(event)) {
@@ -70,61 +63,33 @@ internal class MainPlugin: BotPlugin() {
             val plainText = ShiroConverter.extractPlainText(event)
             if (plainText.isBlank()) return MESSAGE_IGNORE
 
-            // 状态机决策
+            // 状态机决策：进未读 / 待插入 / 通知
             val isAtMe = isAtMe(event, bot.selfId)
             val isAtAll = (modelEvent.message as? ChatMessage)?.isAtAll() ?: false
             val action = lucatBot.handleMessage(modelEvent, isAtMe, isAtAll)
 
+            // 无论是否立刻处理，都先记聊天记录与短期记忆
+            chatHistoryService.recordMessage(modelEvent, plainText)
+            val convId = modelEvent.conversationId
+            sessionManager.addMessage(
+                convId, modelEvent.sender.nickname, plainText,
+                senderId = modelEvent.sender.qqNumber
+            )
+
             when (action) {
                 LucatBot.MessageAction.IGNORE -> return MESSAGE_IGNORE
-                LucatBot.MessageAction.NOTIFY -> log.debug("收到 @我/@全体 消息")
-                LucatBot.MessageAction.PROCESS -> log.debug("当前会话消息")
-            }
-
-            log.info("收到消息: $plainText")
-
-            // 记录聊天历史
-            chatHistoryService.recordMessage(modelEvent, plainText)
-
-            // 会话历史 + 记忆
-            val convId = modelEvent.conversationId
-            sessionManager.addMessage(convId, modelEvent.sender.nickname, plainText, senderId = modelEvent.sender.qqNumber)
-
-            // 打字延迟
-            if (TimeAwareness.shouldDelay()) {
-                val delay = TimeAwareness.typingDelay(plainText.length)
-                log.info("模拟打字延迟 ${delay}ms")
-                Thread.sleep(delay)
-            }
-
-            // 构建上下文——用 describe() 让 LLM 看到完整消息（含图片/表情）
-            val fullDescription = (modelEvent.message as? ChatMessage)?.describe() ?: plainText
-            val context = buildContext(convId, modelEvent.sender.qqNumber, fullDescription)
-            val reply = agentChain.execute(context)
-
-            if (reply.isNotBlank()) {
-                sessionManager.addMessage(convId, lucatBot.persona.name, reply, isBot = true)
-                chatHistoryService.recordBotReply(convId, reply)
-
-                // 记忆提取
-                val memories = MemoryExtractor.extract(modelEvent.sender.qqNumber, plainText, reply)
-                memoryService.saveAll(memories)
-
-                // 拆分发送
-                val messages = ReplySplitter.split(reply)
-                for ((i, msg) in messages.withIndex()) {
-                    bot.sendMsg(event, msg, false)
-                    if (i < messages.size - 1) Thread.sleep(messageIntervalMs.random())
+                LucatBot.MessageAction.NOTIFY -> {
+                    // @我/@全体：缩短空闲休眠（最少再等 30s）
+                    log.debug("收到 @我/@全体 消息，通知主循环唤醒")
+                    mainLoopController.notifyUrgent()
                 }
-                log.info("回复消息: $reply")
-            } else {
-                log.info("AgentChain 返回空回复，跳过发送")
+                LucatBot.MessageAction.PROCESS -> {
+                    // 当前会话消息已进待插入队列，由会话循环在决策间隙合并
+                    log.debug("当前会话消息已入待插入队列")
+                }
             }
 
-            // 回复完回到空闲状态（模拟真人看完就走）
-            lucatBot.goIdle()
-
-            return MESSAGE_BLOCK
+            return MESSAGE_IGNORE
         } catch (e: Exception) {
             log.error("消息处理异常: ${e.message}", e)
             return MESSAGE_IGNORE
@@ -174,6 +139,8 @@ internal class MainPlugin: BotPlugin() {
 
             if (reply.isNotBlank()) {
                 bot.sendMsg(event, reply, false)
+                chatHistoryService.recordBotReply("private:${event.userId}", reply)
+                sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, reply, isBot = true)
                 log.info("戳一戳回应: $reply")
             } else {
                 log.info("戳一戳：不回应")
@@ -181,25 +148,6 @@ internal class MainPlugin: BotPlugin() {
         } catch (e: Exception) {
             log.error("戳一戳处理异常: ${e.message}")
         }
-    }
-
-    /**
-     * 构建回复上下文
-     */
-    private fun buildContext(convId: String, userId: Long, plainText: String): String {
-        val history = sessionManager.getContextSummary(convId)
-        val memorySummary = memoryService.getMemorySummary(userId)
-        val fatigueHint = sessionManager.getFatigueHint(convId)
-
-        return """
-            当前消息：$plainText
-
-            聊天记录：
-            $history
-
-            $memorySummary
-            $fatigueHint
-        """.trimIndent()
     }
 
     private fun bindTools(bot: Bot) {

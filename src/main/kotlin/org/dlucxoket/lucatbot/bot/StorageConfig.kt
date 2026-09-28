@@ -12,16 +12,18 @@ import org.springframework.context.annotation.Configuration
  *
  * 遵循 DIP：Service 依赖接口，具体实现在这里绑定。
  * 将来迁移到 SQLite/Redis 时只需修改此配置。
+ *
+ * destroyMethod 兜底：Spring 容器关闭时把防抖未落盘的数据写盘。
  */
 @Configuration
 class StorageConfig {
 
-    @Bean
+    @Bean(destroyMethod = "shutdown")
     fun memoryRepository(): MemoryRepository {
         return JsonFileMemoryRepository()
     }
 
-    @Bean
+    @Bean(destroyMethod = "shutdown")
     fun chatHistoryRepository(): ChatHistoryRepository {
         return JsonFileChatHistoryRepository()
     }

@@ -2,9 +2,8 @@ package org.dlucxoket.lucatbot.bot.memory
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import org.dlucxoket.lucatbot.bot.storage.DebouncedFlusher
 import org.slf4j.LoggerFactory
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -14,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
  * **OOP 设计**：
  * - 实现 [MemoryRepository] 接口（依赖倒置）
  * - 单一职责：只管 JSON 文件存取
- * - 内存缓存 + 延迟写入（性能）
+ * - 内存缓存 + 防抖落盘（写入后约 5s 批量 flush，进程退出兜底写盘）
  *
  * 存储格式：`data/memories.json`
  * 未来可替换为 SQLite/Redis 等实现，业务层无感知。
@@ -33,6 +32,13 @@ class JsonFileMemoryRepository(
     @Volatile
     private var dirty = false
 
+    /** 防抖落盘 */
+    private val flusher = DebouncedFlusher(
+        flushAction = { doFlush() },
+        delayMs = 5_000L,
+        name = "memory-flush"
+    )
+
     init {
         load()
     }
@@ -40,11 +46,13 @@ class JsonFileMemoryRepository(
     override fun save(memory: MemoryItem) {
         cache[memory.id] = memory
         dirty = true
+        flusher.markDirty()
     }
 
     override fun saveAll(memories: List<MemoryItem>) {
         memories.forEach { cache[it.id] = it }
         dirty = true
+        flusher.markDirty()
     }
 
     override fun findById(id: String): MemoryItem? {
@@ -64,6 +72,7 @@ class JsonFileMemoryRepository(
     override fun delete(id: String) {
         cache.remove(id)
         dirty = true
+        flusher.markDirty()
     }
 
     override fun findAll(): List<MemoryItem> {
@@ -71,6 +80,15 @@ class JsonFileMemoryRepository(
     }
 
     override fun flush() {
+        doFlush()
+    }
+
+    /** 进程退出兜底：立即写盘并关闭防抖调度器 */
+    fun shutdown() {
+        flusher.shutdown()
+    }
+
+    private fun doFlush() {
         if (!dirty) return
         try {
             val file = File(filePath)

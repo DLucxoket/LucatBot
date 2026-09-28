@@ -1,0 +1,63 @@
+package org.dlucxoket.lucatbot.bot.loop
+
+import org.dlucxoket.lucatbot.bot.LucatBot
+import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
+import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
+import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
+import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
+import org.dlucxoket.lucatbot.bot.tool.SendMessageTool
+import org.dlucxoket.lucatbot.bot.tool.Tool
+import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
+import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
+import org.dlucxoket.lucatbot.model.session.SessionManager
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+
+/**
+ * 主循环编排层的 Bean 装配
+ *
+ * 编排类本身不加 @Component，由这里集中构造，便于测试时替换 Agent/Tool。
+ */
+@Configuration
+class LoopConfig {
+
+    @Bean
+    fun actionLog(): ActionLog = ActionLog()
+
+    @Bean
+    fun messageListController(
+        lucatBot: LucatBot,
+        sessionManager: SessionManager,
+        memoryService: MemoryService,
+        chatHistoryService: ChatHistoryService,
+        actionLog: ActionLog
+    ): MessageListController = MessageListController(
+        lucatBot = lucatBot,
+        sessionManager = sessionManager,
+        memoryService = memoryService,
+        chatHistoryService = chatHistoryService,
+        actionLog = actionLog,
+        sessionPickerAgent = SessionPickerAgent()
+    )
+
+    @Bean
+    fun conversationController(
+        lucatBot: LucatBot,
+        sessionManager: SessionManager,
+        memoryService: MemoryService,
+        chatHistoryService: ChatHistoryService,
+        actionLog: ActionLog
+    ): ConversationController = ConversationController(
+        lucatBot = lucatBot,
+        sessionManager = sessionManager,
+        memoryService = memoryService,
+        chatHistoryService = chatHistoryService,
+        actionLog = actionLog,
+        conversationAgent = ConversationAgent(),
+        chatHistoryTool = ChatHistoryTool as Tool<ChatHistoryRequest, ChatHistoryResult>,
+        sendMessageTool = SendMessageTool as Tool<SendMessageRequest, SendMessageResult>
+    )
+}

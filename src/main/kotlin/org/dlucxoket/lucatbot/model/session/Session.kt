@@ -90,6 +90,19 @@ class SessionManager {
     }
 
     /**
+     * 最近活跃过的会话 ID 列表（按最近活跃时间倒序）
+     *
+     * 用于消息列表展示与「可主动找的人」候选来源。
+     */
+    fun recentConversationIds(withinMinutes: Int = 24 * 60): List<String> {
+        val cutoff = System.currentTimeMillis() - withinMinutes * 60 * 1000L
+        return sessions.values
+            .filter { it.lastActiveTime >= cutoff }
+            .sortedByDescending { it.lastActiveTime }
+            .map { it.conversationId }
+    }
+
+    /**
      * 会话疲劳度（0.0-1.0）
      *
      * 聊得越多越疲劳，模拟真人聊久了会变敷衍。

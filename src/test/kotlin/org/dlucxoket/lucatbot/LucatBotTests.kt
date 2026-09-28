@@ -11,6 +11,7 @@ import org.dlucxoket.lucatbot.model.message.member.ImageMessageMember
 import org.dlucxoket.lucatbot.model.message.member.TextMessageMember
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
+import java.io.File
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -235,5 +236,29 @@ class MemoryExtractorTest {
     fun `no fact when nothing to extract`() {
         val memories = MemoryExtractor.extract(123L, "今天天气不错", "是啊")
         assertTrue(memories.none { it.type == MemoryItem.MemoryType.FACT })
+    }
+}
+
+class ChatHistoryPersistenceTest {
+
+    @Test
+    fun `recordHistoryMessage is idempotent`() {
+        val file = File.createTempFile("hist-dedup", ".json")
+        val service = org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService(
+            org.dlucxoket.lucatbot.bot.chathistory.JsonFileChatHistoryRepository(file.absolutePath)
+        )
+        repeat(2) {
+            service.recordHistoryMessage(
+                conversationId = "private:1",
+                senderId = 123L,
+                senderName = "用户A",
+                content = "爬楼看到的",
+                timestamp = 1000L,
+                isFromBot = false
+            )
+        }
+        val history = service.getHistory("private:1", 10)
+        assertEquals(1, history.size, "同一历史消息重复写入应去重")
+        assertEquals("爬楼看到的", history.first().content)
     }
 }

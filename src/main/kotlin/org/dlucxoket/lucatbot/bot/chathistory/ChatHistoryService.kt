@@ -57,6 +57,33 @@ class ChatHistoryService(
     }
 
     /**
+     * 记录一条历史/爬楼拉到的消息（已读）
+     *
+     * 用稳定 id 做去重，避免反复爬楼写入重复记录。
+     */
+    fun recordHistoryMessage(
+        conversationId: String,
+        senderId: Long,
+        senderName: String,
+        content: String,
+        timestamp: Long,
+        isFromBot: Boolean
+    ) {
+        val record = ChatMessageRecord(
+            id = "hist:$conversationId:$senderId:$timestamp:${content.hashCode()}",
+            conversationId = conversationId,
+            senderId = senderId,
+            senderName = senderName,
+            content = content,
+            messageType = detectMessageType(content),
+            timestamp = timestamp,
+            isRead = true,
+            isFromBot = isFromBot
+        )
+        repository.save(record)
+    }
+
+    /**
      * 获取某个会话的聊天历史
      */
     fun getHistory(conversationId: String, limit: Int = 20): List<ChatMessageRecord> {

@@ -35,6 +35,12 @@ object TimeAwareness {
         return dayOfWeek in 6..7
     }
 
+    /** 决策 prompt 用时间提示（北京时间 yyyyMMdd-HHmmss） */
+    fun timeHint(): String {
+        return LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"))
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+    }
+
     /**
      * 计算打字延迟（毫秒）
      *

@@ -83,6 +83,14 @@ class LucatBot {
     /** 未读消息队列（线程安全） */
     private val unreadQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()
 
+    /**
+     * 当前会话的待插入新消息队列
+     *
+     * 会话内决策循环进行中到来的消息先进这里，不打断 LLM 调用；
+     * 当前决策返回后由 [drainPendingInserts] 以系统注释形式合并进上下文。
+     */
+    private val pendingInsertQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()
+
     /** 当前 Shiro Bot 实例（用于发送消息） */
     @Volatile
     var shiroBot: com.mikuac.shiro.core.Bot? = null
@@ -128,8 +136,9 @@ class LucatBot {
                 @Suppress("UNCHECKED_CAST")
                 val current = state as State.InConversation
                 if (conversationId == current.conversationId) {
-                    // 当前会话的消息 → 处理，心情变好
+                    // 当前会话的消息 → 进待插入队列，不打断决策循环
                     mood = mood.boost()
+                    addPendingInsert(event, conversationId, isAtMe, isAtAll)
                     MessageAction.PROCESS
                 } else if (isAtMe || isAtAll) {
                     // 其他会话但 @我/@全体 → 通知
@@ -195,6 +204,65 @@ class LucatBot {
         val messages = unreadQueue.filter { it.conversationId == conversationId }
         unreadQueue.removeAll { it.conversationId == conversationId }
         return messages
+    }
+
+    /** 窥视未读消息（不清除） */
+    fun peekUnread(conversationId: String): List<UnreadMessage> {
+        return unreadQueue.filter { it.conversationId == conversationId }
+    }
+
+    /**
+     * 当前会话来了新消息 → 进待插入队列（不打断正在进行的 LLM 调用）
+     */
+    private fun addPendingInsert(event: MessageEvent, conversationId: String, isAtMe: Boolean, isAtAll: Boolean) {
+        pendingInsertQueue.add(
+            UnreadMessage(
+                conversationId = conversationId,
+                conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
+                senderId = event.sender.qqNumber,
+                senderName = event.sender.nickname,
+                content = extractText(event),
+                isAtMe = isAtMe,
+                isAtAll = isAtAll,
+                timestamp = event.timestamp
+            )
+        )
+    }
+
+    /**
+     * 取走当前会话的待插入消息（决策间隙合并进上下文）
+     */
+    fun drainPendingInserts(conversationId: String): List<UnreadMessage> {
+        val messages = pendingInsertQueue.filter { it.conversationId == conversationId }
+        pendingInsertQueue.removeAll { it.conversationId == conversationId }
+        return messages
+    }
+
+    /** 当前会话是否有待插入的新消息（不清除） */
+    fun hasPendingInserts(conversationId: String): Boolean {
+        return pendingInsertQueue.any { it.conversationId == conversationId }
+    }
+
+    /**
+     * 直接往待插入队列塞一条新消息（编排层/测试用）
+     */
+    fun enqueuePendingInsert(
+        conversationId: String,
+        senderId: Long,
+        senderName: String,
+        content: String,
+        timestamp: Long = System.currentTimeMillis()
+    ) {
+        pendingInsertQueue.add(
+            UnreadMessage(
+                conversationId = conversationId,
+                conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
+                senderId = senderId,
+                senderName = senderName,
+                content = content,
+                timestamp = timestamp
+            )
+        )
     }
 
     /**
