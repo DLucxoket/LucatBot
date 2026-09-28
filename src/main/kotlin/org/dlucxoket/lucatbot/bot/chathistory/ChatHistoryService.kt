@@ -71,7 +71,7 @@ class ChatHistoryService(
         if (records.isEmpty()) return "（新会话）"
 
         return records.joinToString("\n") { record ->
-            val role = if (record.isFromBot) "我" else record.senderName
+            val role = if (record.isFromBot) "我" else "${record.senderName}(${record.senderId})"
             "$role: ${record.content}"
         }
     }

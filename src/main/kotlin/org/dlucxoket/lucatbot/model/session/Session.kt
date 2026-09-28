@@ -20,6 +20,7 @@ class SessionManager {
      */
     data class SessionEntry(
         val sender: String,
+        val senderId: Long = 0L,
         val content: String,
         val isBot: Boolean = false,
         val timestamp: Long = System.currentTimeMillis()
@@ -43,9 +44,9 @@ class SessionManager {
     /**
      * 记录一条消息
      */
-    fun addMessage(conversationId: String, sender: String, content: String, isBot: Boolean = false) {
+    fun addMessage(conversationId: String, sender: String, content: String, isBot: Boolean = false, senderId: Long = 0L) {
         val session = sessions.getOrPut(conversationId) { Session(conversationId) }
-        session.entries.add(SessionEntry(sender, content, isBot))
+        session.entries.add(SessionEntry(sender, senderId, content, isBot))
         // 只保留最近 maxHistory 条
         if (session.entries.size > maxHistory) {
             session.entries.removeAt(0)
@@ -67,7 +68,7 @@ class SessionManager {
         if (history.isEmpty()) return "（新会话）"
 
         return history.joinToString("\n") { entry ->
-            val role = if (entry.isBot) "我" else entry.sender
+            val role = if (entry.isBot) "我" else "${entry.sender}(${entry.senderId})"
             "$role: ${entry.content}"
         }
     }

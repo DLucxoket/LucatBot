@@ -91,7 +91,7 @@ internal class MainPlugin: BotPlugin() {
 
             // 会话历史 + 记忆
             val convId = modelEvent.conversationId
-            sessionManager.addMessage(convId, modelEvent.sender.nickname, plainText)
+            sessionManager.addMessage(convId, modelEvent.sender.nickname, plainText, senderId = modelEvent.sender.qqNumber)
 
             // 打字延迟
             if (TimeAwareness.shouldDelay()) {
