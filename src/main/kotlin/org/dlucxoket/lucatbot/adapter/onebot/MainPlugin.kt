@@ -139,10 +139,15 @@ internal class MainPlugin: BotPlugin() {
 
             if (decision.action == ConversationAction.SEND) {
                 val content = decision.content.orEmpty()
-                bot.sendMsg(event, content, false)
-                chatHistoryService.recordBotReply("private:${event.userId}", content)
-                sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, content, isBot = true)
-                log.info("戳一戳回应: $content")
+                val resp = bot.sendMsg(event, content, false)
+                if (resp?.status == "ok") {
+                    chatHistoryService.recordBotReply("private:${event.userId}", content)
+                    sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, content, isBot = true)
+                    log.info("戳一戳回应: $content")
+                } else {
+                    // 被禁言等发送失败（Shiro 已打 ERROR 日志）——不写记录，直接返回
+                    log.warn("戳一戳回应发送失败 status={} retCode={}（可能被禁言）", resp?.status, resp?.retCode)
+                }
             } else {
                 log.info("戳一戳：不回应")
             }

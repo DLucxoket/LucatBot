@@ -36,10 +36,19 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
             val type = parts[0]
             val id = parts[1].toLongOrNull() ?: return SendMessageResult(success = false, error = "无效ID")
 
-            when (type) {
+            val resp = when (type) {
                 "group" -> b.sendGroupMsg(id, input.content, false)
                 "private" -> b.sendPrivateMsg(id, input.content, false)
                 else -> return SendMessageResult(success = false, error = "未知会话类型: $type")
+            }
+
+            // OneBot 返回非 ok（被禁言时 NapCat 返回 status=failed/retcode=120，Shiro 已打 ERROR 日志）
+            // ——消息实际没发出去：不写聊天记录，直接返回失败，由调用方立即离开会话
+            if (resp?.status != "ok") {
+                return SendMessageResult(
+                    success = false,
+                    error = "发送失败 status=${resp?.status} retCode=${resp?.retCode}（可能被禁言）"
+                )
             }
 
             // 发出后必须写入聊天记录（isBot=true）
