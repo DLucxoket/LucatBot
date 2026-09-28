@@ -104,6 +104,32 @@ class ConversationDecisionParseTest {
         assertNull(d.params["reason"])
         assertEquals("内心戏", d.reason)
     }
+
+    @Test
+    fun `parses remember todo_add todo_done`() {
+        val d = ConversationDecision.parse(
+            """{"action":"send","params":{"content":"好的，我盯着"},"remember":"他叫我周三提醒他交房租","todo_add":"帮他看群","todo_done":"取快递"}"""
+        )
+        assertEquals(ConversationAction.SEND, d.action)
+        assertEquals("他叫我周三提醒他交房租", d.remember)
+        assertEquals("帮他看群", d.todo_add)
+        assertEquals("取快递", d.todo_done)
+    }
+
+    @Test
+    fun `side effect fields optional and blank dropped`() {
+        val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
+        assertNull(d.remember)
+        assertNull(d.todo_add)
+        assertNull(d.todo_done)
+
+        val blank = ConversationDecision.parse(
+            """{"action":"send","params":{"content":"hi"},"remember":"","todo_add":"  ","todo_done":null}"""
+        )
+        assertNull(blank.remember)
+        assertNull(blank.todo_add)
+        assertNull(blank.todo_done)
+    }
 }
 
 class LlmJsonTest {

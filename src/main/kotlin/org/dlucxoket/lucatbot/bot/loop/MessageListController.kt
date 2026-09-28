@@ -10,6 +10,7 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
+import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 
@@ -24,6 +25,7 @@ class MessageListController(
     private val sessionManager: SessionManager,
     private val memoryService: MemoryService,
     private val chatHistoryService: ChatHistoryService,
+    private val todoService: TodoService,
     private val actionLog: ActionLog,
     private val sessionPickerAgent: SessionPickerAgent = SessionPickerAgent()
 ) {
@@ -46,6 +48,7 @@ class MessageListController(
             mood = lucatBot.mood,
             timeHint = TimeAwareness.timeHint(),
             shortTermMemory = buildShortTermMemory(sessions),
+            todos = todoService.pendingSummary(),
             actionLog = actionLog.dump(),
             sessions = sessions,
             proactiveCandidates = candidates

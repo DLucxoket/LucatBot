@@ -16,6 +16,8 @@ import org.dlucxoket.lucatbot.bot.loop.ActionLog
 import org.dlucxoket.lucatbot.bot.loop.ConversationController
 import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
+import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
 import org.dlucxoket.lucatbot.bot.tool.Tool
@@ -76,7 +78,10 @@ class ConversationControllerTest {
         llm: FakeLLM,
         sendTool: FakeSendMessageTool = FakeSendMessageTool(),
         historyCount: Int = 5,
-        replyWaitMs: Long = 0L
+        replyWaitMs: Long = 0L,
+        todoService: TodoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos", ".json").apply { delete() }.absolutePath)
+        )
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
@@ -93,6 +98,7 @@ class ConversationControllerTest {
             sessionManager = sessionManager,
             memoryService = memoryService,
             chatHistoryService = chatHistoryService,
+            todoService = todoService,
             actionLog = actionLog,
             conversationAgent = ConversationAgent(llm),
             chatHistoryTool = historyTool,
@@ -206,6 +212,42 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.GROUP, "42"))
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
         assertFalse(sawInConversation)
+    }
+
+    @Test
+    fun `todo_add in decision lands in TodoService and prompt has todo section`() {
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos", ".json").apply { delete() }.absolutePath)
+        )
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"行，我帮你看着"},"todo_add":"帮他看群"}"""
+        ))
+        val (controller, lucatBot, sendTool) = buildController(llm, replyWaitMs = 0L, todoService = todoService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(listOf("帮他看群"), todoService.pending().map { it.content }, "todo_add 应写入 TodoService")
+        assertEquals(listOf("行，我帮你看着"), sendTool.sent)
+        val prompt = llm.prompts.first()
+        assertTrue(prompt.contains("### 待办"), "决策 prompt 应含 ### 待办 段")
+        assertTrue(prompt.contains("（无待办）"), "决策时清单为空应显示占位")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+    }
+
+    @Test
+    fun `pending todos injected into decision prompt`() {
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos", ".json").apply { delete() }.absolutePath)
+        )
+        todoService.add("提醒他交房租", "private:123")
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, todoService = todoService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts.first()
+        assertTrue(prompt.contains("### 待办"))
+        assertTrue(prompt.contains("提醒他交房租"), "pending 待办应注入 prompt")
     }
 }
 

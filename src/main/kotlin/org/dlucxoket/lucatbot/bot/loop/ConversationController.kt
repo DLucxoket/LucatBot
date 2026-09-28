@@ -13,6 +13,7 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
+import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
 import org.dlucxoket.lucatbot.bot.tool.Tool
@@ -33,6 +34,7 @@ class ConversationController(
     private val sessionManager: SessionManager,
     private val memoryService: MemoryService,
     private val chatHistoryService: ChatHistoryService,
+    private val todoService: TodoService,
     private val actionLog: ActionLog,
     private val conversationAgent: ConversationAgent = ConversationAgent(),
     private val chatHistoryTool: Tool<ChatHistoryRequest, ChatHistoryResult>,
@@ -118,6 +120,7 @@ class ConversationController(
                 shortTermMemory = memoryService.getMemorySummary(
                     conversationId.substringAfter(":").toLongOrNull() ?: 0L
                 ) + sessionManager.getFatigueHint(conversationId),
+                todos = todoService.pendingSummary(),
                 actionLog = actionLog.dump(),
                 recentMessages = recentLines,
                 newMessageNotes = newNotes,
@@ -131,6 +134,7 @@ class ConversationController(
             )
 
             var decision = conversationAgent.processObject(request)
+            applyDecisionSideEffects(decision, conversationId)
 
             // proactive 破冰：首条必须 send
             if (mustIcebreak && decision.action != ConversationAction.SEND) {
@@ -209,6 +213,41 @@ class ConversationController(
             if (isMoodExhausted()) {
                 log.info("空闲类情绪拉满，强制离开")
                 return
+            }
+        }
+    }
+
+    /**
+     * 处理决策信封的副作用字段（在执行 action 之前）
+     *
+     * remember → 短期记忆；todo_add / todo_done → 待办清单。
+     * 每项单独 try/catch：失败只 log，不中断主循环。
+     */
+    private fun applyDecisionSideEffects(decision: ConversationDecision, conversationId: String) {
+        decision.remember?.let { note ->
+            try {
+                memoryService.rememberEvent(
+                    conversationId.substringAfter(":").toLongOrNull() ?: 0L,
+                    note
+                )
+            } catch (e: Exception) {
+                log.warn("remember 写入失败: {}", e.message)
+            }
+        }
+        decision.todo_add?.let { content ->
+            try {
+                todoService.add(content, conversationId)
+            } catch (e: Exception) {
+                log.warn("todo_add 写入失败: {}", e.message)
+            }
+        }
+        decision.todo_done?.let { ref ->
+            try {
+                if (!todoService.complete(ref)) {
+                    log.warn("todo_done 未匹配到待办: {}", ref)
+                }
+            } catch (e: Exception) {
+                log.warn("todo_done 处理失败: {}", e.message)
             }
         }
     }

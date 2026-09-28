@@ -5,6 +5,7 @@ import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
@@ -33,12 +34,14 @@ class LoopConfig {
         sessionManager: SessionManager,
         memoryService: MemoryService,
         chatHistoryService: ChatHistoryService,
+        todoService: TodoService,
         actionLog: ActionLog
     ): MessageListController = MessageListController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
         memoryService = memoryService,
         chatHistoryService = chatHistoryService,
+        todoService = todoService,
         actionLog = actionLog,
         sessionPickerAgent = SessionPickerAgent()
     )
@@ -49,12 +52,14 @@ class LoopConfig {
         sessionManager: SessionManager,
         memoryService: MemoryService,
         chatHistoryService: ChatHistoryService,
+        todoService: TodoService,
         actionLog: ActionLog
     ): ConversationController = ConversationController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
         memoryService = memoryService,
         chatHistoryService = chatHistoryService,
+        todoService = todoService,
         actionLog = actionLog,
         conversationAgent = ConversationAgent(),
         chatHistoryTool = ChatHistoryTool as Tool<ChatHistoryRequest, ChatHistoryResult>,

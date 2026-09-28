@@ -64,6 +64,8 @@ ${input.persona.toPrompt()}
 - 心情：${input.mood.toPrompt()}
 ### 短期记忆
 ${input.shortTermMemory.ifBlank { "（暂无）" }}
+### 待办
+${input.todos.ifBlank { "（无待办）" }}
 ### 你最近的操作
 ${input.actionLog}
 ### 未读消息

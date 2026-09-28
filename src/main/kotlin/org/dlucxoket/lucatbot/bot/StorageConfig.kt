@@ -4,6 +4,8 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryRepository
 import org.dlucxoket.lucatbot.bot.chathistory.JsonFileChatHistoryRepository
 import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryRepository
+import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
+import org.dlucxoket.lucatbot.bot.todo.TodoRepository
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
@@ -26,5 +28,10 @@ class StorageConfig {
     @Bean(destroyMethod = "shutdown")
     fun chatHistoryRepository(): ChatHistoryRepository {
         return JsonFileChatHistoryRepository()
+    }
+
+    @Bean(destroyMethod = "shutdown")
+    fun todoRepository(): TodoRepository {
+        return JsonFileTodoRepository()
     }
 }

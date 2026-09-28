@@ -65,6 +65,8 @@ ${input.persona.toPrompt()}
 - 会话名称：${input.conversationName}(${input.conversationId})
 ### 短期记忆
 ${input.shortTermMemory.ifBlank { "（暂无）" }}
+### 待办
+${input.todos.ifBlank { "（无待办）" }}
 ### 你最近的操作
 ${input.actionLog}
 $crawlStatus### 最近聊天记录
@@ -89,6 +91,10 @@ ${historyText.ifBlank { "（新会话）" }}$newMsgText
 - content 应口语、简短、像真人打字，不要像客服
 - 不要习惯性在句末加 emoji 或笑脸，绝大多数消息就是纯文字
 - 结合「爬楼状态」决定去留：看够了就 send 或 return；已翻到最早消息时不要再 read_more，也不要无休止地反复爬楼
+- 用户提出了需要你长期记住的事（不是闲聊）→ 在 JSON 顶层额外输出 "remember": "值得记住的一句话"
+- 用户托付了一件现在不做、之后要做的事 → 在 JSON 顶层额外输出 "todo_add": "待办内容"
+- 本次对话中完成了待办清单里的事 → 在 JSON 顶层额外输出 "todo_done": "待办的id或内容"
+- remember / todo_add / todo_done 都是可选的，可以省略；普通闲聊不要往里写
 - 不想回或累了可以 return，或者 send 很短的敷衍$proactiveHint$extraHint
 """
     }

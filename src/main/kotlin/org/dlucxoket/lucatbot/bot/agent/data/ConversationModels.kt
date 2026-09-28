@@ -41,11 +41,20 @@ enum class ConversationAction {
  * @param action 动作
  * @param params 工具入参：send → content；read_more → count
  * @param reason 内心动机（不会发出去）
+ * @param remember 值得长期记住的一句话（可选，写入短期记忆）
+ * @param todo_add 新增待办内容（可选）
+ * @param todo_done 完成待办的 id 或内容片段（可选）
  */
 data class ConversationDecision(
     val action: ConversationAction,
     val params: Map<String, Any?> = emptyMap(),
-    val reason: String? = null
+    val reason: String? = null,
+    @JsonProperty("remember")
+    val remember: String? = null,
+    @JsonProperty("todo_add")
+    val todo_add: String? = null,
+    @JsonProperty("todo_done")
+    val todo_done: String? = null
 ) {
     /** send 的正文（params.content） */
     val content: String? get() = params["content"] as? String
@@ -80,11 +89,21 @@ data class ConversationDecision(
             }
             val params = LlmJson.paramsOf(node)
             val reason = node.get("reason")?.takeIf { !it.isNull }?.asText()
+            val remember = node.get("remember")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
+            val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
+            val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
             // SEND 必须带正文，否则视为无效决策兜底退出
             if (action == ConversationAction.SEND && params["content"]?.toString().isNullOrBlank()) {
                 return FALLBACK
             }
-            return ConversationDecision(action = action, params = params, reason = reason)
+            return ConversationDecision(
+                action = action,
+                params = params,
+                reason = reason,
+                remember = remember,
+                todo_add = todoAdd,
+                todo_done = todoDone
+            )
         }
     }
 }
@@ -129,6 +148,10 @@ data class ConversationRequest(
 
     @JsonProperty("shortTermMemory")
     val shortTermMemory: String = "",
+
+    /** 待办清单摘要（多行 `- [ ] (id前4位) content`） */
+    @JsonProperty("todos")
+    val todos: String = "",
 
     /** 滚动操作日志（纯 string，多行） */
     @JsonProperty("actionLog")

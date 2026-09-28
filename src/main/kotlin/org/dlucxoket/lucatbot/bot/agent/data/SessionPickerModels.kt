@@ -73,6 +73,10 @@ data class SessionPickerRequest(
     @JsonProperty("shortTermMemory")
     val shortTermMemory: String = "",
 
+    /** 待办清单摘要（多行 `- [ ] (id前4位) content`） */
+    @JsonProperty("todos")
+    val todos: String = "",
+
     /** 滚动操作日志（纯 string，多行） */
     @JsonProperty("actionLog")
     val actionLog: String = "",
