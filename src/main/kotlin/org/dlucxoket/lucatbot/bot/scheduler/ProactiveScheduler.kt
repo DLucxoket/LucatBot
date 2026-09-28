@@ -2,10 +2,12 @@ package org.dlucxoket.lucatbot.bot.scheduler
 
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.AgentChain
+import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.persona.BotMood
-import org.dlucxoket.lucatbot.bot.persona.BotPersona
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
+import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 
@@ -14,15 +16,9 @@ import org.springframework.stereotype.Component
  *
  * **模拟真人定期看一眼 QQ 的行为**：
  * - 不是每秒都在看（定时轮询）
- * - 看到有未读 → 决定进哪个会话（SessionPickerAgent）
- * - 进入会话 → 看内容 → 决定怎么回
+ * - 看到有未读 → 决定进哪个会话
+ * - 进入会话 → 看内容 → 回复 → 标记已读
  * - 深夜/忙碌时降低频率
- *
- * 核心流程：
- * 1. 检查是否有未读
- * 2. 有 → SessionPickerAgent 决定进哪个
- * 3. 进入会话 → 获取内容 → ReplyAgent 生成回复
- * 4. 发送回复
  */
 @Component
 class ProactiveScheduler(
@@ -30,6 +26,12 @@ class ProactiveScheduler(
     private val agentChain: AgentChain
 ) {
     private val log = LoggerFactory.getLogger(ProactiveScheduler::class.java)
+
+    @Autowired
+    private lateinit var sessionManager: SessionManager
+
+    @Autowired
+    private lateinit var memoryService: MemoryService
 
     @Scheduled(fixedDelay = 30000)  // 30秒
     fun checkUnread() {
@@ -39,18 +41,20 @@ class ProactiveScheduler(
                 return
             }
 
-            // 更新心情
             lucatBot.mood = BotMood.guessByTime()
 
             val summary = lucatBot.getUnreadSummary()
             if (summary.isEmpty()) return
 
-            log.info("发现未读会话: $summary")
+            log.info("发现未读会话: $summary（当前状态：${lucatBot.state}）")
 
+            // 构建未读概况（含人物信息）
             val summaryText = summary.entries.joinToString("\n") { (convId, count) ->
                 val atMe = if (lucatBot.hasUnreadAtMe(convId)) "（@我）" else ""
                 val atAll = if (lucatBot.hasUnreadAtAll(convId)) "（@全体）" else ""
-                "- $convId: ${count}条未读$atMe$atAll"
+                val history = sessionManager.getContextSummary(convId)
+                val people = getPeopleInfo(convId)
+                "- $convId: ${count}条未读$atMe$atAll\n  最近消息：$history$people"
             }
 
             val timeHint = when {
@@ -59,6 +63,10 @@ class ProactiveScheduler(
                 TimeAwareness.isWeekend() -> "周末"
                 else -> "普通时间"
             }
+
+            // 进入会话列表状态
+            lucatBot.backToConversationList()
+            log.info("状态切换 → ViewingConversations")
 
             val context = """
                 未读消息概况：
@@ -74,10 +82,52 @@ class ProactiveScheduler(
                 2. 如果不想看，什么都不做
             """.trimIndent()
 
-            agentChain.execute(context)
+            val reply = agentChain.execute(context)
+
+            // 根据回复决定状态转换
+            if (reply.isNotBlank()) {
+                // 有回复 → 选中了某个会话，进入会话状态
+                val selectedConv = summary.keys.firstOrNull()
+                if (selectedConv != null) {
+                    val parts = selectedConv.split(":")
+                    val type = if (parts[0] == "group") LucatBot.ConversationType.GROUP else LucatBot.ConversationType.PRIVATE
+                    lucatBot.enterConversation(selectedConv, type)
+                    log.info("状态切换 → InConversation($selectedConv)")
+
+                    // 标记已读
+                    lucatBot.consumeUnread(selectedConv)
+                }
+            }
+
+            // 处理完回到空闲状态
+            lucatBot.goIdle()
+            log.info("状态切换 → Idle")
 
         } catch (e: Exception) {
             log.error("主动检查异常: ${e.message}")
+            lucatBot.goIdle()  // 异常时也恢复状态
         }
+    }
+
+    /**
+     * 获取会话中出现的人的基本信息和记忆
+     *
+     * 避免频繁调用 LLM 查询用户信息。
+     */
+    private fun getPeopleInfo(conversationId: String): String {
+        val history = sessionManager.getHistory(conversationId, limit = 5)
+        val senderIds = history.filter { !it.isBot }.map { it.senderId }.distinct().take(3)
+
+        if (senderIds.isEmpty()) return ""
+
+        val sb = StringBuilder()
+        sb.append("\n  相关人物：")
+        senderIds.forEach { id ->
+            val memory = memoryService.getMemorySummary(id)
+            if (memory.isNotBlank()) {
+                sb.append("\n  - $id 的记忆：$memory")
+            }
+        }
+        return sb.toString()
     }
 }

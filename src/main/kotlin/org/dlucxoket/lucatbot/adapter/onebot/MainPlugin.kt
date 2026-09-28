@@ -124,6 +124,9 @@ internal class MainPlugin: BotPlugin() {
                 log.info("AgentChain 返回空回复，跳过发送")
             }
 
+            // 回复完回到空闲状态（模拟真人看完就走）
+            lucatBot.goIdle()
+
             return MESSAGE_BLOCK
         } catch (e: Exception) {
             log.error("消息处理异常: ${e.message}", e)
