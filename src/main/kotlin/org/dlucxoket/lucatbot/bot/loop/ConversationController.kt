@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory
  * 会话内编排循环：读历史 → 决策 → read_more / send / return
  *
  * 决策智能体只输出动作；IO 一律走 Tool 的 processObject。
- * 含 read_more 上限、新消息待插入队列、强制 return 条件。
+ * 无 read_more 次数上限；退出由新消息待插入队列、无新消息轮数、强制 return 条件兜底。
  */
 class ConversationController(
     private val lucatBot: LucatBot,
@@ -38,8 +38,6 @@ class ConversationController(
     private val sendMessageTool: Tool<SendMessageRequest, SendMessageResult>,
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
-    /** 连续 read_more 上限 */
-    private val maxReadMore: Int = 5,
     /** 连续无新消息且无 send 的强制离开轮数 */
     private val maxStaleRounds: Int = 6,
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
@@ -89,7 +87,6 @@ class ConversationController(
 
     private fun loop(conversationId: String, isGroup: Boolean, proactive: Boolean) {
         var historyCount = initialHistoryCount
-        var readMoreStreak = 0
         var staleRounds = 0
         var readMoreWithInsertStreak = 0
         var mustIcebreak = proactive
@@ -155,10 +152,6 @@ class ConversationController(
             ) {
                 decision = ConversationDecision.forceReturn("连续爬楼期间一直有新消息，强制回应或离开")
             }
-            // 连续 read_more 超限 → 强制 send 或 return
-            if (readMoreStreak >= maxReadMore && decision.action == ConversationAction.READ_MORE) {
-                decision = ConversationDecision.forceReturn("连续爬楼超过上限")
-            }
 
             val hadInserts = newNotes.isNotEmpty()
 
@@ -166,7 +159,6 @@ class ConversationController(
                 ConversationAction.READ_MORE -> {
                     val count = decision.readCount
                     historyCount += count
-                    readMoreStreak++
                     if (hadInserts) readMoreWithInsertStreak++ else readMoreWithInsertStreak = 0
                     if (!hadInserts) {
                         staleRounds++
@@ -203,7 +195,6 @@ class ConversationController(
                     lucatBot.mood = lucatBot.mood.boost()
 
                     mustIcebreak = false
-                    readMoreStreak = 0
                     staleRounds = 0
                     readMoreWithInsertStreak = 0
 

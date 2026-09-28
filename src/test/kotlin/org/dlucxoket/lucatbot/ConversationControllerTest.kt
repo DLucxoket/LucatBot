@@ -76,7 +76,6 @@ class ConversationControllerTest {
         llm: FakeLLM,
         sendTool: FakeSendMessageTool = FakeSendMessageTool(),
         historyCount: Int = 5,
-        maxReadMore: Int = 5,
         replyWaitMs: Long = 0L
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
@@ -99,7 +98,6 @@ class ConversationControllerTest {
             chatHistoryTool = historyTool,
             sendMessageTool = sendTool,
             initialHistoryCount = 3,
-            maxReadMore = maxReadMore,
             replyWaitMs = replyWaitMs
         )
         return Triple(controller, lucatBot, sendTool)
@@ -149,16 +147,16 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `read_more limited then forced return`() {
-        // 永远 read_more → 超限后强制 return
-        val responses = MutableList(20) { """{"action":"read_more","params":{"count":5}}""" }
+    fun `endless read_more exits via stale rule not count cap`() {
+        // 永远 read_more 且无新消息 → read_more 本身无次数上限，
+        // 由「连续 6 轮无新消息且无 send」的 stale 规则兜底退出
+        val responses = MutableList(50) { """{"action":"read_more","params":{"count":5}}""" }
         val llm = FakeLLM(responses)
-        val (controller, lucatBot, _) = buildController(llm, maxReadMore = 2)
+        val (controller, lucatBot, _) = buildController(llm)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
-        // 上限 2 次：第 3 次 read_more 会被强制改写，不会无限循环
-        assertTrue(llm.prompts.size <= 5, "prompts=${llm.prompts.size}")
+        assertTrue(llm.prompts.size in 6..8, "应由 stale 规则在第 6 轮左右退出，prompts=${llm.prompts.size}")
     }
 
     @Test
