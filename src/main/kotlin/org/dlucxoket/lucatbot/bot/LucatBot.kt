@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot.bot
 
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.BotPersona
+import org.dlucxoket.lucatbot.bot.persona.PersonaLoader
 import org.dlucxoket.lucatbot.model.event.message.MessageEvent
 import org.springframework.stereotype.Component
 
@@ -74,8 +75,8 @@ class LucatBot {
     /** 当前状态 */
     var state: State = State.Idle
 
-    /** 机器人人格 */
-    val persona: BotPersona = BotPersona()
+    /** 机器人人格（启动时从 persona.md 读取，见 [org.dlucxoket.lucatbot.bot.persona.PersonaLoader]） */
+    val persona: BotPersona = PersonaLoader.persona
 
     /** 当前心情 */
     var mood: BotMood = BotMood.guessByTime()
