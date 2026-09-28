@@ -80,14 +80,15 @@ object DispatcherAgent : Agent<DispatcherRequest, DispatcherResult>() {
             上下文：
             ${request.context}
 
-            请输出JSON格式的调用计划。规则：
+            **输出格式（严格遵守，input必须是JSON对象不是字符串）**：
+            {"done": false, "plans": [{"agent": "ReplyAgent", "input": {"context": "消息", "messages": []}}]}
+            不需要调用时：{"done": true, "plans": []}
+            不要包裹markdown代码块，直接输出JSON。
+
+            规则：
             1. 如果还没有Agent回复过用户，调用ReplyAgent回复
             2. 如果已经有Agent成功回复了用户，输出done
             3. 不要重复调用同一个Agent处理同一件事
-
-            示例：
-            [{"agent": "ReplyAgent", "input": {"context": "用户的消息", "messages": []}}]
-            或者输出 done。
         """.trimIndent())
 
         // 解析 LLM 输出为 OOP 结果
