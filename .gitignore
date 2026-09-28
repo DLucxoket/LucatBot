@@ -68,5 +68,5 @@ replay_pid*
 # Kotlin Gradle plugin data, see https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects
 .kotlin/
 
-# 运行时持久化数据（聊天记录/记忆）
-data/
+# 运行时持久化数据（聊天记�?记忆�?
+/data/
