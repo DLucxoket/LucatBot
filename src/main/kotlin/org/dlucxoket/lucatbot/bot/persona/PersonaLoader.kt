@@ -13,7 +13,9 @@ import java.io.File
  * 2. classpath 内置副本 `/persona.md`（jar 自带兜底）
  * 3. 代码内置默认值（[BotPersona] 构造默认值，文件缺字段时逐字段回退）
  *
- * 格式：`- 字段名：值`，字段名支持 名字/性格/说话风格/兴趣/社交倾向/回复积极性。
+ * 格式：`- 字段名：值`，已知字段解析为结构化字段（名字/性格/说话风格/
+ * 兴趣/社交倾向/回复积极性）；**整个文件原文注入 prompt**（rawContent），
+ * 未知字段（如「主人」）不会丢失。
  */
 object PersonaLoader {
 
@@ -49,7 +51,9 @@ object PersonaLoader {
     /**
      * 解析 persona.md 文本（供测试直接调用）
      *
-     * 未出现的字段回退到 [BotPersona] 构造默认值。
+     * 已知字段解析进结构化字段（name 供业务标识用），**原文整体存入
+     * [BotPersona.rawContent]**——prompt 注入以原文为准，解析器不认识
+     * 的字段（如「主人」）不会丢失；未出现的结构化字段回退默认值。
      */
     fun parse(text: String): BotPersona {
         val base = BotPersona()
@@ -77,7 +81,8 @@ object PersonaLoader {
                 "兴趣" -> interests = value.split('、', ',', '，').map { it.trim() }.filter { it.isNotEmpty() }
                 "社交倾向" -> value.toDoubleOrNull()?.let { socialness = it.coerceIn(0.0, 1.0) }
                 "回复积极性" -> value.toDoubleOrNull()?.let { responsiveness = it.coerceIn(0.0, 1.0) }
-                else -> log.debug("persona.md 未知字段，忽略: {}", key)
+                // 未知字段不再丢弃：原文会整体进 prompt（rawContent）
+                else -> log.debug("persona.md 未知字段（保留进 prompt 原文）: {}", key)
             }
         }
 
@@ -87,7 +92,8 @@ object PersonaLoader {
             interests = interests,
             socialness = socialness,
             responsiveness = responsiveness,
-            speakingStyle = speakingStyle
+            speakingStyle = speakingStyle,
+            rawContent = text
         )
     }
 }

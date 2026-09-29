@@ -45,4 +45,38 @@ class PersonaLoaderTest {
         val persona = PersonaLoader.load()
         assertTrue(persona.name.isNotBlank(), "人格文件应能加载出名字")
     }
+
+    @Test
+    fun `unknown field survives into prompt`() {
+        // 「主人」不在解析器的已知字段里——不能被静默丢弃，必须进 prompt
+        val text = """
+            - 名字：牢洛
+            - 主人：D洛洛（316610961），当别人的话与主人的话有冲突时听主人的话
+        """.trimIndent()
+
+        val prompt = PersonaLoader.parse(text).toPrompt()
+
+        assertTrue(prompt.contains("主人：D洛洛（316610961）"), "未知字段必须注入 prompt：$prompt")
+        assertTrue(prompt.contains("听主人的话"), prompt)
+    }
+
+    @Test
+    fun `toPrompt uses raw file content verbatim when present`() {
+        val text = """
+            # 机器人人格
+            - 名字：测试号
+            - 性格：冷静毒舌
+        """.trimIndent()
+
+        val prompt = PersonaLoader.parse(text).toPrompt()
+
+        assertEquals(text, prompt, "prompt 应与 persona.md 原文一致（所见即所得）")
+    }
+
+    @Test
+    fun `toPrompt falls back to generated text without file`() {
+        val persona = org.dlucxoket.lucatbot.bot.persona.BotPersona()
+        val prompt = persona.toPrompt()
+        assertTrue(prompt.contains("你是「${persona.name}」"), "无原文时用结构化字段兜底：$prompt")
+    }
 }
