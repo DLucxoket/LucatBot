@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot.bot.loop
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ProactiveCandidate
+import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionSummaryLine
@@ -12,6 +13,7 @@ import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
+import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 
@@ -20,6 +22,9 @@ import org.slf4j.LoggerFactory
  *
  * 固定脚本调专用 Agent + Tool（SessionPickerAgent），无自由调度链路。
  * IO 经 Tool（processObject）；LLM JSON 只在 Agent 边界。
+ *
+ * 决策可能是多步的：智能体先 list_tools / tool（本类执行并把结果带进
+ * 下一轮 prompt），再输出 open_conversation / idle 结束本轮。
  */
 class MessageListController(
     private val lucatBot: LucatBot,
@@ -28,12 +33,14 @@ class MessageListController(
     private val chatHistoryService: ChatHistoryService,
     private val todoService: TodoService,
     private val actionLog: ActionLog,
-    private val sessionPickerAgent: SessionPickerAgent = SessionPickerAgent()
+    private val sessionPickerAgent: SessionPickerAgent = SessionPickerAgent(),
+    /** 工具目录与调用网关（list_tools / tool 动作的执行层） */
+    private val toolCatalog: ToolCatalog = ToolCatalog()
 ) {
     private val log = LoggerFactory.getLogger(MessageListController::class.java)
 
     /**
-     * 走一轮「看消息列表」决策
+     * 走一轮「看消息列表」决策（可含多步工具调用）
      *
      * @param fromIdleWake 是否是空闲唤醒（拼入可主动找的人）
      * @return 选中的会话；null = 去空闲
@@ -43,21 +50,54 @@ class MessageListController(
         actionLog.append("查看消息列表（${sessions.sumOf { it.unreadCount }}条未读）")
 
         val candidates = if (fromIdleWake) collectProactiveCandidates() else emptyList()
+        // 工具上下文（本轮内累积：目录/搜索结果/执行结果）
+        val toolNotes = mutableListOf<String>()
 
-        val request = SessionPickerRequest(
-            persona = lucatBot.persona,
-            mood = lucatBot.mood,
-            timeHint = TimeAwareness.timeHint(),
-            shortTermMemory = buildShortTermMemory(sessions),
-            todos = todoService.pendingSummary(),
-            actionLog = actionLog.dump(),
-            sessions = sessions,
-            proactiveCandidates = candidates
-        )
+        while (true) {
+            val request = SessionPickerRequest(
+                persona = lucatBot.persona,
+                mood = lucatBot.mood,
+                timeHint = TimeAwareness.timeHint(),
+                shortTermMemory = buildShortTermMemory(sessions),
+                todos = todoService.pendingSummary(),
+                actionLog = actionLog.dump(),
+                sessions = sessions,
+                proactiveCandidates = candidates,
+                toolNotes = toolNotes.toList()
+            )
 
-        val pick = sessionPickerAgent.processObject(request)
-        log.info("选会话结果: {}", pick ?: "idle")
-        return pick
+            val decision = sessionPickerAgent.processObject(request)
+            when (decision.action) {
+                SessionAction.OPEN_CONVERSATION -> {
+                    val pick = decision.pick ?: return null  // parse 已保证非空，此处仅防御
+                    log.info("选会话结果: {}", pick)
+                    return pick
+                }
+
+                SessionAction.IDLE -> {
+                    log.info("选会话结果: idle")
+                    return null
+                }
+
+                SessionAction.LIST_TOOLS -> {
+                    val query = decision.query
+                    // 同时只保留一份目录：重复获取（含不同关键词）覆盖旧条目，防 prompt 膨胀
+                    toolNotes.removeAll { it.startsWith("（工具目录") }
+                    toolNotes += "（工具目录${query?.let { "搜索「$it」" } ?: "全部"}）\n" +
+                        toolCatalog.catalog(query)
+                    actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）")
+                    log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
+                }
+
+                SessionAction.CALL_TOOL -> {
+                    val toolName = decision.toolName.orEmpty()
+                    val result = toolCatalog.invoke(toolName, decision.toolInput)
+                    toolNotes += "（工具 $toolName 执行结果）\n$result"
+                    actionLog.append("调用工具 $toolName")
+                    log.info("tool {} → {} 字符", toolName, result.length)
+                }
+            }
+        }
     }
 
     /** 汇总未读/最近会话（含已读与未读） */

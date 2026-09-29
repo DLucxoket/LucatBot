@@ -47,6 +47,14 @@ class ConversationAgent(
             }
             appendLine("- 参考聊天记录里每条消息的时间与顶部当前时间，判断消息新旧与停留时机")
         }
+        val toolsSection = buildString {
+            appendLine("### 工具")
+            if (input.toolNotes.isEmpty()) {
+                appendLine("（暂无——需要查资料或执行动作时，用 list_tools 获取工具目录）")
+            } else {
+                input.toolNotes.forEach { appendLine(it); appendLine() }
+            }
+        }.trimEnd()
 
         return """
             你正在使用即时聊天工具，已经点进了一个会话。
@@ -65,11 +73,12 @@ class ConversationAgent(
             ### 你最近的操作
             ${input.actionLog}
             $crawlStatus
+            $toolsSection
             ## 你的输出格式（严格遵循）
             只输出纯JSON，结构如下：
             
             {
-            "action": "read_more" | "send" | "stay" | "return",
+            "action": "read_more" | "send" | "stay" | "return" | "list_tools" | "tool",
             "params": { ... },
             "reason": "..."
             }
@@ -78,6 +87,8 @@ class ConversationAgent(
             - send：发一条消息。params：{"content": "正文"}，交给发送工具
             - stay：在当前会话停留一会儿再重新决策。params：{"seconds": 10}（通常 10~30 秒；停留期间有新消息会被自动唤醒并取消计时）
             - return：退出本会话，回到消息列表。params 可省略
+            - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）
+            - tool：调用一个工具。params：{"name": "工具名", "input": { ...参数，格式见目录里的「参数」... }}
             - reason 是内心动机（不会发出去）
             
             约束：
@@ -86,6 +97,8 @@ class ConversationAgent(
             - 不要习惯性在句末加 emoji 或笑脸，绝大多数消息就是纯文字
             - 发完消息后你会立即再次决策：没有新消息时不要连续发送，通常用 stay 等待回应或 return
             - 结合「爬楼状态」决定去留：看够了就 send 或 return；已翻到最早消息时不要再 read_more，也不要无休止地反复爬楼
+            - 工具用于查资料或执行动作（查记忆/查群资料/发表情/戳一戳/管理群等）：调用前先 list_tools（可带关键词缩小范围），目录里没有的工具不存在
+            - 拿到工具执行结果后继续正常决策（send/return/stay 都可）；普通聊天不需要工具，不要为了调用而调用，也不要连续空转反复查目录
             - 用户提出了需要你长期记住的事（不是闲聊）→ 在 JSON 顶层额外输出 "remember": "值得记住的一句话"
             - 用户托付了一件现在不做、之后要做的事 → 在 JSON 顶层额外输出 "todo_add": "待办内容"
             - 本次对话中完成了待办清单里的事 → 在 JSON 顶层额外输出 "todo_done": "待办的id或内容"

@@ -3,6 +3,9 @@ package org.dlucxoket.lucatbot
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.LlmJson
+import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
+import org.dlucxoket.lucatbot.bot.agent.data.SessionDecision
+import org.dlucxoket.lucatbot.bot.agent.data.SessionDecisionParser
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickParser
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
@@ -145,6 +148,99 @@ class ConversationDecisionParseTest {
         assertNull(blank.remember)
         assertNull(blank.todo_add)
         assertNull(blank.todo_done)
+    }
+
+    @Test
+    fun `list_tools with and without query`() {
+        val all = ConversationDecision.parse("""{"action":"list_tools","reason":"先看看"}""")
+        assertEquals(ConversationAction.LIST_TOOLS, all.action)
+        assertNull(all.toolQuery)
+
+        val searched = ConversationDecision.parse("""{"action":"list_tools","params":{"query":" 记忆 "}}""")
+        assertEquals(ConversationAction.LIST_TOOLS, searched.action)
+        assertEquals("记忆", searched.toolQuery)
+    }
+
+    @Test
+    fun `tool action parses name and input`() {
+        val d = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"GroupListTool","input":{"keyword":"开发"}},"reason":"查群"}"""
+        )
+        assertEquals(ConversationAction.CALL_TOOL, d.action)
+        assertEquals("GroupListTool", d.toolName)
+        assertEquals("开发", d.toolInput["keyword"])
+    }
+
+    @Test
+    fun `tool action without name falls back to RETURN`() {
+        val d = ConversationDecision.parse("""{"action":"tool","params":{"input":{}}}""")
+        assertEquals(ConversationAction.RETURN, d.action, "缺工具名必须兜底退出，不能带病执行")
+        assertNull(d.toolName)
+    }
+
+    @Test
+    fun `tool action without input gives empty map`() {
+        val d = ConversationDecision.parse("""{"action":"tool","params":{"name":"X"}}""")
+        assertEquals(ConversationAction.CALL_TOOL, d.action)
+        assertTrue(d.toolInput.isEmpty())
+    }
+}
+
+/** SessionDecisionParser：消息列表信封的四种动作与垃圾输出兜底 */
+class SessionDecisionParserTest {
+
+    @Test
+    fun `open_conversation yields OPEN with pick`() {
+        val d = SessionDecisionParser.parse(
+            """{"action":"open_conversation","params":{"type":"group","target":"789"},"reason":"有未读"}"""
+        )
+        assertEquals(SessionAction.OPEN_CONVERSATION, d.action)
+        assertEquals(SessionPick(SessionPickType.GROUP, "789"), d.pick)
+    }
+
+    @Test
+    fun `idle yields IDLE`() {
+        assertEquals(SessionAction.IDLE, SessionDecisionParser.parse("""{"action":"idle"}""").action)
+    }
+
+    @Test
+    fun `list_tools with and without query`() {
+        val all = SessionDecisionParser.parse("""{"action":"list_tools"}""")
+        assertEquals(SessionAction.LIST_TOOLS, all.action)
+        assertNull(all.query)
+
+        val searched = SessionDecisionParser.parse("""{"action":"tools","params":{"query":"群"}}""")
+        assertEquals(SessionAction.LIST_TOOLS, searched.action)
+        assertEquals("群", searched.query)
+    }
+
+    @Test
+    fun `tool yields CALL_TOOL with name and input`() {
+        val d = SessionDecisionParser.parse(
+            """{"action":"tool","params":{"name":"FriendListTool","input":{"keyword":"张"}}}"""
+        )
+        assertEquals(SessionAction.CALL_TOOL, d.action)
+        assertEquals("FriendListTool", d.toolName)
+        assertEquals("张", d.toolInput["keyword"])
+    }
+
+    @Test
+    fun `garbage and invalid tool fall back to IDLE`() {
+        // 垃圾输出 / 未知 action / 缺工具名 / open 参数无效 → 全部兜底空闲，绝不卡死主循环
+        assertEquals(SessionAction.IDLE, SessionDecisionParser.parse("not json").action)
+        assertEquals(SessionAction.IDLE, SessionDecisionParser.parse("""{"action":"fly"}""").action)
+        assertEquals(SessionAction.IDLE, SessionDecisionParser.parse("""{"action":"tool","params":{}}""").action)
+        assertEquals(
+            SessionAction.IDLE,
+            SessionDecisionParser.parse("""{"action":"open_conversation","params":{"type":"private"}}""").action
+        )
+    }
+
+    @Test
+    fun `invalid open yields IDLE not crash`() {
+        val d: SessionDecision = SessionDecisionParser.parse("""{"action":"open_conversation","params":{}}""")
+        assertEquals(SessionAction.IDLE, d.action)
+        assertNull(d.pick)
     }
 }
 

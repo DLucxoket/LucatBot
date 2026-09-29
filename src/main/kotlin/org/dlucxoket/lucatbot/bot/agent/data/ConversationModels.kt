@@ -37,7 +37,13 @@ enum class ConversationAction {
     STAY,
 
     /** 退出本会话，回到消息列表 */
-    RETURN
+    RETURN,
+
+    /** 查看/搜索工具目录（全量或按关键词） */
+    LIST_TOOLS,
+
+    /** 调用一个工具（params.name + params.input） */
+    CALL_TOOL
 }
 
 /**
@@ -70,6 +76,17 @@ data class ConversationDecision(
     /** stay 的停留秒数（params.seconds，默认 30；执行侧会再钳制到 1~1800） */
     val staySeconds: Int get() = (params["seconds"] as? Number)?.toInt() ?: 30
 
+    /** list_tools 的搜索关键词（null = 获取全部） */
+    val toolQuery: String?
+        get() = (params["query"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** tool 动作的目标工具名（parse 已校验非空） */
+    val toolName: String? get() = (params["name"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** tool 动作的入参对象（无则空 Map） */
+    @Suppress("UNCHECKED_CAST")
+    val toolInput: Map<String, Any?> get() = params["input"] as? Map<String, Any?> ?: emptyMap()
+
     companion object {
         /** 解析失败兜底：RETURN，避免卡死在会话里 */
         val FALLBACK = ConversationDecision(
@@ -94,9 +111,17 @@ data class ConversationDecision(
                 "send" -> ConversationAction.SEND
                 "stay" -> ConversationAction.STAY
                 "return" -> ConversationAction.RETURN
+                "list_tools", "tools" -> ConversationAction.LIST_TOOLS
+                "tool", "call_tool" -> ConversationAction.CALL_TOOL
                 else -> return FALLBACK
             }
             val params = LlmJson.paramsOf(node)
+            // tool 调用必须带工具名，否则视为无效决策兜底退出（与 send 缺正文同规则）
+            if (action == ConversationAction.CALL_TOOL &&
+                (params["name"]?.toString()?.trim().isNullOrEmpty())
+            ) {
+                return FALLBACK
+            }
             val reason = node.get("reason")?.takeIf { !it.isNull }?.asText()
             val remember = node.get("remember")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
             val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
@@ -189,5 +214,14 @@ data class ConversationRequest(
 
     /** 强制约束提示（如「有人发了新消息，优先回应」） */
     @JsonProperty("hint")
-    val hint: String = ""
+    val hint: String = "",
+
+    /**
+     * 工具上下文（编排层维护）：目录/搜索结果/执行结果的系统注释
+     *
+     * 由 ConversationController 在 list_tools / tool 动作后追加，
+     * 注入下一轮 prompt 的「### 工具」段。
+     */
+    @JsonProperty("toolNotes")
+    val toolNotes: List<String> = emptyList()
 )

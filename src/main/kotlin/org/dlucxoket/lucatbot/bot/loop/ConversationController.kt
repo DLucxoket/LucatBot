@@ -19,6 +19,7 @@ import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
 import org.dlucxoket.lucatbot.bot.tool.Tool
+import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
 import org.dlucxoket.lucatbot.model.session.SessionManager
@@ -48,6 +49,8 @@ class ConversationController(
     private val memoryAgent: MemoryAgent = MemoryAgent(),
     private val chatHistoryTool: Tool<ChatHistoryRequest, ChatHistoryResult>,
     private val sendMessageTool: Tool<SendMessageRequest, SendMessageResult>,
+    /** 工具目录与调用网关（list_tools / tool 动作的执行层） */
+    private val toolCatalog: ToolCatalog = ToolCatalog(),
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
     /** 退出会话时记忆整理读取的聊天记录条数 */
@@ -105,6 +108,8 @@ class ConversationController(
         var mustIcebreak = proactive
         var justSent: String? = null // 本轮刚发出的消息（有新回应即清空，用于组装 hint）
         var noReplyRounds = 0 // 连续无新消息的轮数（自上次发送起累计；SEND 成功不重置，有新消息清零）
+        // 工具上下文（本会话内累积：目录/搜索结果/执行结果，随每轮注入 prompt）
+        val toolNotes = mutableListOf<String>()
 
         while (true) {
             // 1) 把待插入的新消息以系统注释形式合并
@@ -158,14 +163,17 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
-                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes)
+                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes),
+                toolNotes = toolNotes.toList()
             )
 
             var decision = conversationAgent.processObject(request)
             applyDecisionSideEffects(decision, conversationId)
 
-            // proactive 破冰：首条必须 send
-            if (mustIcebreak && decision.action != ConversationAction.SEND) {
+            // proactive 破冰：首条必须 send（查目录/调工具是前置动作，不视为破冰失败）
+            val isToolStep = decision.action == ConversationAction.LIST_TOOLS ||
+                decision.action == ConversationAction.CALL_TOOL
+            if (mustIcebreak && decision.action != ConversationAction.SEND && !isToolStep) {
                 decision = ConversationDecision(
                     action = ConversationAction.SEND,
                     params = mapOf("content" to "在吗"),
@@ -256,6 +264,24 @@ class ConversationController(
                 ConversationAction.RETURN -> {
                     log.info("决策 return，离开会话")
                     return
+                }
+
+                ConversationAction.LIST_TOOLS -> {
+                    val query = decision.toolQuery
+                    // 同时只保留一份目录：重复获取（含不同关键词）覆盖旧条目，防 prompt 膨胀
+                    toolNotes.removeAll { it.startsWith("（工具目录") }
+                    toolNotes += "（工具目录${query?.let { "搜索「$it」" } ?: "全部"}）\n" +
+                        toolCatalog.catalog(query)
+                    actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）")
+                    log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
+                }
+
+                ConversationAction.CALL_TOOL -> {
+                    val toolName = decision.toolName.orEmpty()
+                    val result = toolCatalog.invoke(toolName, decision.toolInput)
+                    toolNotes += "（工具 $toolName 执行结果）\n$result"
+                    actionLog.append("调用工具 $toolName")
+                    log.info("tool {} → {} 字符", toolName, result.length)
                 }
             }
         }

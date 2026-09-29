@@ -11,7 +11,7 @@ Kotlin Spring Boot 4.0.3 应用——基于 OneBot 协议（QQ）的模拟真人
 机器人按**固定脚本的主循环**驱动，**核心设计原则：模拟真人在 QQ 中的真实行为**：
 
 - `Agent<I, O>`（泛型抽象类）——基类；每个 Agent 声明自己的输入/输出 OOP 类型，实现 `handle(input: I): O`。
-- 主流程只有两个智能体：`SessionPickerAgent`（消息列表选会话）与 `ConversationAgent`（会话内决策），由 `MainLoopController` / `MessageListController` / `ConversationController` 按固定脚本调用。
+- 主流程只有两个智能体：`SessionPickerAgent`（消息列表选会话）与 `ConversationAgent`（会话内决策），由 `MainLoopController` / `MessageListController` / `ConversationController` 按固定脚本调用。两者都带 `list_tools`（查/搜工具目录）与 `tool`（按名调用任意 Tool）两个决策动作——由编排层经 `ToolCatalog` 执行、结果以系统注释喂回下一轮 prompt（固定脚本内嵌工具选择，**不是**自由调度链路）。
 - 代码中不再保留自由调度链路（无 DispatcherAgent / AgentChain）。
 
 ### JSON ↔ OOP 边界约定
@@ -34,7 +34,7 @@ LLM API 边界（JSON 字符串）
 
 - **Agent**：LLM 驱动的智能处理单元，可以调用 LLM 做判断和生成（如 `ConversationAgent`）
 - **Tool**：确定性的数据查询/交互操作，不调用 LLM（如 ChatHistoryTool）
-- Tool 仍通过 ClassGraph 自动发现（`AgentDiscovery`），由 `ToolDependencyBinder` 绑定 Bot 依赖；主循环经 `processObject` 调用 Tool
+- Tool 仍通过 ClassGraph 自动发现（`AgentDiscovery` 缓存**单例实例索引**——发现/绑定/调用共享同一实例），由 `ToolDependencyBinder` 绑定 Bot 依赖；主循环经 `processObject` 调用 Tool，智能体经 `ToolCatalog`（目录/搜索/安全调用，异常转错误 JSON）调用 Tool
 
 ### 消息模型层级
 
@@ -160,7 +160,7 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 
 ## 容易搞错的地方
 
-- **Tool 发现是自动的**——不要手动注册。ClassGraph 扫描 classpath（Agent 已不再自动发现，主流程两个智能体在 `LoopConfig` 显式构造）。
+- **Tool 发现是自动的**——不要手动注册。ClassGraph 扫描 classpath（Agent 已不再自动发现，主流程两个智能体在 `LoopConfig` 显式构造）。Tool 元数据（`description` = 两行「功能：…/何时使用：…」、`parameterHint` = 参数）会进 `list_tools` 目录，新 Tool 按此格式写好描述即对智能体可见。
 - **JSON 只在边界**——Agent `handle()` 方法里禁止拼 JSON，用 OOP 对象。
 - **`LLM.DEFAULT` 是懒加载单例**（不是 Spring bean）——绕过了 DI。
 - **Gradle 使用国内镜像**——`gradle-wrapper.properties` 指向 `mirrors.aliyun.com`。

@@ -86,13 +86,105 @@ data class SessionPickerRequest(
 
     /** 可主动找的人；空列表表示不展示该区块 */
     @JsonProperty("proactiveCandidates")
-    val proactiveCandidates: List<ProactiveCandidate> = emptyList()
+    val proactiveCandidates: List<ProactiveCandidate> = emptyList(),
+
+    /**
+     * 工具上下文（编排层维护）：目录/搜索结果/执行结果的系统注释
+     *
+     * 由 MessageListController 在 list_tools / tool 动作后追加，
+     * 注入下一轮 prompt 的「### 工具」段。
+     */
+    @JsonProperty("toolNotes")
+    val toolNotes: List<String> = emptyList()
 )
 
 /**
- * 从统一信封解析 SessionPick
+ * 会话选择决策动作
+ */
+enum class SessionAction {
+    /** 打开一个会话（pick 非空） */
+    OPEN_CONVERSATION,
+
+    /** 不看任何会话，去空闲 */
+    IDLE,
+
+    /** 查看/搜索工具目录（全量或按关键词） */
+    LIST_TOOLS,
+
+    /** 调用一个工具（toolName + toolInput） */
+    CALL_TOOL
+}
+
+/**
+ * 会话选择决策（统一信封的 OOP 形态；替代「SessionPick/null」二值输出，
+ * 让消息列表智能体也能查工具目录、调用工具）
  *
- * action=open_conversation → SessionPick；action=idle → null。
+ * @param action 决策动作
+ * @param pick OPEN_CONVERSATION 时非空
+ * @param query LIST_TOOLS 的搜索关键词（null = 全部）
+ * @param toolName CALL_TOOL 的目标工具名
+ * @param toolInput CALL_TOOL 的入参对象
+ * @param reason 内心动机（不发出）
+ */
+data class SessionDecision(
+    val action: SessionAction,
+    val pick: SessionPick? = null,
+    val query: String? = null,
+    val toolName: String? = null,
+    val toolInput: Map<String, Any?> = emptyMap(),
+    val reason: String? = null
+)
+
+/**
+ * 从统一信封解析 [SessionDecision]
+ *
+ * 语义与旧 [SessionPickParser] 兼容：`open_conversation`（参数有效）→ 打开会话；
+ * `idle`、参数无效、**无法解析的垃圾输出** → 空闲兜底，绝不卡死主循环。
+ */
+object SessionDecisionParser {
+    fun parse(llmOutput: String): SessionDecision {
+        val node = LlmJson.parseTree(llmOutput)
+            ?: return idle("解析失败兜底空闲")
+        val actionText = node.get("action")?.asText()?.trim()?.lowercase()
+            ?: return idle("缺 action 字段，兜底空闲")
+        val reason = node.get("reason")?.takeIf { !it.isNull }?.asText()
+
+        return when (actionText) {
+            "open_conversation" -> {
+                val pick = SessionPickParser.parse(llmOutput)
+                    ?: return idle("open_conversation 参数无效，兜底空闲")
+                SessionDecision(SessionAction.OPEN_CONVERSATION, pick = pick, reason = reason)
+            }
+
+            "idle" -> SessionDecision(SessionAction.IDLE, reason = reason)
+
+            "list_tools", "tools" -> {
+                val params = LlmJson.paramsOf(node)
+                val query = params["query"]?.toString()?.trim()
+                    ?.takeIf { it.isNotEmpty() && it != "null" }
+                SessionDecision(SessionAction.LIST_TOOLS, query = query, reason = reason)
+            }
+
+            "tool", "call_tool" -> {
+                val params = LlmJson.paramsOf(node)
+                val name = params["name"]?.toString()?.trim()
+                    ?.takeIf { it.isNotEmpty() && it != "null" }
+                    ?: return idle("工具名缺失，兜底空闲")
+                @Suppress("UNCHECKED_CAST")
+                val input = params["input"] as? Map<String, Any?> ?: emptyMap()
+                SessionDecision(SessionAction.CALL_TOOL, toolName = name, toolInput = input, reason = reason)
+            }
+
+            else -> idle("未知 action=$actionText，兜底空闲")
+        }
+    }
+
+    private fun idle(reason: String) = SessionDecision(SessionAction.IDLE, reason = reason)
+}
+
+/**
+ * 从统一信封解析 SessionPick（保留：open_conversation 的底层提取，
+ * [SessionDecisionParser] 复用；也作为旧测试的稳定入口）
  */
 object SessionPickParser {
     fun parse(llmOutput: String): SessionPick? {

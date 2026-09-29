@@ -10,6 +10,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
+import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.chathistory.JsonFileChatHistoryRepository
@@ -25,6 +26,7 @@ import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
 import org.dlucxoket.lucatbot.bot.tool.Tool
+import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
 import org.dlucxoket.lucatbot.bot.tool.data.HistoryMessageItem
@@ -76,6 +78,17 @@ class FakeSendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
     }
 }
 
+/** 测试用回显工具（验证 ToolCatalog 目录与调用链路） */
+class FakeEchoTool : Tool<FakeEchoTool.Request, FakeEchoTool.Result>() {
+    data class Request(val q: String = "")
+    data class Result(val echoed: String = "", val success: Boolean = true)
+    override val name = "FakeEchoTool"
+    override val description = "功能：把参数 q 原样返回。\n何时使用：测试专用。"
+    override val parameterHint = "JSON: {\"q\": \"文本\"}"
+    override val inputClass: Class<Request> = Request::class.java
+    override fun handle(input: Request): Result = Result(echoed = input.q)
+}
+
 /** 会话内编排循环的行为测试：决策执行、副作用、退出记忆整理与停机收尾 */
 class ConversationControllerTest {
 
@@ -97,7 +110,9 @@ class ConversationControllerTest {
          * 共用一个实例会让每次 run() 多消耗一次 ask（打乱 prompts.size / 脚本顺序断言），
          * 这里默认耗尽（返回 {"action":"return"} → 解析为空记忆）。
          */
-        memoryLLM: FakeLLM = FakeLLM(mutableListOf())
+        memoryLLM: FakeLLM = FakeLLM(mutableListOf()),
+        /** 工具目录网关（list_tools / tool 集成测试用假工具目录） */
+        toolCatalog: ToolCatalog = ToolCatalog()
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
@@ -116,6 +131,7 @@ class ConversationControllerTest {
             memoryAgent = MemoryAgent(memoryLLM),
             chatHistoryTool = historyTool,
             sendMessageTool = sendTool,
+            toolCatalog = toolCatalog,
             initialHistoryCount = 3
         )
         return Triple(controller, lucatBot, sendTool)
@@ -465,26 +481,94 @@ class ConversationControllerTest {
         assertTrue(memoryLLM.prompts.isEmpty(), "不在会话中不应触发记忆整理")
         assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty())
     }
+
+    @Test
+    fun `list_tools and tool actions execute and feed notes into next prompt`() {
+        val decisionLLM = FakeLLM(mutableListOf(
+            """{"action":"list_tools","params":{"query":"Echo"},"reason":"先看有什么工具"}""",
+            """{"action":"tool","params":{"name":"FakeEchoTool","input":{"q":"hi"}},"reason":"试试调用"}""",
+            """{"action":"return","reason":"完事"}"""
+        ))
+        val echoTool = FakeEchoTool()
+        val (controller, lucatBot, _) = buildController(
+            decisionLLM,
+            toolCatalog = ToolCatalog(toolsProvider = { listOf(echoTool) })
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+        val prompts = decisionLLM.prompts
+        assertEquals(3, prompts.size, "list_tools / tool / return 各决策一轮")
+
+        // 第 2 轮：应看到目录（名字 + 功能 + 何时使用 + 参数）
+        assertTrue(prompts[1].contains("### 工具"), "prompt 应含工具段：${prompts[1]}")
+        assertTrue(prompts[1].contains("### FakeEchoTool"), "第 2 轮应看到目录：${prompts[1]}")
+        assertTrue(prompts[1].contains("功能：把参数 q 原样返回"), prompts[1])
+        assertTrue(prompts[1].contains("参数：{\"q\": \"文本\"}"), "参数列表应进入目录：${prompts[1]}")
+
+        // 第 3 轮：应看到工具执行结果
+        assertTrue(prompts[2].contains("执行结果"), "第 3 轮应看到执行结果：${prompts[2]}")
+        assertTrue(prompts[2].contains("\"echoed\":\"hi\""), "回显结果应注入：${prompts[2]}")
+    }
+
+    @Test
+    fun `unknown tool returns error note instead of breaking loop`() {
+        val decisionLLM = FakeLLM(mutableListOf(
+            """{"action":"tool","params":{"name":"NoSuchTool","input":{}},"reason":"瞎调"}""",
+            """{"action":"return","reason":"完事"}"""
+        ))
+        val (controller, lucatBot, _) = buildController(
+            decisionLLM,
+            toolCatalog = ToolCatalog(toolsProvider = { listOf(FakeEchoTool()) })
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "工具失败不能打断循环")
+        assertEquals(2, decisionLLM.prompts.size)
+        assertTrue(
+            decisionLLM.prompts[1].contains("不存在"),
+            "第 2 轮应看到「工具不存在」错误说明：${decisionLLM.prompts[1]}"
+        )
+    }
 }
 
-/** 经 FakeLLM 验证 SessionPickerAgent 把 LLM 统一信封转换为 SessionPick */
+/** 经 FakeLLM 验证 SessionPickerAgent 把 LLM 统一信封转换为 SessionDecision */
 class SessionPickerAgentParseViaFakeLLMTest {
 
     @Test
-    fun `agent converts envelope to SessionPick`() {
+    fun `agent converts envelope to OPEN_CONVERSATION decision`() {
         val llm = FakeLLM(mutableListOf(
             """{"action":"open_conversation","params":{"type":"private","target":"1"},"reason":"想找我"}"""
         ))
         val agent = SessionPickerAgent(llm)
-        val pick = agent.processObject(SessionPickerRequest())
-        assertEquals(SessionPick(SessionPickType.PRIVATE, "1"), pick)
+        val decision = agent.processObject(SessionPickerRequest())
+        assertEquals(SessionAction.OPEN_CONVERSATION, decision.action)
+        assertEquals(SessionPick(SessionPickType.PRIVATE, "1"), decision.pick)
     }
 
     @Test
-    fun `agent idle returns null`() {
+    fun `agent idle returns IDLE decision`() {
         val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
         val agent = SessionPickerAgent(llm)
-        assertNull(agent.processObject(SessionPickerRequest()))
+        assertEquals(SessionAction.IDLE, agent.processObject(SessionPickerRequest()).action)
+    }
+
+    @Test
+    fun `agent prompt contains tools section`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val agent = SessionPickerAgent(llm)
+        agent.processObject(
+            SessionPickerRequest(
+                toolNotes = listOf("（工具目录全部）\n### SendMessageTool\n功能：发消息。")
+            )
+        )
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("### 工具"), "消息列表 prompt 应含工具段：$prompt")
+        assertTrue(prompt.contains("### SendMessageTool"), prompt)
+        assertTrue(prompt.contains("list_tools"), "输出格式应列出 list_tools 动作：$prompt")
+        assertTrue(prompt.contains("\"action\": \"open_conversation\" | \"idle\" | \"list_tools\" | \"tool\""), prompt)
     }
 
     @Test

@@ -11,6 +11,7 @@ import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
 import org.dlucxoket.lucatbot.bot.tool.SendMessageTool
 import org.dlucxoket.lucatbot.bot.tool.Tool
+import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
 import org.dlucxoket.lucatbot.model.session.SessionManager
@@ -28,6 +29,13 @@ class LoopConfig {
     @Bean
     fun actionLog(): ActionLog = ActionLog()
 
+    /**
+     * 工具目录与调用网关——两个主智能体 list_tools / tool 动作的执行层。
+     * 默认从 AgentDiscovery 单例索引取工具（与发现/绑定共享同一批实例）。
+     */
+    @Bean
+    fun toolCatalog(): ToolCatalog = ToolCatalog()
+
     @Bean
     fun messageListController(
         lucatBot: LucatBot,
@@ -35,7 +43,8 @@ class LoopConfig {
         memoryService: MemoryService,
         chatHistoryService: ChatHistoryService,
         todoService: TodoService,
-        actionLog: ActionLog
+        actionLog: ActionLog,
+        toolCatalog: ToolCatalog
     ): MessageListController = MessageListController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
@@ -43,7 +52,8 @@ class LoopConfig {
         chatHistoryService = chatHistoryService,
         todoService = todoService,
         actionLog = actionLog,
-        sessionPickerAgent = SessionPickerAgent()
+        sessionPickerAgent = SessionPickerAgent(),
+        toolCatalog = toolCatalog
     )
 
     @Bean
@@ -53,7 +63,8 @@ class LoopConfig {
         memoryService: MemoryService,
         chatHistoryService: ChatHistoryService,
         todoService: TodoService,
-        actionLog: ActionLog
+        actionLog: ActionLog,
+        toolCatalog: ToolCatalog
     ): ConversationController = ConversationController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
@@ -63,6 +74,7 @@ class LoopConfig {
         actionLog = actionLog,
         conversationAgent = ConversationAgent(),
         chatHistoryTool = ChatHistoryTool as Tool<ChatHistoryRequest, ChatHistoryResult>,
-        sendMessageTool = SendMessageTool as Tool<SendMessageRequest, SendMessageResult>
+        sendMessageTool = SendMessageTool as Tool<SendMessageRequest, SendMessageResult>,
+        toolCatalog = toolCatalog
     )
 }
