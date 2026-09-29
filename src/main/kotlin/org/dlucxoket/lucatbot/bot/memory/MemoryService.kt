@@ -34,6 +34,7 @@ class MemoryService(
      * @param tags 标签（用于检索）
      */
     fun rememberFact(subject: MemorySubject, content: String, tags: List<String> = emptyList()) {
+        if (isDuplicate(subject, content)) return
         repository.save(
             MemoryItem(
                 userId = subject.id,
@@ -53,6 +54,7 @@ class MemoryService(
      * @param opinion 看法描述
      */
     fun rememberOpinion(subject: MemorySubject, opinion: String) {
+        if (isDuplicate(subject, opinion)) return
         repository.save(
             MemoryItem(
                 userId = subject.id,
@@ -72,6 +74,7 @@ class MemoryService(
      * @param relatedUserIds 涉及的其他用户
      */
     fun rememberEvent(subject: MemorySubject, event: String, relatedUserIds: List<Long> = emptyList()) {
+        if (isDuplicate(subject, event)) return
         repository.save(
             MemoryItem(
                 userId = subject.id,
@@ -83,6 +86,33 @@ class MemoryService(
         )
         log.info("记住事件: subject=$subject, event=$event")
     }
+
+    /**
+     * 写入前判重——防「记忆被反复记录」
+     *
+     * 同一主体下已存在**同内容**记忆（归一化：去全部空白 + 忽略大小写）即跳过。
+     * **不区分 kind**：同内容换个类型（fact/event）写两遍同样是重复。
+     *
+     * 背景：三个写入口都会重复触发——MemoryExtractor 每次 send 都对
+     * 「对方最后一条消息」重新提取（同一句被反复正则命中）、决策 remember
+     * 可多轮输出同一句、退出整理的 LLM 未必严格去重——判重统一收口在这里。
+     *
+     * 不做模糊/语义去重：那会误伤「原名 xx」这类更新式表述；改写型重复
+     * 由 MemoryAgent 的 prompt 约束 + 现有记忆注入兜底。
+     */
+    private fun isDuplicate(subject: MemorySubject, content: String): Boolean {
+        val target = normalize(content)
+        if (target.isEmpty()) return false
+        val dup = repository.findByUserId(subject.id).any {
+            it.subjectType == subject.type && normalize(it.content) == target
+        }
+        if (dup) log.debug("记忆已存在，跳过写入: subject=$subject, content=$content")
+        return dup
+    }
+
+    /** 判重归一化：去掉全部空白 + 小写（「他喜欢 猫」与「他喜欢猫」视为同一条） */
+    private fun normalize(content: String): String =
+        content.filter { !it.isWhitespace() }.lowercase()
 
     /**
      * 获取某个主体的全部记忆（按强度排序）
@@ -100,8 +130,18 @@ class MemoryService(
      * 获取某个主体的记忆摘要（注入 LLM prompt）
      *
      * 模拟真人回忆："我记得这个人..."
+     *
+     * @param factLimit/opinionLimit/eventLimit/relationLimit 各类条数上限——
+     *   会话注入用默认值（控制 prompt 体积）；**退出整理判重时调大**
+     *   （看不见已有记忆 → LLM 会把同一件事再记一遍）
      */
-    fun getMemorySummary(subject: MemorySubject): String {
+    fun getMemorySummary(
+        subject: MemorySubject,
+        factLimit: Int = 5,
+        opinionLimit: Int = 3,
+        eventLimit: Int = 5,
+        relationLimit: Int = 3
+    ): String {
         val memories = getMemoriesOf(subject)
         if (memories.isEmpty()) return ""
 
@@ -115,19 +155,19 @@ class MemoryService(
 
         if (facts.isNotEmpty()) {
             sb.appendLine("事实：")
-            facts.take(5).forEach { sb.appendLine("- ${it.content}") }
+            facts.take(factLimit).forEach { sb.appendLine("- ${it.content}") }
         }
         if (opinions.isNotEmpty()) {
             sb.appendLine("看法：")
-            opinions.take(3).forEach { sb.appendLine("- ${it.content}") }
+            opinions.take(opinionLimit).forEach { sb.appendLine("- ${it.content}") }
         }
         if (events.isNotEmpty()) {
             sb.appendLine("经历：")
-            events.take(5).forEach { sb.appendLine("- ${it.content}") }
+            events.take(eventLimit).forEach { sb.appendLine("- ${it.content}") }
         }
         if (relations.isNotEmpty()) {
             sb.appendLine("人际关系：")
-            relations.take(3).forEach { sb.appendLine("- ${it.content}") }
+            relations.take(relationLimit).forEach { sb.appendLine("- ${it.content}") }
         }
 
         return sb.toString().trim()
@@ -153,10 +193,23 @@ class MemoryService(
     }
 
     /**
-     * 批量保存记忆
+     * 批量保存记忆——与单条入口同一套判重
+     *
+     * 过滤两类重复：批内互重（同一句提取出多条）+ 与已有记忆重复
+     * （MemoryExtractor 每次 send 都对同一句重新提取，不过这里必反复记录）。
      */
     fun saveAll(memories: List<MemoryItem>) {
-        repository.saveAll(memories)
+        val batchKeys = mutableSetOf<String>()
+        val fresh = memories.filter { item ->
+            val key = "${item.subjectType}|${item.userId}|${normalize(item.content)}"
+            when {
+                item.content.isBlank() -> false
+                !batchKeys.add(key) -> false  // 批内重复
+                else -> !isDuplicate(MemorySubject(item.subjectType, item.userId), item.content)
+            }
+        }
+        if (fresh.isEmpty()) return
+        repository.saveAll(fresh)
     }
 
     /**

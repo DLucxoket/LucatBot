@@ -65,7 +65,12 @@ class MemoryReflector(
                     conversationContent = chatHistoryService.getHistorySummary(
                         conversationId, reflectHistoryCount
                     ),
-                    existingMemory = memoryService.getMemorySummary(subject),
+                    // 判重视野调大（默认 5/3/5/3 太小）：LLM 看不见的已有记忆
+                    // 会被当成新的再记一遍——反复记录的来源之一
+                    existingMemory = memoryService.getMemorySummary(
+                        subject,
+                        factLimit = 50, opinionLimit = 30, eventLimit = 50, relationLimit = 20
+                    ),
                     timeHint = TimeAwareness.timeHint()
                 )
             )
