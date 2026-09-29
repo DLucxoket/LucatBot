@@ -76,7 +76,7 @@ class MySqlChatHistoryRepository(
             .getOrDefault(ChatMessageRecord.MessageType.TEXT)
 
     companion object {
-        /** upsert（与 JSON 缓存覆盖语义一致：同 id 全字段覆盖） */
+        /** save 用 upsert（与 JSON 缓存覆盖语义一致：同 id 全字段覆盖） */
         internal const val INSERT =
             "INSERT INTO chat_history (id, conversation_id, sender_id, sender_name, content, " +
                 "message_type, timestamp_ms, message_id, is_from_bot) VALUES (?,?,?,?,?,?,?,?,?) " +
@@ -84,5 +84,10 @@ class MySqlChatHistoryRepository(
                 "sender_id=VALUES(sender_id), sender_name=VALUES(sender_name), content=VALUES(content), " +
                 "message_type=VALUES(message_type), timestamp_ms=VALUES(timestamp_ms), " +
                 "message_id=VALUES(message_id), is_from_bot=VALUES(is_from_bot)"
+
+        /** json 同步用：主键冲突即跳过（不覆盖库里已更新的行）——由 [INSERT] 派生防漂移 */
+        internal val INSERT_IGNORE: String
+            get() = INSERT.substringBefore(" ON DUPLICATE KEY UPDATE")
+                .replaceFirst("INSERT ", "INSERT IGNORE ")
     }
 }

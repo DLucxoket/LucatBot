@@ -16,8 +16,10 @@ import java.sql.ResultSet
  * 由 StorageConfig 从 `storage.mysql.*` 属性组装；连接串参数集中在这里，
  * 仓库实现只拿 [MySqlStorage] 干活。
  *
- * @param migrateFromJson 建表后若表为空且 data 目录下存在对应 json 文件，是否一次性
- *        迁入存量数据（生产开启；测试库关闭）
+ * @param importFromJson 是否在**每次启动**时把 data 目录的 json 行导入本库——
+ *        只插缺失的行（`INSERT IGNORE`，已存在不覆盖）：json 是迁移来源，
+ *        MySQL 是权威源，旧 json 不会把库里已更新的行改回去；
+ *        生产开启；测试按需关闭
  */
 data class MySqlConfig(
     val host: String = "localhost",
@@ -25,7 +27,7 @@ data class MySqlConfig(
     val database: String = "LucatBot",
     val username: String = "root",
     val password: String = "123456",
-    val migrateFromJson: Boolean = true
+    val importFromJson: Boolean = true
 ) {
     /** 不带库名的服务级连接（建库用） */
     val serverUrl: String =
@@ -49,7 +51,8 @@ data class MySqlConfig(
  * 引导流程（[init]，StorageConfig 启动时调用一次，幂等）：
  * 1. 服务级连接 `CREATE DATABASE IF NOT EXISTS`
  * 2. 库级连接建三张表（`IF NOT EXISTS`）
- * 3. [migrateFromJson] 时对空表从 data 目录下的 json 文件迁入存量数据
+ * 3. [MySqlConfig.importFromJson] 开启时，**每次启动**把 data 目录 json
+ *    中缺失的行导入（`INSERT IGNORE`——已存在的行不覆盖，MySQL 为权威源）
  */
 class MySqlStorage(private val config: MySqlConfig) {
 
@@ -62,7 +65,7 @@ class MySqlStorage(private val config: MySqlConfig) {
     private var initialized = false
 
     /**
-     * 引导：建库 → 建表 → JSON 存量迁移（幂等，可重复调用）
+     * 引导：建库 → 建表 → 从 json 同步缺失行（幂等，可重复调用）
      */
     @Synchronized
     fun init() {
@@ -81,8 +84,8 @@ class MySqlStorage(private val config: MySqlConfig) {
                 SCHEMA.forEach { st.executeUpdate(it) }
             }
         }
-        if (config.migrateFromJson) {
-            migrateFromJsonIfEmpty()
+        if (config.importFromJson) {
+            importFromJson()
         }
         initialized = true
         log.info("MySQL 存储就绪：{}@{}:{}/{}", config.username, config.host, config.port, config.database)
@@ -100,8 +103,9 @@ class MySqlStorage(private val config: MySqlConfig) {
         }
     }
 
-    /** 批量执行同一 SQL（单连接 + 事务 + addBatch；要么全成要么全回滚，迁移/批量保存用） */
-    fun batchUpdate(sql: String, rows: List<Array<Any?>>): Unit = connection().use { conn ->
+    /** 批量执行同一 SQL（单连接 + 事务 + addBatch；要么全成要么全回滚）。
+     *  返回每行受影响行数（INSERT IGNORE 下 1=新插入、0=已存在跳过） */
+    fun batchUpdate(sql: String, rows: List<Array<Any?>>): IntArray = connection().use { conn ->
         conn.autoCommit = false
         try {
             conn.prepareStatement(sql).use { ps ->
@@ -109,9 +113,10 @@ class MySqlStorage(private val config: MySqlConfig) {
                     row.forEachIndexed { i, p -> ps.setObject(i + 1, p) }
                     ps.addBatch()
                 }
-                ps.executeBatch()
+                val counts = ps.executeBatch()
+                conn.commit()
+                counts
             }
-            conn.commit()
         } catch (e: Exception) {
             conn.rollback()
             throw e
@@ -136,62 +141,59 @@ class MySqlStorage(private val config: MySqlConfig) {
         query(sql, *params, map = map).firstOrNull()
 
     // ------------------------------------------------------------------
-    // JSON 存量迁移（表为空 + 文件存在才导；幂等）
+    // json → 本库同步（每次启动；只补缺失行，已存在不覆盖）
     // ------------------------------------------------------------------
 
-    private fun migrateFromJsonIfEmpty() {
-        importIfEmpty<ChatMessageRecord>(
-            label = "聊天记录", jsonPath = "data/chat-history.json",
-            countSql = "SELECT COUNT(*) AS c FROM chat_history"
-        ) { rows ->
-            batchUpdate(MySqlChatHistoryRepository.INSERT, rows.map { r ->
-                arrayOf<Any?>(
-                    r.id, r.conversationId, r.senderId, r.senderName, r.content,
-                    r.messageType.name, r.timestamp, r.messageId, r.isFromBot
-                )
-            })
+    /**
+     * 把 data 目录 json 里的行导入本库
+     *
+     * 语义：**只插缺失**（`INSERT IGNORE` 主键冲突即跳过）——json 是来源、
+     * 本库是权威：库里已更新的行（如待办已勾完成）不会被旧 json 改回去；
+     * json 里有而库里没有的行（历史存量/别处产出）每次启动都会补进来。
+     */
+    private fun importFromJson() {
+        importFile<ChatMessageRecord>("聊天记录", "data/chat-history.json",
+            MySqlChatHistoryRepository.INSERT_IGNORE) { r ->
+            arrayOf(
+                r.id, r.conversationId, r.senderId, r.senderName, r.content,
+                r.messageType.name, r.timestamp, r.messageId, r.isFromBot
+            )
         }
-        importIfEmpty<MemoryItem>(
-            label = "记忆", jsonPath = "data/memories.json",
-            countSql = "SELECT COUNT(*) AS c FROM memories"
-        ) { rows ->
-            batchUpdate(MySqlMemoryRepository.INSERT, rows.map { m ->
-                arrayOf<Any?>(
-                    m.id, m.userId, m.subjectType.name, m.type.name, m.content,
-                    mapper.writeValueAsString(m.relatedUserIds),
-                    mapper.writeValueAsString(m.tags),
-                    m.strength, m.createdAt
-                )
-            })
+        importFile<MemoryItem>("记忆", "data/memories.json",
+            MySqlMemoryRepository.INSERT_IGNORE) { m ->
+            arrayOf(
+                m.id, m.userId, m.subjectType.name, m.type.name, m.content,
+                mapper.writeValueAsString(m.relatedUserIds),
+                mapper.writeValueAsString(m.tags),
+                m.strength, m.createdAt
+            )
         }
-        importIfEmpty<TodoItem>(
-            label = "待办", jsonPath = "data/todos.json",
-            countSql = "SELECT COUNT(*) AS c FROM todos"
-        ) { rows ->
-            batchUpdate(MySqlTodoRepository.INSERT, rows.map { t ->
-                arrayOf<Any?>(t.id, t.content, t.createdAt, t.done, t.conversationId)
-            })
+        importFile<TodoItem>("待办", "data/todos.json",
+            MySqlTodoRepository.INSERT_IGNORE) { t ->
+            arrayOf(t.id, t.content, t.createdAt, t.done, t.conversationId)
         }
     }
 
-    private inline fun <reified T> importIfEmpty(
+    private inline fun <reified T> importFile(
         label: String,
         jsonPath: String,
-        countSql: String,
-        insert: (List<T>) -> Unit
+        sql: String,
+        rowOf: (T) -> Array<Any?>
     ) {
-        val count = queryOne(countSql, map = { rs -> rs.getLong("c") }) ?: 0L
-        if (count > 0) return
         val file = java.io.File(jsonPath)
         if (!file.exists()) return
         val rows = runCatching { mapper.readValue<List<T>>(file) }
             .getOrElse { e ->
-                log.error("{}迁移：解析 {} 失败，跳过（{}）", label, jsonPath, e.message)
+                log.error("{}同步：解析 {} 失败，跳过（{}）", label, jsonPath, e.message)
                 return
             }
         if (rows.isEmpty()) return
-        insert(rows)
-        log.info("已从 {} 迁移 {} 条{}到 MySQL", jsonPath, rows.size, label)
+        val counts = batchUpdate(sql, rows.map(rowOf))
+        val inserted = counts.count { it > 0 }
+        log.info(
+            "从 {} 同步{}：新插入 {} 条、已存在跳过 {} 条（共 {}）",
+            jsonPath, label, inserted, rows.size - inserted, rows.size
+        )
     }
 
     private companion object {

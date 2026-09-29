@@ -53,7 +53,7 @@ class StorageConfig(
                 database = mysqlDatabase,
                 username = mysqlUsername,
                 password = mysqlPassword,
-                migrateFromJson = true
+                importFromJson = true
             )
         ).also { it.init() }
     }

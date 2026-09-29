@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
@@ -24,7 +26,7 @@ class MySqlStorageSmokeTest {
     private val testConfig = MySqlConfig(
         host = "127.0.0.1", port = 3306, database = "LucatBot_test",
         username = "root", password = "123456",
-        migrateFromJson = false  // 迁移单独用例验证，往返测试不导入存量
+        importFromJson = false  // 同步单独用例验证，往返测试不导入存量
     )
 
     /** 初始化测试库；连不上 → assumeTrue 失败 → 测试跳过 */
@@ -144,26 +146,56 @@ class MySqlStorageSmokeTest {
     }
 
     @Test
-    fun `json migration imports when table empty and is idempotent`() {
-        // 先清空聊天记录表（migrate=false 的实例只做清理）
+    fun `json sync runs every startup and never overwrites existing rows`() {
+        // 注意：data 目录的 json 可能正被运行中的实例持续写入——
+        // 所有断言基于「导入前的 id 快照」，不对易变的总行数做相等断言
+        val snapshotIds = runCatching {
+            jacksonObjectMapper().readValue<List<ChatMessageRecord>>(java.io.File("data/chat-history.json"))
+                .map { it.id }.toSet()
+        }.getOrElse { e ->
+            assumeTrue(false, "json 解析失败（可能正被写入）: ${e.message}")
+            emptySet()
+        }
+        assertTrue(snapshotIds.isNotEmpty(), "json 应有存量行")
+
+        // 清空后第一次启动：快照里的行全部补进来（补缺失）
         val cleaner = initOrSkip()
         cleaner.update("DELETE FROM chat_history")
 
-        // 空表 + data 目录 json 存在 → 新实例 init 触发迁移
-        val migrateCfg = testConfig.copy(migrateFromJson = true)
-        val s1 = MySqlStorage(migrateCfg)
+        val syncCfg = testConfig.copy(importFromJson = true)
+        val s1 = MySqlStorage(syncCfg)
         val init1 = runCatching { s1.init() }
-        assumeTrue(init1.isSuccess, "MySQL 不可用或迁移失败: ${init1.exceptionOrNull()?.message}")
-        val imported = countChat(s1)
-        assertTrue(imported > 0, "存量 data/chat-history.json 应迁入测试库，实际 $imported")
+        assumeTrue(init1.isSuccess, "MySQL 不可用或同步失败: ${init1.exceptionOrNull()?.message}")
+        assertTrue(
+            snapshotIds.all { it in idsOf(s1) },
+            "首启应补齐 json 快照中的全部行（缺失 ${snapshotIds.size - idsOf(s1).size}）"
+        )
 
-        // 幂等：表非空时再次 init 不重复导入
-        val s2 = MySqlStorage(migrateCfg)
+        // 模拟「库里已更新、json 还是旧的」：改掉一行内容
+        val repo1 = MySqlChatHistoryRepository(s1)
+        val conv = s1.queryOne(
+            "SELECT conversation_id AS c FROM chat_history LIMIT 1",
+            map = { it.getString("c") }
+        )!!
+        val victim = repo1.findByConversation(conv, 1).first()
+        repo1.save(victim.copy(content = "库里的更新（不能被旧 json 改回）"))
+
+        // 第二次启动同步：已存在的行不被覆盖；快照行仍全部在库
+        val s2 = MySqlStorage(syncCfg)
         val init2 = runCatching { s2.init() }
-        assumeTrue(init2.isSuccess, "MySQL 不可用或迁移失败: ${init2.exceptionOrNull()?.message}")
-        assertEquals(imported, countChat(s2), "表非空不再导入（幂等）")
+        assumeTrue(init2.isSuccess, "MySQL 不可用或同步失败: ${init2.exceptionOrNull()?.message}")
+        val after = MySqlChatHistoryRepository(s2)
+            .findByConversation(conv, 50).first { it.id == victim.id }
+        assertEquals(
+            "库里的更新（不能被旧 json 改回）", after.content,
+            "json 同步只补缺失行，不能覆盖库里已更新的行"
+        )
+        assertTrue(
+            snapshotIds.all { it in idsOf(s2) },
+            "二次同步后快照行仍全部在库（缺失才插的幂等语义）"
+        )
     }
 
-    private fun countChat(storage: MySqlStorage): Long =
-        storage.queryOne("SELECT COUNT(*) AS c FROM chat_history", map = { it.getLong("c") }) ?: 0L
+    private fun idsOf(storage: MySqlStorage): Set<String> =
+        storage.query("SELECT id FROM chat_history", map = { it.getString("id") }).toSet()
 }

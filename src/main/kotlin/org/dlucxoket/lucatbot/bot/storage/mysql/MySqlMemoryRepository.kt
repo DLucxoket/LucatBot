@@ -100,5 +100,10 @@ class MySqlMemoryRepository(
                 "ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), subject_type=VALUES(subject_type), " +
                 "type=VALUES(type), content=VALUES(content), related_user_ids=VALUES(related_user_ids), " +
                 "tags=VALUES(tags), strength=VALUES(strength), created_at=VALUES(created_at)"
+
+        /** json 同步用：主键冲突即跳过——由 [INSERT] 派生防漂移 */
+        internal val INSERT_IGNORE: String
+            get() = INSERT.substringBefore(" ON DUPLICATE KEY UPDATE")
+                .replaceFirst("INSERT ", "INSERT IGNORE ")
     }
 }

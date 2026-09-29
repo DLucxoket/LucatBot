@@ -44,5 +44,10 @@ class MySqlTodoRepository(
             "INSERT INTO todos (id, content, created_at, done, conversation_id) VALUES (?,?,?,?,?) " +
                 "ON DUPLICATE KEY UPDATE content=VALUES(content), created_at=VALUES(created_at), " +
                 "done=VALUES(done), conversation_id=VALUES(conversation_id)"
+
+        /** json 同步用：主键冲突即跳过（待办勾完成状态不被旧 json 改回）——由 [INSERT] 派生防漂移 */
+        internal val INSERT_IGNORE: String
+            get() = INSERT.substringBefore(" ON DUPLICATE KEY UPDATE")
+                .replaceFirst("INSERT ", "INSERT IGNORE ")
     }
 }
