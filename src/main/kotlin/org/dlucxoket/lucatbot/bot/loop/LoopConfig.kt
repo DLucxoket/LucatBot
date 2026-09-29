@@ -4,6 +4,7 @@ import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.bot.llm.ImageResolver
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.ChatHistoryTool
@@ -28,6 +29,15 @@ class LoopConfig {
 
     @Bean
     fun actionLog(): ActionLog = ActionLog()
+
+    /**
+     * 图片取材器——**全上下文共享的单例**（图片通道）。
+     *
+     * 必须是同一个实例：ImagePrefetcher（消息到达即下载）预热的缓存要被
+     * ConversationController（prompt 组装取材）命中，两处各建一份就白下了。
+     */
+    @Bean
+    fun imageResolver(): ImageResolver = ImageResolver()
 
     /**
      * 工具目录与调用网关——两个主智能体 list_tools / tool 动作的执行层。
@@ -71,7 +81,8 @@ class LoopConfig {
         chatHistoryService: ChatHistoryService,
         todoService: TodoService,
         actionLog: ActionLog,
-        toolCatalog: ToolCatalog
+        toolCatalog: ToolCatalog,
+        imageResolver: ImageResolver
     ): ConversationController = ConversationController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
@@ -82,6 +93,7 @@ class LoopConfig {
         conversationAgent = ConversationAgent(),
         chatHistoryTool = ChatHistoryTool as Tool<ChatHistoryRequest, ChatHistoryResult>,
         sendMessageTool = SendMessageTool as Tool<SendMessageRequest, SendMessageResult>,
-        toolCatalog = toolCatalog
+        toolCatalog = toolCatalog,
+        imageResolver = imageResolver
     )
 }

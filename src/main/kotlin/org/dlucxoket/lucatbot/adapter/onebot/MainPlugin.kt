@@ -50,6 +50,9 @@ internal class MainPlugin: BotPlugin() {
     @Autowired
     private lateinit var actionLog: ActionLog
 
+    @Autowired
+    private lateinit var imagePrefetcher: org.dlucxoket.lucatbot.bot.llm.ImagePrefetcher
+
     /** 戳一戳旁路直接用的会话内决策智能体 */
     private val conversationAgent = ConversationAgent()
 
@@ -69,6 +72,9 @@ internal class MainPlugin: BotPlugin() {
             val modelEvent = ShiroConverter.toModelEvent(event)
             // 富内容：@/reply/图片/表情/表情包都要让 LLM 看到，不能再用纯文本
             val content = ShiroConverter.richContent(event)
+            // 图片预取：QQ 图片地址秒级过期，收到消息立刻异步下载缓存，
+            // 等会话决策轮组装 prompt 时直接命中（晚几秒就 400 了）
+            imagePrefetcher.prefetch(modelEvent.message)
             val chatMessage = modelEvent.message as? ChatMessage
             // 纯空消息才忽略；纯图片/@/表情等非文本段也要处理
             if (content.isBlank() && chatMessage?.hasNonTextContent() != true) {
