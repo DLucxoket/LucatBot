@@ -234,5 +234,14 @@ data class ConversationRequest(
      * 与 recentMessages/newMessageNotes 里的 `[图片 file=x]` 占位符对应。
      */
     @JsonProperty("images")
-    val images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage> = emptyList()
+    val images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage> = emptyList(),
+
+    /**
+     * **未能附上**的图片文件标签（下载失败/过期/旧数据无地址）——
+     * 编排层把事实如实告诉 LLM：清单里的图它**确实看不到**，
+     * 杜绝「附件没来却假装看过图」的幻觉（实盘出过：一张图没收到却
+     * 声称「盯着图看了半天」）。
+     */
+    @JsonProperty("missingImages")
+    val missingImages: List<String> = emptyList()
 )

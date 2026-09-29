@@ -292,7 +292,7 @@ class ConversationControllerTest {
 
     @Test
     fun `image gathering never breaks the loop when unresolvable`() {
-        // 地址拿不到（文件不存在）→ 附件为空，会话照常走（图片通道绝不影响链路）
+        // 地址拿不到（文件不存在）→ 附件为空但事实如实进 prompt，会话照常走
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val (controller, lucatBot, _) = buildController(llm)
         lucatBot.enqueuePendingInsert(
@@ -303,7 +303,35 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertTrue(llm.images.isEmpty(), "拿不到的图跳过附件")
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("未能附上"), "附件缺失的事实要如实进 prompt：$prompt")
+        assertTrue(prompt.contains("gone.png"), "缺失清单带文件标签：$prompt")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
+    }
+
+    @Test
+    fun `no new message constraint and anti recite are in prompt`() {
+        // 实盘：停滞 12 分钟后凭记忆旧话题自发发了一条（还概括了自己的人设内容）
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("没有任何新消息时不要主动开口"), "自发约束：$prompt")
+        assertTrue(prompt.contains("不要接记忆或历史里没聊完的茬"), "点名不接记忆旧茬：$prompt")
+        assertTrue(prompt.contains("不复述也不概括自己的人设"), "反反复述人设约束：$prompt")
+        // hint 触发通道的警示在 send 之后那轮，由独立用例覆盖
+    }
+
+    @Test
+    fun `send then stay hint carries no spontaneous talk warning`() {
+        // send 后无新消息的那轮 hint 必须带『不凭记忆续话』——01:53 自发消息正是从这个通道出去的
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"在吗"}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, _) = buildController(llm)
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        assertTrue(llm.prompts[1].contains("不要凭记忆续话或自创话题"), "第二轮 hint 应含警示：${llm.prompts[1]}")
     }
 
     @Test
@@ -919,6 +947,19 @@ class ConversationAgentFallbackTest {
         assertTrue(prompt.contains("图片/表情包发不了"), "应声明图片发不了")
         assertTrue(prompt.contains("不要原样发出去"), "应提醒行 id 标记不入正文")
         assertTrue(prompt.contains("自己 send 时也用同样的标记"), "标记说明应覆盖自发场景")
+    }
+
+    @Test
+    fun `missing images list and anti fake vision rules render in prompt`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(
+            ConversationRequest(missingImages = listOf("gone1.jpg", "gone2.jpg"))
+        )
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("（以下图片未能附上，你看不到它们的内容）：gone1.jpg、gone2.jpg"),
+            "缺失清单进 user 消息：$prompt")
+        assertTrue(prompt.contains("不要假装看过"), "禁令：不许装看过")
+        assertTrue(prompt.contains("禁止编造图里有什么"), "点名禁止编造")
     }
 
     @Test

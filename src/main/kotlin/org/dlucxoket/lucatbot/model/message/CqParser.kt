@@ -95,6 +95,34 @@ object CqParser {
         return members
     }
 
+    /**
+     * 从 CQ 原文里按 file 标签取图片的下载地址（**图片地址刷新**用）
+     *
+     * QQ 图片地址短效（rkey 过期即 400），prompt 时对过期地址用
+     * `get_msg` 现拉消息原文、这里按 `file=` 精确匹配取**新鲜 url**；
+     * 找不到精确匹配且消息里只有一张图时取那一张（file 标签可能与
+     * 占位符命名来源不同）。
+     *
+     * @param raw CQ 字符串（`get_msg` 的 message 字段；array 形态已被
+     *   Shiro 的 MessageConverser 转成 CQ 字符串）
+     * @param file 占位符里的文件标签（如 `90A5BC2C….jpg`）
+     * @return 图片 url；无图/无 url → null
+     */
+    fun imageUrlOf(raw: String, file: String): String? {
+        val images = Regex("""\[CQ:image,([^\]]*)]""").findAll(raw)
+            .map { parseCqParams(it.groupValues[1]) }
+            .toList()
+        if (images.isEmpty()) return null
+        images.firstOrNull { it["file"] == file }?.let { p ->
+            p["url"]?.takeIf { it.isNotBlank() && it.startsWith("http") }?.let { return it }
+        }
+        // 单图兜底：file 标签对不上但整条消息只有一张图
+        if (images.size == 1) {
+            return images[0]["url"]?.takeIf { it.isNotBlank() && it.startsWith("http") }
+        }
+        return null
+    }
+
     /** 解析 CQ 段参数；处理 &#44; 等转义 */
     private fun parseCqParams(paramStr: String): Map<String, String> {
         if (paramStr.isBlank()) return emptyMap()

@@ -7,6 +7,7 @@ import org.dlucxoket.lucatbot.bot.llm.OpenAIAPI
 import org.dlucxoket.lucatbot.bot.llm.PromptImage
 import org.dlucxoket.lucatbot.model.message.AssetMarkers
 import org.dlucxoket.lucatbot.model.message.ChatMessage
+import org.dlucxoket.lucatbot.model.message.CqParser
 import org.dlucxoket.lucatbot.model.message.member.FaceMessageMember
 import org.dlucxoket.lucatbot.model.message.member.ImageMessageMember
 import org.dlucxoket.lucatbot.model.message.member.MemeMessageMember
@@ -137,6 +138,92 @@ class ImageChannelTest {
         assertTrue(img!!.dataUri.startsWith("data:image/png;base64,"), "magic 嗅探为 png")
         resolver.resolve("https://x/c.png", "c.png")
         assertEquals(1, calls, "成功结果缓存，同址只下载一次")
+    }
+
+    // ------------------------------------------------------------------
+    // 过期地址刷新（get_msg 现取新鲜 url——QQ 图片 rkey 短效）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `expired url refreshes once via supplier then caches under original`() {
+        val fresh = "https://x/fresh.png"
+        var primary = 0
+        var freshCalls = 0
+        val resolver = ImageResolver(fetchHttp = { url ->
+            if (url == fresh) {
+                freshCalls++
+                pngBytes
+            } else {
+                primary++
+                throw ImageResolver.HttpStatusException(400, "download url has expired")
+            }
+        })
+
+        val img = resolver.resolve("https://x/old.png", "a.png", refresh = { fresh })
+        assertNotNull(img, "刷新成功应产出附件")
+        assertEquals(1, primary, "原地址一次")
+        assertEquals(1, freshCalls, "新鲜地址一次")
+
+        // 后续轮次按【原地址】命中缓存：不再下载也不再刷新
+        assertNotNull(resolver.resolve("https://x/old.png", "a.png", refresh = { throw AssertionError("缓存命中不应刷新") }))
+        assertEquals(2, primary + freshCalls, "总请求次数不变（原1 + 新1）")
+    }
+
+    @Test
+    fun `refresh yielding same url gives up without loop`() {
+        var calls = 0
+        val resolver = ImageResolver(fetchHttp = { _ ->
+            calls++
+            throw ImageResolver.HttpStatusException(400)
+        })
+        assertNull(resolver.resolve("https://x/same.png", "s.png", refresh = { "https://x/same.png" }),
+            "刷新结果与原地址相同 = 无意义，放弃")
+        assertNull(resolver.resolve("https://x/same.png", "s.png", refresh = { throw AssertionError("负缓存后不再触发") }))
+        assertEquals(1, calls, "原地址只请求一次（负缓存）")
+    }
+
+    @Test
+    fun `fresh url also rejected gets negative cached too`() {
+        var calls = 0
+        val resolver = ImageResolver(fetchHttp = { _ ->
+            calls++
+            throw ImageResolver.HttpStatusException(400)
+        })
+        assertNull(resolver.resolve("https://x/o.png", "o.png", refresh = { "https://x/n.png" }))
+        assertEquals(2, calls, "原地址 + 新地址各请求一次")
+        assertNull(resolver.resolve("https://x/o.png", "o.png", refresh = { throw AssertionError("原地址已负缓存") }))
+        assertEquals(2, calls, "原地址已负缓存，整条链不再请求")
+    }
+
+    @Test
+    fun `refresh exception is swallowed`() {
+        var calls = 0
+        val resolver = ImageResolver(fetchHttp = { _ ->
+            calls++
+            throw ImageResolver.HttpStatusException(400)
+        })
+        assertNull(resolver.resolve("https://x/e.png", "e.png", refresh = { throw RuntimeException("ws down") }),
+            "刷新器抛异常只当无果，不冒泡")
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun `cq parser extracts image url by file tag`() {
+        val cq = "[CQ:image,file=90A5.jpg,url=https://x/a.jpg?appid=1&fileid=2]" +
+            "[CQ:image,file=b.png,url=https://x/b.png]"
+        assertEquals(
+            "https://x/a.jpg?appid=1&fileid=2",
+            CqParser.imageUrlOf(cq, "90A5.jpg"),
+            "按 file 精确匹配，url 含 & 参数不截断"
+        )
+        assertEquals("https://x/b.png", CqParser.imageUrlOf(cq, "b.png"))
+        assertNull(CqParser.imageUrlOf(cq, "c.jpg"), "多图且 file 对不上 → 不乱猜")
+
+        val single = "[CQ:image,file=z.png,url=https://x/z.png]"
+        assertEquals("https://x/z.png", CqParser.imageUrlOf(single, "other-tag.png"),
+            "单图兜底：file 标签来源不同时仍取唯一那张")
+        assertNull(CqParser.imageUrlOf("纯文本没有图", "x"))
+        assertNull(CqParser.imageUrlOf("[CQ:image,file=z.png]", "z.png"), "没带 url → null")
     }
 
     // ------------------------------------------------------------------

@@ -41,7 +41,7 @@ class ImageResolver(
     private val log = LoggerFactory.getLogger(ImageResolver::class.java)
 
     /** HTTP 非 2xx（区分确定性拒绝 4xx 与瞬时故障的依据） */
-    class HttpStatusException(val code: Int) : Exception("HTTP $code")
+    class HttpStatusException(val code: Int, val body: String? = null) : Exception("HTTP $code")
 
     /** 成功缓存：地址 → 加工好的 PromptImage（有界 LRU） */
     private val cache = BoundedLru<String, PromptImage>(cacheCapacity)
@@ -58,31 +58,21 @@ class ImageResolver(
      *
      * @param source 图片地址（http/https 或本地路径——入档时从消息段 url 收集）
      * @param ref    关联标识（占位符 file 标签，用于边界渲染 `[图片 <ref>]` 文本）
+     * @param refresh **地址刷新器**（可空）：主地址 4xx（QQ 图片 rkey 短效过期，
+     *   实测 `download url has expired`）时调用一次拿新鲜地址重试——
+     *   调用方用 `get_msg(message_id)` 现取消息原文、按 file 标签取新 url。
+     *   刷新只试一次；新地址同样被拒则一并进失败表，绝不循环。
      * @return null = 拿不到（地址不可达/超限/格式不明），调用方跳过附件
      */
     @Synchronized
-    fun resolve(source: String, ref: String): PromptImage? {
+    fun resolve(source: String, ref: String, refresh: (() -> String?)? = null): PromptImage? {
         val key = source.trim()
         if (key.isEmpty() || key.startsWith("base64")) return null
         if (rejected.containsKey(key)) return null  // 负缓存命中：静默跳过，不重试
 
         cache[key]?.let { return it }
 
-        val bytes = try {
-            download(key)
-        } catch (e: HttpStatusException) {
-            if (e.code in 400..499) {
-                rejected[key] = true
-                log.debug("图片地址确定性失败（{}），记入失败表不再重试: {}", e.code, ref)
-            } else {
-                log.debug("图片下载失败（瞬时，下轮可重试）status={} ref={}", e.code, ref)
-            }
-            return null
-        } catch (e: Exception) {
-            log.debug("图片取材失败（瞬时，下轮可重试）source={}: {}", key, e.message)
-            return null
-        }
-
+        val bytes = fetchOrRefresh(key, ref, refresh) ?: return null
         if (bytes.isEmpty()) return null
         if (bytes.size > maxBytes) {
             log.debug("图片超限跳过（{} > {} 字节）: {}", bytes.size, maxBytes, ref)
@@ -97,7 +87,54 @@ class ImageResolver(
             dataUri = "data:$mime;base64," + java.util.Base64.getEncoder().encodeToString(bytes)
         )
         cache[key] = image
+        log.debug("图片附件就绪: {}（{} 字节）", ref, bytes.size)
         return image
+    }
+
+    /**
+     * 下载主地址；4xx 时经 [refresh] 刷新一次重试
+     *
+     * 失败分类：4xx = 确定性拒绝（进失败表；刷新也救不回就放弃）、
+     * 其余（超时/5xx/异常）= 瞬时（不进失败表，下轮重试）。
+     */
+    private fun fetchOrRefresh(key: String, ref: String, refresh: (() -> String?)?): ByteArray? {
+        try {
+            return download(key)
+        } catch (e: HttpStatusException) {
+            if (e.code !in 400..499) {
+                log.debug("图片下载失败（瞬时，下轮可重试）status={} ref={}", e.code, ref)
+                return null
+            }
+            // 确定性拒绝：原地址进失败表（响应体带上——报错文本能指出 400 原因）
+            rejected[key] = true
+            log.debug(
+                "图片地址确定性失败（{}），记入失败表: {} body: {}",
+                e.code, ref, e.body?.take(300)
+            )
+            if (refresh == null) return null
+            val fresh = runCatching { refresh() }.getOrNull()?.trim()
+            if (fresh.isNullOrEmpty() || fresh == key) {
+                log.debug("图片地址刷新无果（get_msg 未给出新鲜地址）: {}", ref)
+                return null
+            }
+            if (rejected.containsKey(fresh)) return null
+            try {
+                val bytes = download(fresh).also { log.debug("图片地址刷新成功，重新下载: {}", ref) }
+                rejected.remove(key)  // 刷新救回：撤销主地址负缓存（否则下轮短路在缓存查询之前）
+                return bytes
+            } catch (e2: HttpStatusException) {
+                if (e2.code in 400..499) {
+                    rejected[fresh] = true
+                    log.debug("刷新后的地址仍被拒（{}）: {} body: {}", e2.code, ref, e2.body?.take(300))
+                } else {
+                    log.debug("刷新后下载失败（瞬时）status={} ref={}", e2.code, ref)
+                }
+                return null
+            }
+        } catch (e: Exception) {
+            log.debug("图片取材失败（瞬时，下轮可重试）source={}: {}", key, e.message)
+            return null
+        }
     }
 
     private fun download(source: String): ByteArray = when {
@@ -137,11 +174,12 @@ class ImageResolver(
         /** 负缓存容量（进程级；重启后恢复重试） */
         private const val rejectedCapacity = 256
 
-        /** 共享 HTTP 客户端（连接复用；[httpGet] 是默认 fetcher） */
+        /** 共享 HTTP 客户端（连接复用；强制 HTTP/1.1——部分 CDN 对 h2 直接 400；[httpGet] 是默认 fetcher） */
         private val sharedHttp: HttpClient by lazy {
             HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(8))
                 .followRedirects(HttpClient.Redirect.NORMAL)
+                .version(HttpClient.Version.HTTP_1_1)
                 .build()
         }
 
@@ -152,19 +190,27 @@ class ImageResolver(
         /**
          * 真实 HTTP 下载（默认 fetcher）
          *
-         * 带浏览器 UA + `Referer: https://qq.com/`（QQ CDN 缺头 400）；
-         * 非 2xx 抛 [HttpStatusException]（4xx 由调用方进负缓存）。
-         * Content-Length 预检 + 调用方实际字节复检，防大图撑爆内存。
+         * 请求形态对齐浏览器：UA + `Referer: https://qq.com/` + 浏览器 Accept +
+         * 强制 HTTP/1.1（QQ CDN 对 h2 有 400 的前科）。非 2xx 抛
+         * [HttpStatusException]（携带响应体前 300 字符供日志定位原因，4xx 由
+         * 调用方进负缓存）。Content-Length 预检 + 调用方实际字节复检防大图。
          */
         fun httpGet(url: String): ByteArray {
             val request = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(10))
                 .header("User-Agent", UA)
                 .header("Referer", "https://qq.com/")
+                .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
                 .GET()
                 .build()
             val resp = sharedHttp.send(request, HttpResponse.BodyHandlers.ofByteArray())
-            if (resp.statusCode() !in 200..299) throw HttpStatusException(resp.statusCode())
+            if (resp.statusCode() !in 200..299) {
+                val body = resp.body()
+                throw HttpStatusException(
+                    resp.statusCode(),
+                    String(body.copyOfRange(0, minOf(body.size, 300)), Charsets.UTF_8)
+                )
+            }
             val declared = resp.headers().firstValueAsLong("content-length").orElse(-1L)
             if (declared > 4L * 1024 * 1024) throw HttpStatusException(413)
             return resp.body()

@@ -185,11 +185,13 @@ class ConversationController(
                 "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]$idTag：${resolveRef(it.content)}"
             }
 
-            // 图片通道：窗口记录 + 本轮新消息里的图片地址 → data URI 附件
-            // （上限内取最近的；同一地址缓存复用、失败跳过——附件绝不影响会话链路）
-            val promptImages = gatherPromptImages(
-                historyResult.messages.mapNotNull { m -> m.imageUrls?.let { m.content to it } } +
-                    inserts.mapNotNull { m -> m.imageUrls?.let { m.content to it } }
+            // 图片通道：窗口记录 + 本轮新消息 → data URI 附件 + 「未能附上」清单
+            // （上限内取最近的；同址缓存、4xx 负缓存、过期地址用 get_msg 刷新重试一次
+            //  ——QQ 图片地址短效；附件失败绝不影响会话链路。
+            //  缺失清单把附件失败的事实如实交给 LLM——防「一张没收到却装看过图」的幻觉）
+            val attachments = gatherPromptImages(
+                historyResult.messages.map { ImageLine(it.content, it.imageUrls.orEmpty(), it.messageId) } +
+                    inserts.map { ImageLine(it.content, it.imageUrls.orEmpty(), it.messageId) }
             )
 
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）
@@ -216,7 +218,8 @@ class ConversationController(
                 reachedHistoryStart = reachedHistoryStart,
                 hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote),
                 toolNotes = toolNotes.snapshot(),
-                images = promptImages
+                images = attachments.images,
+                missingImages = attachments.missing
             )
 
             var decision = conversationAgent.processObject(request)
@@ -435,26 +438,68 @@ class ConversationController(
         }
     }
 
+    /** 收集图片附件的一行来源：正文 + 图片地址列表 + 所在消息的 message_id（刷新用） */
+    private data class ImageLine(val content: String, val urls: List<String>, val messageId: Long?)
+
+    /** 本轮图片收集结果：附件 + 未能附上的文件标签（缺失事实要如实交给 LLM） */
+    private data class PromptAttachments(
+        val images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage>,
+        val missing: List<String>
+    )
+
     /**
      * 收集本轮 prompt 的图片附件（图片通道）
      *
-     * @param sources 每条消息的（正文, 图片地址列表）——地址与正文里
+     * @param sources 每条消息的正文 + 图片地址——地址与正文里
      *   `[图片 file=x]` 占位符按下标对应（入档时同序收集）
      *
      * 规则：逐条解析（同地址缓存复用、拿不到就跳过），整体去重后
-     * **只取最近的 [maxPromptImages] 张**（附件多了请求体爆炸，且旧图价值低）。
+     * **只取最近的 [maxPromptImages] 张**；拿不到的（含旧数据无地址的
+     * 占位符）进「未能附上」清单——清单进 prompt，LLM 才不会把
+     * 没收到的图当成看过（实盘出过：零附件却声称「盯着图看了半天」）。
      */
-    private fun gatherPromptImages(sources: List<Pair<String, List<String>>>): List<org.dlucxoket.lucatbot.bot.llm.PromptImage> {
-        val out = mutableListOf<org.dlucxoket.lucatbot.bot.llm.PromptImage>()
-        for ((content, urls) in sources) {
-            val refs = org.dlucxoket.lucatbot.model.message.AssetMarkers.refs(content)
-            urls.forEachIndexed { i, url ->
+    private fun gatherPromptImages(sources: List<ImageLine>): PromptAttachments {
+        val images = mutableListOf<org.dlucxoket.lucatbot.bot.llm.PromptImage>()
+        val missing = linkedSetOf<String>()
+        for (line in sources) {
+            val refs = org.dlucxoket.lucatbot.model.message.AssetMarkers.refs(line.content)
+            line.urls.forEachIndexed { i, url ->
                 val ref = refs.getOrNull(i)?.takeIf { it.isNotBlank() }
                     ?: url.substringAfterLast('/').substringBefore('?')
-                imageResolver.resolve(url, ref)?.let { out += it }
+                val img = imageResolver.resolve(url, ref, refreshSupplier(line.messageId, ref))
+                if (img != null) images += img else missing += ref
+            }
+            // 占位符有、地址没有（旧数据/收集不全）→ 也算未能附上
+            for (i in line.urls.size until refs.size) {
+                refs[i].takeIf { it.isNotBlank() }?.let { missing += it }
             }
         }
-        return out.distinct().takeLast(maxPromptImages)
+        return PromptAttachments(
+            images = images.distinct().takeLast(maxPromptImages),
+            missing = missing.toList().takeLast(maxPromptImages)
+        )
+    }
+
+    /**
+     * 地址刷新器（4xx 时调用一次）：`get_msg` 现取消息原文，
+     * 按 file 标签取**新鲜 url**——QQ 图片地址短效（rkey 过期即
+     * `download url has expired`），只有现场重取才可能还在有效期内。
+     *
+     * @return null = 无从刷新（无 message_id / Bot 未连接）
+     */
+    private fun refreshSupplier(messageId: Long?, ref: String): (() -> String?)? {
+        val id = messageId ?: return null
+        val b = lucatBot.shiroBot ?: return null
+        return {
+            try {
+                val cq = b.getMsg(id.toInt())?.data?.message
+                if (cq.isNullOrBlank()) null
+                else org.dlucxoket.lucatbot.model.message.CqParser.imageUrlOf(cq, ref)
+            } catch (e: Exception) {
+                log.debug("get_msg 刷新图片地址失败: {}", e.message)
+                null
+            }
+        }
     }
 
     /**
@@ -499,6 +544,8 @@ class ConversationController(
             } else {
                 "你刚发送了「$justSent」，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
             }
+            // 实盘出过：停滞 12 分钟后凭记忆里的旧话题自发续话（编造对方没问过的内容）
+            parts += "注意：没有新消息时不要凭记忆续话或自创话题——那不算「有必要再发」。"
         }
         return parts.joinToString("\n")
     }
