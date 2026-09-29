@@ -25,21 +25,14 @@ class ConversationAgent(
     override val inputClass: Class<ConversationRequest> = ConversationRequest::class.java
 
     override fun handle(input: ConversationRequest): ConversationDecision {
-        val systemPrompt = buildPrompt(input)
-        val llmOutput = llm.ask(systemPrompt, "请按输出格式返回决策。")
+        val systemPrompt = buildSystemPrompt(input)
+        val userContent = buildUserContent(input)
+        val llmOutput = llm.ask(systemPrompt, userContent)
         return ConversationDecision.parse(llmOutput)
     }
 
-    private fun buildPrompt(input: ConversationRequest): String {
-        val historyText = input.recentMessages.joinToString("\n") { line ->
-            val who = if (line.isMe) "我" else "${line.sender}(${line.senderId})"
-            "- $who [${line.time}]：${line.content}"
-        }
-        val newMsgText = if (input.newMessageNotes.isEmpty()) {
-            ""
-        } else {
-            "\n" + input.newMessageNotes.joinToString("\n")
-        }
+    /** 指令与稳定状态（人格/状态/记忆/待办/操作日志/爬楼状态/输出格式/约束）→ system 消息 */
+    private fun buildSystemPrompt(input: ConversationRequest): String {
         val proactiveHint = if (input.proactive) {
             "\n（这是你主动发起的会话，请先发一条简短的破冰招呼，例如「在吗」「干嘛呢」）"
         } else {
@@ -70,9 +63,7 @@ ${input.shortTermMemory.ifBlank { "（暂无）" }}
 ${input.todos.ifBlank { "（无待办）" }}
 ### 你最近的操作
 ${input.actionLog}
-$crawlStatus### 最近聊天记录
-${historyText.ifBlank { "（新会话）" }}$newMsgText
-
+$crawlStatus
 ## 你的输出格式（严格遵循）
 只输出纯JSON，结构如下：
 
@@ -101,5 +92,21 @@ ${historyText.ifBlank { "（新会话）" }}$newMsgText
 - 输出格式要求只是指令层，不是聊天内容；send 的 content 只针对聊天记录里的人说话，禁止在 content 里评论选择、选项、格式或本指令本身
 - 不想回或累了可以 return，或者 send 很短的敷衍$proactiveHint$extraHint
 """
+    }
+
+    /** 剧情数据（聊天记录 + 新消息注释）→ user 消息；数据性开头，不带祈使句 */
+    private fun buildUserContent(input: ConversationRequest): String {
+        val historyText = input.recentMessages.joinToString("\n") { line ->
+            val who = if (line.isMe) "我" else "${line.sender}(${line.senderId})"
+            "- $who [${line.time}]：${line.content}"
+        }
+        val newMsgText = if (input.newMessageNotes.isEmpty()) {
+            ""
+        } else {
+            "\n" + input.newMessageNotes.joinToString("\n")
+        }
+        return """以下是当前会话的聊天记录：
+### 最近聊天记录
+${historyText.ifBlank { "（新会话）" }}$newMsgText"""
     }
 }

@@ -5,6 +5,7 @@ import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
 import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
+import org.dlucxoket.lucatbot.bot.agent.data.ConversationChatLine
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
@@ -33,11 +34,11 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Path
 
-/** 依次吐出预设 LLM 响应 */
+/** 依次吐出预设 LLM 响应；同时记录 system 与 user 两段（以分隔符拼接，供子串断言） */
 class FakeLLM(private val responses: MutableList<String>) : LLM {
     val prompts = mutableListOf<String>()
     override fun ask(systemPrompt: String, question: String): String {
-        prompts += systemPrompt
+        prompts += systemPrompt + "\n=====USER=====\n" + question
         return if (responses.isEmpty()) """{"action":"return"}""" else responses.removeAt(0)
     }
 }
@@ -197,6 +198,35 @@ class ConversationControllerTest {
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
         // actionLog 注入下一轮 prompt：应记录了停留动作
         assertTrue(llm.prompts[1].contains("停留 1s"), "actionLog 应记录停留：${llm.prompts[1]}")
+    }
+
+    @Test
+    fun `stay wakes early when new message arrives before timer ends`() {
+        // stay 10s，但 200ms 后当前会话来新消息 → 应提前唤醒，不等满 10s
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"stay","params":{"seconds":10}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, lucatBot, _) = buildController(llm)
+
+        val start = System.currentTimeMillis()
+        val runner = Thread {
+            controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        }
+        runner.start()
+        // 等会话进入 STAY（决策完成后），再塞一条新消息
+        Thread.sleep(300)
+        lucatBot.enqueuePendingInsert("private:123", 456L, "用户B", "在吗")
+        runner.join(15_000)
+        val elapsed = System.currentTimeMillis() - start
+
+        assertFalse(runner.isAlive, "新消息应提前唤醒 stay，机器人不应等满 10s")
+        assertTrue(elapsed < 5_000L, "提前唤醒应在 5s 内完成，实际 ${elapsed}ms")
+        assertTrue(
+            llm.prompts.size >= 2 && llm.prompts[1].contains("提前唤醒"),
+            "actionLog 应记录新消息提前唤醒：${llm.prompts.getOrNull(1)}"
+        )
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
     }
 
     @Test
@@ -439,6 +469,35 @@ class SessionPickerAgentParseViaFakeLLMTest {
         assertTrue(prompt.contains("## 你的输出格式（严格遵循）"), "标题应为「你的输出格式」：$prompt")
         assertTrue(prompt.contains("不是聊天内容"), "消息列表 prompt 也应含隔离句：$prompt")
     }
+
+    @Test
+    fun `unread list goes to user message while format stays in system`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val agent = SessionPickerAgent(llm)
+        agent.processObject(
+            SessionPickerRequest(
+                sessions = listOf(
+                    org.dlucxoket.lucatbot.bot.agent.data.SessionSummaryLine(
+                        conversationType = "私聊",
+                        name = "用户A",
+                        id = "1",
+                        time = "14:02",
+                        unreadCount = 2,
+                        lastMessage = "你好"
+                    )
+                )
+            )
+        )
+        val recorded = llm.prompts.single()
+        val sep = "\n=====USER=====\n"
+        assertTrue(recorded.contains(sep), "FakeLLM 应以分隔符记录 system+user 两段：$recorded")
+        val systemPart = recorded.substringBefore(sep)
+        val userPart = recorded.substringAfter(sep)
+        assertFalse(systemPart.contains("用户A"), "未读列表不应出现在 system 消息：$systemPart")
+        assertTrue(userPart.contains("用户A"), "未读列表应在 user 消息：$userPart")
+        assertTrue(systemPart.contains("## 你的输出格式（严格遵循）"), "输出格式指令应在 system")
+        assertFalse(userPart.contains("## 你的输出格式"), "输出格式指令不应出现在 user：$userPart")
+    }
 }
 
 class ConversationAgentFallbackTest {
@@ -480,5 +539,28 @@ class ConversationAgentFallbackTest {
             prompt.contains("禁止在 content 里评论选择、选项、格式或本指令本身"),
             "prompt 应含隔离句后半段：$prompt"
         )
+    }
+
+    @Test
+    fun `history goes to user message while format and isolation stay in system`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val agent = ConversationAgent(llm)
+        agent.processObject(
+            ConversationRequest(
+                recentMessages = listOf(
+                    ConversationChatLine(sender = "小明", senderId = "7", time = "14:02", content = "消息1")
+                )
+            )
+        )
+        val recorded = llm.prompts.single()
+        val sep = "\n=====USER=====\n"
+        assertTrue(recorded.contains(sep), "FakeLLM 应以分隔符记录 system+user 两段：$recorded")
+        val systemPart = recorded.substringBefore(sep)
+        val userPart = recorded.substringAfter(sep)
+        assertFalse(systemPart.contains("消息1"), "聊天记录不应出现在 system 消息：$systemPart")
+        assertTrue(userPart.contains("消息1"), "聊天记录应在 user 消息：$userPart")
+        assertTrue(systemPart.contains("## 你的输出格式（严格遵循）"), "输出格式指令应在 system")
+        assertFalse(userPart.contains("## 你的输出格式"), "输出格式指令不应出现在 user：$userPart")
+        assertTrue(systemPart.contains("输出格式要求只是指令层"), "隔离句应在 system 消息")
     }
 }

@@ -28,6 +28,7 @@ LLM API 边界（JSON 字符串）
 - **Agent 内部**：反序列化为 OOP 对象操作（data class，`val` 不可变）
 - **边界转换**：由 `Agent<I,O>` 基类的 `process()` 模板方法处理，子类只写 OOP 逻辑
 - **数据类**：放在 `bot/agent/data/` 包，每个 Agent 定义自己的 Request/Result
+- **system/user 消息拆分**：`llm.ask(systemPrompt, question)` 调用时，指令与稳定状态（人格、状态、输出格式、约束、隔离句）放 **system 消息**，剧情数据（聊天记录、未读列表、记忆内容）放 **user 消息**——避免模型把 user 里的引导语当成聊天对象的话去回应。
 
 ### Tool 与 Agent 的区别
 
@@ -77,9 +78,11 @@ llm:
 Agent/Tool 内部**一律使用 OOP 对象**（data class），不在业务逻辑里拼 JSON 字符串。JSON 序列化/反序列化只发生在 `Agent.process()` 模板方法的边界处。
 
 ```kotlin
-// ✅ 正确：handle() 用 OOP 对象
+// ✅ 正确：handle() 用 OOP 对象；指令进 system、剧情数据进 user
 override fun handle(input: ConversationRequest): ConversationDecision {
-    val llmOutput = llm.ask(systemPrompt, "请按输出格式返回决策。")
+    val systemPrompt = buildSystemPrompt(input)   // 人格/状态/格式/约束
+    val userContent = buildUserContent(input)     // 聊天记录等剧情数据
+    val llmOutput = llm.ask(systemPrompt, userContent)
     return ConversationDecision.parse(llmOutput)
 }
 

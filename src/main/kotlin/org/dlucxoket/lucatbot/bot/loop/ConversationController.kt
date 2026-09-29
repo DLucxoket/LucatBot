@@ -31,7 +31,8 @@ import org.slf4j.LoggerFactory
  * 代码侧仅保留两条打断：连续爬楼期间有新消息、发送失败。
  * send 成功后**立即**进入下一轮决策（无阻塞等待），连发由 prompt 的 hint 约束
  * （hint 携带「连续无新消息轮数」递进变量，交由 LLM 判断，无代码强制退出）；
- * stay 由 LLM 自主决定停留秒数（钳制 1~1800s），期间新消息照常进待插入队列。
+ * stay 由 LLM 自主决定停留秒数（钳制 1~1800s），期间新消息照常进待插入队列；
+ * 计时未到但当前会话来了新消息 → 提前唤醒（取消剩余计时），否则等满秒数。
  * loop() 正常返回后（finally 之前）调用一次 [MemoryAgent] 做退出时的记忆整理，
  * 整理失败只 log，不影响返回消息列表。
  */
@@ -218,14 +219,22 @@ class ConversationController(
                 ConversationAction.STAY -> {
                     // 上限防病态值（非退出限制）；prompt 建议 LLM 通常给 10~120 秒
                     val sec = decision.staySeconds.coerceIn(1, 1800)
-                    try {
-                        Thread.sleep(sec * 1000L)
+                    // 计时等待：当前会话在时间到之前来了新消息 → 立即唤醒（取消剩余计时），否则等满
+                    val interrupted = try {
+                        val wokenByMessage = lucatBot.awaitPendingInsert(conversationId, sec * 1000L)
+                        if (wokenByMessage) {
+                            log.info("停留计划 {}s，被新消息提前唤醒", sec)
+                            actionLog.append("停留 ${sec}s（新消息提前唤醒）")
+                        } else {
+                            actionLog.append("停留 ${sec}s")
+                        }
+                        false
                     } catch (e: InterruptedException) {
                         Thread.currentThread().interrupt()
                         log.info("停留 {}s 被中断，退出会话", sec)
-                        return
+                        true
                     }
-                    actionLog.append("停留 ${sec}s")
+                    if (interrupted) return
                     readMoreWithInsertStreak = 0 // 停留打断连续爬楼计数
                 }
 

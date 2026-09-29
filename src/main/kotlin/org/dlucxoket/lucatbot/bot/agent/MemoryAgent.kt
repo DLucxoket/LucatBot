@@ -32,8 +32,9 @@ class MemoryAgent(
 
     override fun handle(input: MemoryReflectRequest): MemoryReflectResult {
         return try {
-            val systemPrompt = buildPrompt(input)
-            val llmOutput = llm.ask(systemPrompt, "请判断是否有值得记录的内容，输出 JSON。")
+            val systemPrompt = buildSystemPrompt()
+            val userContent = buildUserContent(input)
+            val llmOutput = llm.ask(systemPrompt, userContent)
             MemoryReflectResult.parse(llmOutput)
         } catch (e: Exception) {
             log.warn("记忆整理失败（忽略，不影响退出流程）: {}", e.message)
@@ -41,20 +42,10 @@ class MemoryAgent(
         }
     }
 
-    private fun buildPrompt(input: MemoryReflectRequest): String {
-        val existing = input.existingMemory.ifBlank { "（暂无）" }
-        val timeLine = if (input.timeHint.isNotBlank()) {
-            "当前时间（北京时间）：${input.timeHint}\n"
-        } else {
-            ""
-        }
-        val content = input.conversationContent.ifBlank { "（无）" }
+    /** 任务说明（复盘/去重防矛盾/输出格式契约/kind 说明）→ system 消息 */
+    private fun buildSystemPrompt(): String {
         return """你正在复盘一段刚结束的对话，决定要不要往长期记忆里记东西。
-${timeLine}## 现有记忆（读取参考，避免重复或矛盾）
-$existing
-## 本次会话内容
-$content
-
+【现有记忆】是读取参考，避免重复或矛盾。
 ## 输出（严格遵循）
 只输出纯JSON（不裹代码块），结构如下：
 {"memories": [{"kind": "fact|opinion|event", "content": "一句话", "tags": ["标签"]}]}
@@ -68,5 +59,20 @@ $content
 - 普通闲聊、天气式对话不要记
 - 与现有记忆重复的不要记；与现有记忆矛盾的用新信息覆盖式表述（按最新信息记）
 """
+    }
+
+    /** 剧情数据（现有记忆 + 本次会话内容 + 时间）→ user 消息；纯数据 */
+    private fun buildUserContent(input: MemoryReflectRequest): String {
+        val existing = input.existingMemory.ifBlank { "（暂无）" }
+        val content = input.conversationContent.ifBlank { "（无）" }
+        val timeLine = if (input.timeHint.isNotBlank()) {
+            "\n当前时间（北京时间）：${input.timeHint}"
+        } else {
+            ""
+        }
+        return """【现有记忆】
+$existing
+【本次会话内容】
+$content$timeLine"""
     }
 }

@@ -92,6 +92,11 @@ class LucatBot {
      */
     private val pendingInsertQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()
 
+    /**
+     * 待插入队列的监视器：入队时 notifyAll，[awaitPendingInsert] 等待 STAY 期间的新消息
+     */
+    private val pendingInsertLock = Object()
+
     /** 当前 Shiro Bot 实例（用于发送消息） */
     @Volatile
     var shiroBot: com.mikuac.shiro.core.Bot? = null
@@ -213,20 +218,18 @@ class LucatBot {
     }
 
     /**
-     * 当前会话来了新消息 → 进待插入队列（不打断正在进行的 LLM 调用）
+     * 当前会话来了新消息 → 进待插入队列（不打断正在进行的 LLM 调用），
+     * 并唤醒正在 [awaitPendingInsert] 等待的会话循环
      */
     private fun addPendingInsert(event: MessageEvent, conversationId: String, isAtMe: Boolean, isAtAll: Boolean) {
-        pendingInsertQueue.add(
-            UnreadMessage(
-                conversationId = conversationId,
-                conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
-                senderId = event.sender.qqNumber,
-                senderName = event.sender.nickname,
-                content = extractText(event),
-                isAtMe = isAtMe,
-                isAtAll = isAtAll,
-                timestamp = event.timestamp
-            )
+        enqueuePendingInsert(
+            conversationId = conversationId,
+            senderId = event.sender.qqNumber,
+            senderName = event.sender.nickname,
+            content = extractText(event),
+            timestamp = event.timestamp,
+            isAtMe = isAtMe,
+            isAtAll = isAtAll
         )
     }
 
@@ -245,25 +248,52 @@ class LucatBot {
     }
 
     /**
-     * 直接往待插入队列塞一条新消息（编排层/测试用）
+     * 等待当前会话的新消息或超时（供会话内 STAY 计时使用）
+     *
+     * 计时未到但当前会话来了新消息 → 立即返回 true（取消剩余计时，唤醒机器人）；
+     * 等满 [timeoutMs] 仍无新消息 → 返回 false。
+     *
+     * @return true = 被新消息提前唤醒；false = 等满超时
+     */
+    fun awaitPendingInsert(conversationId: String, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        synchronized(pendingInsertLock) {
+            while (true) {
+                if (pendingInsertQueue.any { it.conversationId == conversationId }) return true
+                val remaining = deadline - System.currentTimeMillis()
+                if (remaining <= 0) return false
+                pendingInsertLock.wait(remaining)
+            }
+        }
+    }
+
+    /**
+     * 直接往待插入队列塞一条新消息（编排层/测试用），并唤醒等待中的会话循环
      */
     fun enqueuePendingInsert(
         conversationId: String,
         senderId: Long,
         senderName: String,
         content: String,
-        timestamp: Long = System.currentTimeMillis()
+        timestamp: Long = System.currentTimeMillis(),
+        isAtMe: Boolean = false,
+        isAtAll: Boolean = false
     ) {
-        pendingInsertQueue.add(
-            UnreadMessage(
-                conversationId = conversationId,
-                conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
-                senderId = senderId,
-                senderName = senderName,
-                content = content,
-                timestamp = timestamp
+        synchronized(pendingInsertLock) {
+            pendingInsertQueue.add(
+                UnreadMessage(
+                    conversationId = conversationId,
+                    conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
+                    senderId = senderId,
+                    senderName = senderName,
+                    content = content,
+                    isAtMe = isAtMe,
+                    isAtAll = isAtAll,
+                    timestamp = timestamp
+                )
             )
-        )
+            pendingInsertLock.notifyAll()
+        }
     }
 
     /**
