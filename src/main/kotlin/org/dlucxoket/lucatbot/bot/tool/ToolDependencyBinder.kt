@@ -32,8 +32,8 @@ class ToolDependencyBinder(
             chatHistoryService = chatHistoryService,
             lucatBot = lucatBot
         )
-        // 与发现/调用共享同一批实例（AgentDiscovery 单例索引）
-        val tools = org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getTools()
+        // 与发现/调用共享同一批实例（ToolDiscovery 单例列表）
+        val tools = ToolDiscovery.getTools()
         tools.forEach { it.bindServices(services) }
         log.info("Tool 服务依赖绑定完成（{} 个 Tool）", tools.size)
     }
@@ -51,7 +51,7 @@ class ToolDependencyBinder(
          */
         fun bindBotToAll(bot: com.mikuac.shiro.core.Bot) {
             if (lastBoundBot === bot) return
-            org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getTools().forEach { it.bindBot(bot) }
+            ToolDiscovery.getTools().forEach { it.bindBot(bot) }
             lastBoundBot = bot
         }
     }

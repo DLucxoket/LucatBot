@@ -1,7 +1,6 @@
-package org.dlucxoket.lucatbot.bot.agent
+package org.dlucxoket.lucatbot.bot.tool
 
 import io.github.classgraph.ClassGraph
-import org.dlucxoket.lucatbot.bot.tool.Tool
 import kotlin.reflect.KClass
 import kotlin.reflect.full.createInstance
 import kotlin.reflect.full.isSubclassOf
@@ -13,23 +12,20 @@ import kotlin.reflect.full.isSubclassOf
  * 线程安全（lazy 初始化，结果不可变）。
  *
  * 关键约定：发现/绑定/调用共享**同一个实例**——object 取
- * `objectInstance`，class 用无参构造只创建一次。此前缓存 KClass、
- * 各调用点各自 `createInstance()` 的做法会让 bindBot/bindServices
- * 落在被丢弃的一次性实例上（OOP 审查严重问题 #2），现已统一。
+ * `objectInstance`，class 用无参构造只创建一次；缓存 KClass、各调用点
+ * 各自 `createInstance()` 的做法会让 bindBot/bindServices 落在被丢弃的
+ * 一次性实例上（OOP 审查严重问题，已修）。
  *
- * 职责：
- * - 按名称（name 与类简单名双 key）查找工具实例
- * - 提供全部工具列表（供 ToolCatalog 组目录、Binder 绑定）
+ * 职责：提供全部工具实例（ToolCatalog 组目录/调用、Binder 绑定共用）。
+ * 按名查找由调用方在列表上做（唯一消费方 ToolCatalog 只有一个），
+ * 不再维护冗余的名称索引 API。
  */
-object AgentDiscovery {
+object ToolDiscovery {
 
-    private val log = org.slf4j.LoggerFactory.getLogger(AgentDiscovery::class.java)
+    private val log = org.slf4j.LoggerFactory.getLogger(ToolDiscovery::class.java)
 
-    /** 工具实例索引（name / 类简单名 → 实例），扫描期构建一次 */
-    private val toolIndex: Map<String, Tool<*, *>> by lazy { buildIndex() }
-
-    /** 全部可用工具实例（去重，保持扫描顺序）——命名避开 getTools() 的 JVM 签名 */
-    private val toolList: List<Tool<*, *>> by lazy { toolIndex.values.distinct() }
+    /** 全部可用工具实例（去重，保持扫描顺序），扫描期构建一次 */
+    private val toolList: List<Tool<*, *>> by lazy { scanTools() }
 
     /**
      * 获取全部工具实例（目录/绑定共用）
@@ -37,14 +33,9 @@ object AgentDiscovery {
     fun getTools(): List<Tool<*, *>> = toolList
 
     /**
-     * 按名称查找工具实例（name 或类简单名，精确匹配；不存在返回 null）
+     * 扫描所有 Tool 子类（一次性）
      */
-    fun findTool(name: String): Tool<*, *>? = toolIndex[name]
-
-    /**
-     * 扫描所有 Tool 子类并建索引（一次性）
-     */
-    private fun buildIndex(): Map<String, Tool<*, *>> {
+    private fun scanTools(): List<Tool<*, *>> {
         val instances = LinkedHashSet<Tool<*, *>>()
         ClassGraph()
             .enableClassInfo()
@@ -68,19 +59,20 @@ object AgentDiscovery {
                     }
             }
 
-        val index = LinkedHashMap<String, Tool<*, *>>()
+        // 重名检测（name 与类简单名都参与，冲突告警后保留先到者）
+        val seen = HashMap<String, Tool<*, *>>()
         instances.forEach { inst ->
             listOfNotNull(inst.name, inst::class.simpleName).forEach { key ->
-                val prev = index.put(key, inst)
+                val prev = seen.put(key, inst)
                 if (prev != null && prev !== inst) {
                     log.warn(
-                        "Tool 名称冲突 key={}：{} 与 {} 重名，后者覆盖",
+                        "Tool 名称冲突 key={}：{} 与 {} 重名，目录以先扫描到的为准",
                         key, prev::class.simpleName, inst::class.simpleName
                     )
                 }
             }
         }
         log.info("Tool 发现完成：{} 个", instances.size)
-        return index
+        return instances.toList()
     }
 }

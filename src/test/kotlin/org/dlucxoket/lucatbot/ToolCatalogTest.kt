@@ -125,4 +125,23 @@ class ToolCatalogTest {
         assertTrue(result.length < 200, "应被截断：len=${result.length}")
         assertTrue(result.contains("截断"), result)
     }
+
+    @Test
+    fun `orchestration-only tools are hidden from catalog and rejected on invoke`() {
+        val catalog = ToolCatalog(
+            toolsProvider = { listOf(CatalogFooTool(), CatalogBarTool()) },
+            orchestrationOnly = setOf("CatalogFooTool")
+        )
+
+        // 目录与计数都不含编排专属工具
+        assertFalse(catalog.catalog(null).contains("CatalogFooTool"), "编排专属工具不应进目录")
+        assertEquals(1, catalog.count(null))
+        assertFalse(catalog.catalog("foo").contains("### "), "搜索应只剩不可见工具的空结果")
+        assertTrue(catalog.catalog("foo").contains("没有匹配"), catalog.catalog("foo"))
+
+        // 调用被明确拒绝（大小写不敏感）
+        val rejected = catalog.invoke("catalogfootool", mapOf("keyword" to "x"))
+        assertTrue(rejected.contains("\"success\":false"), rejected)
+        assertTrue(rejected.contains("编排层专属管理"), rejected)
+    }
 }
