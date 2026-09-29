@@ -9,7 +9,7 @@ object GetMsgTool : Tool<GetMsgRequest, GetMsgResult>() {
     override val parameterHint: String = "JSON: {\"messageId\": 123}"
     override val inputClass = GetMsgRequest::class.java
     override fun handle(input: GetMsgRequest): GetMsgResult {
-        val b = bot ?: return GetMsgResult(error = "Bot 未绑定")
+        val b = bot ?: return GetMsgResult(success = false, error = "Bot 未绑定")
         return try {
             val msg = b.getMsg(input.messageId)?.data
             GetMsgResult(
@@ -17,7 +17,7 @@ object GetMsgTool : Tool<GetMsgRequest, GetMsgResult>() {
                 sender = msg?.sender?.nickname ?: "",
                 success = true
             )
-        } catch (e: Exception) { GetMsgResult(error = e.message) }
+        } catch (e: Exception) { GetMsgResult(success = false, error = e.message) }
     }
 }
 
@@ -28,11 +28,11 @@ object SendLikeTool : Tool<SendLikeRequest, SendLikeResult>() {
     override val parameterHint: String = "JSON: {\"userId\": 123, \"times\": 10}"
     override val inputClass = SendLikeRequest::class.java
     override fun handle(input: SendLikeRequest): SendLikeResult {
-        val b = bot ?: return SendLikeResult(error = "Bot 未绑定")
+        val b = bot ?: return SendLikeResult(success = false, error = "Bot 未绑定")
         return try {
             b.sendLike(input.userId, input.times)
             SendLikeResult(success = true)
-        } catch (e: Exception) { SendLikeResult(error = e.message) }
+        } catch (e: Exception) { SendLikeResult(success = false, error = e.message) }
     }
 }
 
@@ -43,11 +43,11 @@ object EmojiLikeTool : Tool<EmojiLikeRequest, EmojiLikeResult>() {
     override val parameterHint: String = "JSON: {\"messageId\": 123, \"code\": \"1\", \"isSet\": true}"
     override val inputClass = EmojiLikeRequest::class.java
     override fun handle(input: EmojiLikeRequest): EmojiLikeResult {
-        val b = bot ?: return EmojiLikeResult(error = "Bot 未绑定")
+        val b = bot ?: return EmojiLikeResult(success = false, error = "Bot 未绑定")
         return try {
             b.setMsgEmojiLike(input.messageId, input.code, input.isSet)
             EmojiLikeResult(success = true)
-        } catch (e: Exception) { EmojiLikeResult(error = e.message) }
+        } catch (e: Exception) { EmojiLikeResult(success = false, error = e.message) }
     }
 }
 
@@ -58,7 +58,7 @@ object LoginInfoTool : Tool<LoginInfoRequest, LoginInfoResult>() {
     override val parameterHint: String = "JSON: {}"
     override val inputClass = LoginInfoRequest::class.java
     override fun handle(input: LoginInfoRequest): LoginInfoResult {
-        val b = bot ?: return LoginInfoResult(error = "Bot 未绑定")
+        val b = bot ?: return LoginInfoResult(success = false, error = "Bot 未绑定")
         return try {
             val info = b.loginInfo?.data
             LoginInfoResult(
@@ -66,7 +66,7 @@ object LoginInfoTool : Tool<LoginInfoRequest, LoginInfoResult>() {
                 nickname = info?.nickname ?: "",
                 success = true
             )
-        } catch (e: Exception) { LoginInfoResult(error = e.message) }
+        } catch (e: Exception) { LoginInfoResult(success = false, error = e.message) }
     }
 }
 
@@ -77,11 +77,11 @@ object BotStatusTool : Tool<BotStatusRequest, BotStatusResult>() {
     override val parameterHint: String = "JSON: {}"
     override val inputClass = BotStatusRequest::class.java
     override fun handle(input: BotStatusRequest): BotStatusResult {
-        val b = bot ?: return BotStatusResult(error = "Bot 未绑定")
+        val b = bot ?: return BotStatusResult(success = false, error = "Bot 未绑定")
         return try {
             val status = b.status?.data
             BotStatusResult(online = status?.online ?: false, success = true)
-        } catch (e: Exception) { BotStatusResult(error = e.message) }
+        } catch (e: Exception) { BotStatusResult(success = false, error = e.message) }
     }
 }
 
@@ -92,10 +92,10 @@ object GroupSignTool : Tool<GroupSignRequest, GroupSignResult>() {
     override val parameterHint: String = "JSON: {\"groupId\": 123}"
     override val inputClass = GroupSignRequest::class.java
     override fun handle(input: GroupSignRequest): GroupSignResult {
-        val b = bot ?: return GroupSignResult(error = "Bot 未绑定")
+        val b = bot ?: return GroupSignResult(success = false, error = "Bot 未绑定")
         return try {
             b.sendGroupSign(input.groupId)
             GroupSignResult(success = true)
-        } catch (e: Exception) { GroupSignResult(error = e.message) }
+        } catch (e: Exception) { GroupSignResult(success = false, error = e.message) }
     }
 }

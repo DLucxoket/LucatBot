@@ -32,17 +32,21 @@ object UnreadSummaryTool : Tool<UnreadSummaryRequest, UnreadSummaryResult>() {
 
     override fun handle(input: UnreadSummaryRequest): UnreadSummaryResult {
         val bot = lucatBot ?: return UnreadSummaryResult(success = false, error = "Bot 未绑定")
-        val summary = bot.getUnreadSummary()
-        return UnreadSummaryResult(
-            conversations = summary.map { (convId, count) ->
-                UnreadConversation(
-                    conversationId = convId,
-                    count = count,
-                    isAtMe = bot.hasUnreadAtMe(convId),
-                    isAtAll = bot.hasUnreadAtAll(convId)
-                )
-            },
-            success = true
-        )
+        return try {
+            val summary = bot.getUnreadSummary()
+            UnreadSummaryResult(
+                conversations = summary.map { (convId, count) ->
+                    UnreadConversation(
+                        conversationId = convId,
+                        count = count,
+                        isAtMe = bot.hasUnreadAtMe(convId),
+                        isAtAll = bot.hasUnreadAtAll(convId)
+                    )
+                },
+                success = true
+            )
+        } catch (e: Exception) {
+            UnreadSummaryResult(success = false, error = e.message)
+        }
     }
 }

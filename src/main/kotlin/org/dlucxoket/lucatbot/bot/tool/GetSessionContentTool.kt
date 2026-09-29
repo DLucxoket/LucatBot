@@ -29,17 +29,20 @@ object GetSessionContentTool : Tool<GetSessionContentRequest, GetSessionContentR
     override fun handle(input: GetSessionContentRequest): GetSessionContentResult {
         val bot = lucatBot ?: return GetSessionContentResult(success = false, error = "Bot 未绑定")
 
-        // 从 LucatBot 获取并消费未读消息
-        val messages = bot.consumeUnread(input.conversationId)
-            .takeLast(input.limit)
-            .map {
-                SessionMessage(
-                    sender = it.senderName,
-                    content = it.content,
-                    timestamp = it.timestamp
-                )
-            }
-
-        return GetSessionContentResult(messages = messages, success = true)
+        return try {
+            // 从 LucatBot 获取并消费未读消息
+            val messages = bot.consumeUnread(input.conversationId)
+                .takeLast(input.limit)
+                .map {
+                    SessionMessage(
+                        sender = it.senderName,
+                        content = it.content,
+                        timestamp = it.timestamp
+                    )
+                }
+            GetSessionContentResult(messages = messages, success = true)
+        } catch (e: Exception) {
+            GetSessionContentResult(success = false, error = e.message)
+        }
     }
 }
