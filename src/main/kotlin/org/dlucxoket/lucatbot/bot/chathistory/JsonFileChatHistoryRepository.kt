@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot.bot.chathistory
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.dlucxoket.lucatbot.bot.storage.DebouncedFlusher
+import org.dlucxoket.lucatbot.bot.storage.JsonFiles
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -134,13 +135,13 @@ class JsonFileChatHistoryRepository(
 
     private fun doFlush() {
         if (!dirty) return
+        // 先清脏标志再写：写入期间发生的新 save() 会重新置位，不会被误清后丢一轮落盘
+        dirty = false
         try {
-            val file = File(filePath)
-            file.parentFile?.mkdirs()
-            mapper.writerWithDefaultPrettyPrinter().writeValue(file, cache.values.toList())
-            dirty = false
+            JsonFiles.writeAtomic(mapper, File(filePath), cache.values.toList())
             log.debug("聊天记录已持久化（${cache.size} 条）")
         } catch (e: Exception) {
+            dirty = true  // 写失败恢复标志，等待下次 flush / 退出兜底重试
             log.error("聊天记录持久化失败: ${e.message}")
         }
     }
@@ -153,7 +154,9 @@ class JsonFileChatHistoryRepository(
             records.forEach { cache[it.id] = it }
             log.info("已加载 ${records.size} 条聊天记录")
         } catch (e: Exception) {
-            log.error("聊天记录加载失败: ${e.message}")
+            // 加载失败绝不能让空缓存覆盖原文件：先改名备份，再以空缓存启动
+            JsonFiles.backupCorrupt(file)
+            log.error("聊天记录加载失败（${e.message}）：以空缓存启动，原文件已备份为 .corrupt-*，不会被覆盖")
         }
     }
 }
