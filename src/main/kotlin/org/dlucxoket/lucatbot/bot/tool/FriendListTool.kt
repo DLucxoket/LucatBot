@@ -11,7 +11,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.FriendInfo
  */
 object FriendListTool : Tool<FriendListRequest, FriendListResult>() {
     override val name: String = "FriendListTool"
-    override val description: String = "查看好友列表。返回所有好友的QQ号和昵称。"
+    override val description: String = "功能：查询机器人的好友列表，返回每个好友的 QQ 号、昵称和备注；keyword 非空时按昵称/备注做本地包含过滤。\n何时使用：需要知道机器人有哪些好友、按名字找人或拿 QQ 号时调用；主流程不自动拉好友列表，日常聊天决策一般用不到。"
     override val parameterHint: String = "JSON: {\"keyword\": \"可选，搜索关键词\"}"
     override val inputClass: Class<FriendListRequest> = FriendListRequest::class.java
 

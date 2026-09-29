@@ -10,7 +10,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.PokeResult
  */
 object PokeTool : Tool<PokeRequest, PokeResult>() {
     override val name: String = "PokeTool"
-    override val description: String = "戳一戳某人。模拟真人戳朋友的动作。"
+    override val description: String = "功能：向指定会话发送戳一戳（群聊戳群成员、私聊戳好友），返回是否成功。\n何时使用：想模拟真人主动戳人打招呼、催回复或回应别人的戳时调用；戳一戳旁路事件由编排层直接处理，本工具用于主动发起戳一戳的补充场景。"
     override val parameterHint: String = "JSON: {\"conversationId\": \"private:123\", \"userId\": 456}"
     override val inputClass: Class<PokeRequest> = PokeRequest::class.java
 

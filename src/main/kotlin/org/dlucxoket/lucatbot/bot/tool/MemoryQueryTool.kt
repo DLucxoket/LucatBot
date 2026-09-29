@@ -14,7 +14,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.MemoryQueryResult
 object MemoryQueryTool : Tool<MemoryQueryRequest, MemoryQueryResult>() {
     override val name: String = "MemoryQueryTool"
 
-    override val description: String = "查询机器人的记忆。输入关键词或用户QQ号，返回相关的记忆内容。"
+    override val description: String = "功能：查询长期记忆：传 userId 返回该用户的全部记忆，否则按 query 关键词搜索，返回命中的记忆文本列表。\n何时使用：决策 prompt 已自动注入当前会话对象的短期记忆与已有记忆摘要，常规对话无需手动查；仅当要按关键词跨对象检索、或需要 prompt 里没有的其它记忆时调用。"
 
     override val parameterHint: String = "JSON: {\"query\": \"关键词\", \"userId\": 123456}"
 

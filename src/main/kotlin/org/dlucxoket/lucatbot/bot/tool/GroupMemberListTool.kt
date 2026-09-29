@@ -11,7 +11,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.GroupMemberInfo
  */
 object GroupMemberListTool : Tool<GroupMemberListRequest, GroupMemberListResult>() {
     override val name: String = "GroupMemberListTool"
-    override val description: String = "查看群成员列表。返回指定群的所有成员QQ号、昵称和角色。"
+    override val description: String = "功能：查询指定群的全部成员，返回每个成员的 QQ 号、昵称、群名片和角色（member/admin/owner）。\n何时使用：需要知道群里有谁、按名字找某人的 QQ 号、或确认谁是管理员/群主时调用；日常聊天决策不需要全量成员列表。"
     override val parameterHint: String = "JSON: {\"groupId\": 123456}"
     override val inputClass: Class<GroupMemberListRequest> = GroupMemberListRequest::class.java
 

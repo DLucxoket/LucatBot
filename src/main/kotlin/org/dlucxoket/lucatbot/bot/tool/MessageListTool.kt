@@ -13,7 +13,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.MessageListResult
 object MessageListTool : Tool<MessageListRequest, MessageListResult>() {
     override val name: String = "MessageListTool"
 
-    override val description: String = "查看消息列表概览。获取指定会话的消息条数和最后一条内容。"
+    override val description: String = "功能：向 OneBot 拉取指定会话最近 20 条消息（不落库），返回消息条数和最后一条内容，用于快速概览。\n何时使用：消息列表界面由 MessageListController 直读未读队列生成、不经过本工具；仅当想快速看某会话有多少条消息、最后说了什么，而不想读完整聊天记录时调用。"
 
     override val parameterHint: String = "JSON: {\"targetId\": 123456, \"type\": \"group\"或\"private\"}"
 

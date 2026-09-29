@@ -10,7 +10,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.GroupDetailResult
  */
 object GroupDetailTool : Tool<GroupDetailRequest, GroupDetailResult>() {
     override val name: String = "GroupDetailTool"
-    override val description: String = "查看群详情。返回群号、群名、人数等信息。"
+    override val description: String = "功能：按群号查询单个群的详情，返回群号、群名、当前人数和人数上限。\n何时使用：已知群号想确认群名或群规模时调用；只是想找某个群建议改用 GroupListTool 按群名关键词过滤。"
     override val parameterHint: String = "JSON: {\"groupId\": 123456}"
     override val inputClass: Class<GroupDetailRequest> = GroupDetailRequest::class.java
 

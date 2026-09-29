@@ -12,7 +12,7 @@ import org.dlucxoket.lucatbot.bot.LucatBot
 object GetSessionContentTool : Tool<GetSessionContentRequest, GetSessionContentResult>() {
     override val name: String = "GetSessionContentTool"
 
-    override val description: String = "查看指定会话的聊天内容。进入会话后可以看到完整消息并标记已读。"
+    override val description: String = "功能：读取并消费指定会话的未读队列，返回最后 limit 条未读消息（发送者、内容、时间）；副作用是这些未读被清除，等于标记已读。\n何时使用：主流程的消息列表由 MessageListController 直读未读队列生成、进入会话由编排层自动拉聊天记录，均不经过本工具；仅当想主动点开某个会话、领取其未读并标记已读时才调用，注意调用后这些未读不再保留在队列里。"
 
     override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"limit\": 10}"
 

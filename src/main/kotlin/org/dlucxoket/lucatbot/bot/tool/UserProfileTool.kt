@@ -13,7 +13,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.UserProfileResult
 object UserProfileTool : Tool<UserProfileRequest, UserProfileResult>() {
     override val name: String = "UserProfileTool"
 
-    override val description: String = "查看用户主页/资料。根据QQ号获取用户的基本信息。"
+    override val description: String = "功能：按 QQ 号查询陌生人资料，返回昵称、性别、年龄（查不到时 found=false）。\n何时使用：只知道 QQ 号、想确认对方是谁时调用；查机器人自己的好友建议改用 FriendListTool。"
 
     override val parameterHint: String = "JSON: {\"qqNumber\": 123456789}"
 

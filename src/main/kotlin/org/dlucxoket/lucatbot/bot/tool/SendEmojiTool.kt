@@ -10,7 +10,7 @@ import com.mikuac.shiro.common.utils.MsgUtils
 object SendEmojiTool : Tool<SendEmojiRequest, SendEmojiResult>() {
     override val name: String = "SendEmojiTool"
 
-    override val description: String = "向指定会话发送表情/表情包。"
+    override val description: String = "功能：向指定会话发送一个 QQ 小表情，emojiName 传数字表情 ID（非数字则回退为默认笑脸 66），返回是否成功；成功后不自动写入聊天记录。\n何时使用：想用表情代替文字回应、或给文字补充情绪时调用；注意 send 动作只发文本，发表情需要单独调用本工具。"
 
     override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"emojiName\": \"66\"}"
 

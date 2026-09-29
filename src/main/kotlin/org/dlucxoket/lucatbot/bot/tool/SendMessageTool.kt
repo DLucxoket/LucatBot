@@ -11,7 +11,7 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
     override val name: String = "SendMessageTool"
 
-    override val description: String = "向指定会话发送文本消息。"
+    override val description: String = "功能：向指定会话发送文本消息，发送成功后自动写入聊天记录（isBot=true），发送失败（如被禁言）不写档并返回错误详情。\n何时使用：会话内的 send 动作由编排层自动调用本工具发送，并同步写短期记忆、记操作日志，常规回复无需手动调用；仅当在编排层未覆盖的场景需要补发消息时才调用，避免与 send 动作重复发送。"
 
     override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"content\": \"你好\"}"
 

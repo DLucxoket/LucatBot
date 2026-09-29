@@ -16,7 +16,7 @@ import org.dlucxoket.lucatbot.bot.tool.data.HistoryMessageItem
 object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
     override val name: String = "ChatHistoryTool"
 
-    override val description: String = "查询聊天记录。返回指定会话的最近消息列表。"
+    override val description: String = "功能：查询指定会话的最近聊天记录，先尝试向 OneBot 爬楼拉取远端历史（拉到的消息自动落库去重），再从本地存储读取，返回发送者、内容、时间的列表。\n何时使用：进入会话时编排层已自动调本工具拉最近 10 条、read_more 动作也自动按条数翻历史，常规阅读无需手动调用；仅当要查看其它会话、需要比默认更多更早的历史，或想主动触发一次爬楼落库时才调用。"
 
     override val parameterHint: String = "JSON: {\"targetId\": 123456, \"count\": 10, \"type\": \"group\"或\"private\"}"
 

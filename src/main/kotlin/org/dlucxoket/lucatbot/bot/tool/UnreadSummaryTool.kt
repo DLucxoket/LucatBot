@@ -16,10 +16,7 @@ import org.dlucxoket.lucatbot.bot.LucatBot
 object UnreadSummaryTool : Tool<UnreadSummaryRequest, UnreadSummaryResult>() {
     override val name: String = "UnreadSummaryTool"
 
-    override val description: String = """
-        查看未读消息概况。返回哪些会话有未读消息和条数，不看内容。
-        用于快速了解谁找你了，模拟真人扫一眼消息列表。
-    """.trimIndent()
+    override val description: String = "功能：汇总当前未读队列，返回每个有未读的会话 ID、未读条数、是否含 @我 和 @全体；只读不消费未读，也不返回消息内容。\n何时使用：消息列表由 MessageListController 直接汇总未读生成，主流程不调用本工具；仅当想快速扫一眼谁找你、各有几条、有没有 @我 的概览而不想看内容时调用。"
 
     override val parameterHint: String = "JSON: {}"
 

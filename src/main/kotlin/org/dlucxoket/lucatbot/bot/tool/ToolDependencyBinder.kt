@@ -1,7 +1,6 @@
 package org.dlucxoket.lucatbot.bot.tool
 
 import jakarta.annotation.PostConstruct
-import kotlin.reflect.full.createInstance
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
@@ -33,13 +32,10 @@ class ToolDependencyBinder(
             chatHistoryService = chatHistoryService,
             lucatBot = lucatBot
         )
-        var count = 0
-        org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getToolClasses().forEach { kClass ->
-            val tool = kClass.objectInstance ?: kClass.createInstance()
-            tool.bindServices(services)
-            count++
-        }
-        log.info("Tool 服务依赖绑定完成（{} 个 Tool）", count)
+        // 与发现/调用共享同一批实例（AgentDiscovery 单例索引）
+        val tools = org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getTools()
+        tools.forEach { it.bindServices(services) }
+        log.info("Tool 服务依赖绑定完成（{} 个 Tool）", tools.size)
     }
 
     companion object {
@@ -55,10 +51,7 @@ class ToolDependencyBinder(
          */
         fun bindBotToAll(bot: com.mikuac.shiro.core.Bot) {
             if (lastBoundBot === bot) return
-            org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getToolClasses().forEach { kClass ->
-                val tool = kClass.objectInstance ?: kClass.createInstance()
-                tool.bindBot(bot)
-            }
+            org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getTools().forEach { it.bindBot(bot) }
             lastBoundBot = bot
         }
     }
