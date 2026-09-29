@@ -73,10 +73,13 @@ class ChatHistoryService(
     /**
      * 记录一条历史/爬楼拉到的消息（已读）
      *
-     * 用稳定 id 做去重，避免反复爬楼写入重复记录。
+     * 带 message_id 时与实时入档同用稳定 id（`msg:<会话>:<id>`）——同一物理消息
+     * 靠同一主键 upsert 天然合一，不再产生孪生双份；无 id（如 Shiro 类型化
+     * 回退路径）才落 `hist:` 兜底 id，由读取 fold 与启动清理收敛。
      *
      * @param senderName 展示名（群聊群名片优先，与实时入档同一规则）
      * @param senderNickname QQ 昵称（与展示名不同时供 prompt 注解）
+     * @param messageId 爬楼响应里的 message_id（可空）
      */
     fun recordHistoryMessage(
         conversationId: String,
@@ -85,10 +88,12 @@ class ChatHistoryService(
         content: String,
         timestamp: Long,
         isFromBot: Boolean,
-        senderNickname: String? = null
+        senderNickname: String? = null,
+        messageId: Long? = null
     ) {
         val record = ChatMessageRecord(
-            id = "hist:$conversationId:$senderId:$timestamp:${content.hashCode()}",
+            id = messageId?.let { "msg:$conversationId:$it" }
+                ?: "hist:$conversationId:$senderId:$timestamp:${content.hashCode()}",
             conversationId = conversationId,
             senderId = senderId,
             senderName = senderName,
@@ -96,6 +101,7 @@ class ChatHistoryService(
             content = content,
             messageType = detectMessageType(content),
             timestamp = timestamp,
+            messageId = messageId,
             isFromBot = isFromBot
         )
         repository.save(record)
@@ -104,63 +110,53 @@ class ChatHistoryService(
     /**
      * 获取某个会话的聊天历史
      *
-     * 读取时按「物理消息」去重：同一发送者、10s 内、归一化内容相同、且至少一条来自
-     * 爬楼（hist: id）的记录视为同一消息——实时入档与爬楼入档各写一条，
-     * 不去重会让 LLM 看到人人复读的假象。两条都非 hist 的同内容记录
-     * （疑似真实连发）保留。
+     * 读取时按「物理消息」折叠孪生行（规则见 [ChatHistoryFold]）：实时入档与
+     * 爬楼入档各写一条的存量数据不去重会让 LLM 看到人人复读的假象；
+     * 真实连发（两个 UUID 行 / 两个不同 msg: 行）保留。
      */
     fun getHistory(conversationId: String, limit: Int = 20): List<ChatMessageRecord> {
-        // limit=0 表示全量（JsonFileChatHistoryRepository 约定），先去重再截断
+        // limit=0 表示全量（JsonFileChatHistoryRepository 约定），先折叠再截断
         val all = repository.findByConversation(conversationId, 0)
-        val deduped = dedupeByPhysicalMessage(all)
+        val deduped = ChatHistoryFold.fold(all).kept
         return if (limit > 0) deduped.takeLast(limit) else deduped
     }
 
-    /** CQ 码段（[CQ:at,qq=1] 等），比较内容前剥掉 */
-    private val cqCodeRegex = Regex("""\[CQ:[^\]]*]""")
-
-    /** describe 富占位符（[图片]/[表情:14]/@昵称(QQ)/回复 #id：等），比较内容前剥掉 */
-    private val richPlaceholderRegex = Regex(
-        """\[图片[^\]]*]|\[表情:[^\]]*]|\[表情[^\]]*]|@\S+\(\d+\)|@\d+|回复\s*#\d+：|回复\s*@\S+\(\d+\)："""
-    )
-
-    /** 同一物理消息的时间容差（实时入档用本地时钟，爬楼用服务端秒级时间戳） */
-    private val duplicateWindowMs = 10_000L
-
-    private fun normalize(content: String): String =
-        content.replace(cqCodeRegex, "").replace(richPlaceholderRegex, "").trim()
-
-    /** bot 记录 senderId 不一致（实时 0 / 爬楼 selfId），用 isFromBot 区分即可 */
-    private fun sameSender(a: ChatMessageRecord, b: ChatMessageRecord): Boolean =
-        a.isFromBot == b.isFromBot && (a.isFromBot || a.senderId == b.senderId)
-
-    private fun dedupeByPhysicalMessage(records: List<ChatMessageRecord>): List<ChatMessageRecord> {
-        val kept = mutableListOf<ChatMessageRecord>()
-        for (record in records.sortedBy { it.timestamp }) {
-            val dupIndex = kept.indexOfFirst { existing ->
-                sameSender(existing, record) &&
-                    kotlin.math.abs(existing.timestamp - record.timestamp) <= duplicateWindowMs &&
-                    normalize(existing.content) == normalize(record.content) &&
-                    (record.id.startsWith("hist:") || existing.id.startsWith("hist:"))
-            }
-            if (dupIndex < 0) {
-                kept += record
-            } else {
-                // 保留更干净的版本（不含 CQ 码的对 prompt 友好），位置不变；
-                // 同时把 messageId 合并过来——被引用解析（回复 #id）靠它定位，
-                // 爬楼记录没有该字段（DTO 未映射），id 来自实时/发送记录
-                val existing = kept[dupIndex]
-                val keptCleaner = if (existing.content.contains("[CQ:") && !record.content.contains("[CQ:")) {
-                    record
-                } else {
-                    existing
+    /**
+     * 启动清理：把存储层的孪生双份行合并为一条（幂等，每次启动跑一遍）
+     *
+     * 存量双份（实时/回执行 × 爬楼 `hist:` 行）此前只在读取时折叠、存储层
+     * 一直双倍膨胀——这里用同一套 [ChatHistoryFold] 规则落到存储：
+     * - 内容取干净者、id 取权威者（`msg:` > UUID > `hist:`）、messageId 补齐 → save
+     * - 被并掉的原始 id → delete
+     *
+     * 与 json 启动同步（INSERT IGNORE 按 id）配合：迁移源同步折叠后不再回灌。
+     */
+    fun collapseStoredTwins() {
+        val all = repository.findAll()
+        if (all.isEmpty()) return
+        var updated = 0
+        var removed = 0
+        for (rows in all.groupBy { it.conversationId }.values) {
+            if (rows.size < 2) continue
+            val originalById = rows.associateBy { it.id }
+            val folded = ChatHistoryFold.fold(rows)
+            for (merged in folded.kept) {
+                val original = originalById[merged.id]
+                if (original != null && original != merged) {
+                    repository.save(merged)
+                    updated++
                 }
-                kept[dupIndex] = keptCleaner.copy(
-                    messageId = keptCleaner.messageId ?: existing.messageId ?: record.messageId
-                )
+            }
+            val keptIds = folded.kept.mapTo(mutableSetOf()) { it.id }
+            for (id in originalById.keys.filterNot { it in keptIds }) {
+                repository.delete(id)
+                removed++
             }
         }
-        return kept
+        if (updated > 0 || removed > 0) {
+            repository.flush()
+            log.info("启动清理：合并孪生双份 {} 行、更新 {} 行", removed, updated)
+        }
     }
 
     /**

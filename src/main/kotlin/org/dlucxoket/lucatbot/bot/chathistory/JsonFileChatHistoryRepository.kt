@@ -52,6 +52,15 @@ class JsonFileChatHistoryRepository(
             .let { if (limit > 0) it.takeLast(limit) else it }
     }
 
+    override fun findAll(): List<ChatMessageRecord> = cache.values.toList()
+
+    override fun delete(id: String) {
+        if (cache.remove(id) != null) {
+            dirty = true
+            flusher.markDirty()
+        }
+    }
+
     override fun flush() {
         flusher.flushNow()  // 走互斥锁，避免与防抖调度线程并发写同一 .tmp
     }

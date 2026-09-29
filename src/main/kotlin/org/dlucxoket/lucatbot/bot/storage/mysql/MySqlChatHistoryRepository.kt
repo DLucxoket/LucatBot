@@ -51,6 +51,13 @@ class MySqlChatHistoryRepository(
         return storage.query(sql.toString(), *params.toTypedArray(), map = ::mapRow)
     }
 
+    override fun findAll(): List<ChatMessageRecord> =
+        storage.query("SELECT * FROM chat_history", map = ::mapRow)
+
+    override fun delete(id: String) {
+        storage.update("DELETE FROM chat_history WHERE id = ?", id)
+    }
+
     override fun flush() {
         // no-op：写入即落库（见 KDoc）
     }

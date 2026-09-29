@@ -55,8 +55,10 @@ data class ChatMessageRecord(
     /**
      * OneBot message_id（被引用解析的键：`回复 #id` 靠它定位到具体消息）
      *
-     * 来源：实时事件与发送回执（爬楼 DTO 未映射该字段）；缺失为 null，
-     * 读取折叠时会把爬楼孪生记录的 id 合并到保留记录上。旧数据无此字段。
+     * 来源：实时事件、发送回执（`MsgId` 对象，非裸数字）、爬楼自定义 DTO
+     * 三条路径；带 id 一律用稳定 id `msg:<会话>:<id>`（同一物理消息同主键合一）。
+     * 缺失为 null（如 Shiro 类型化回退路径），此时 id 为 `hist:`/UUID 兜底，
+     * 由读取折叠与启动清理收敛。旧数据无此字段。
      */
     val messageId: Long? = null,
 

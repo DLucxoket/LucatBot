@@ -1,9 +1,14 @@
 package org.dlucxoket.lucatbot.bot
 
+import com.fasterxml.jackson.module.kotlin.readValue
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryFold
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryRepository
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord
 import org.dlucxoket.lucatbot.bot.chathistory.JsonFileChatHistoryRepository
 import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryRepository
+import org.dlucxoket.lucatbot.bot.storage.JsonFiles
 import org.dlucxoket.lucatbot.bot.storage.mysql.MySqlChatHistoryRepository
 import org.dlucxoket.lucatbot.bot.storage.mysql.MySqlConfig
 import org.dlucxoket.lucatbot.bot.storage.mysql.MySqlMemoryRepository
@@ -13,6 +18,7 @@ import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
 import org.dlucxoket.lucatbot.bot.todo.TodoRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.boot.ApplicationRunner
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
@@ -69,6 +75,44 @@ class StorageConfig(
     @Bean(destroyMethod = "shutdown")
     fun todoRepository(): TodoRepository =
         if (useMySql) MySqlTodoRepository(mysql) else JsonFileTodoRepository()
+
+    /**
+     * 启动清理：把聊天记录存储层的孪生双份行合并为一条（仅 mysql 模式）
+     *
+     * 实时/回执行 × 爬楼 `hist:` 行的存量双份一直双倍膨胀——启动时用
+     * [ChatHistoryFold] 规则收敛（id 以 `msg:` 为准）；随后折叠迁移源
+     * `data/chat-history.json`，否则下次启动 import（INSERT IGNORE 按 id）
+     * 会把本次从库里清掉的行再插回来（ping-pong）。
+     *
+     * json 模式（含 @SpringBootTest 上下文）不跑：避免触碰正在活跃写入的
+     * 真实 json 文件。清理失败只 warn，绝不阻塞启动。
+     */
+    @Bean
+    fun chatHistoryCollapseRunner(chatHistoryService: ChatHistoryService): ApplicationRunner = ApplicationRunner {
+        if (!useMySql) return@ApplicationRunner
+        runCatching {
+            chatHistoryService.collapseStoredTwins()
+            collapseSourceJsonTwins()
+        }.onFailure { log.warn("聊天记录双份行清理失败（跳过，不影响启动）: {}", it.message) }
+    }
+
+    /** 折叠迁移源 data/chat-history.json 里的孪生双份（防下次 import 回灌已清理的行） */
+    private fun collapseSourceJsonTwins() {
+        val file = java.io.File("data/chat-history.json")
+        if (!file.exists()) return
+        val mapper = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
+        val rows = runCatching {
+            mapper.readValue<List<ChatMessageRecord>>(file)
+        }.getOrElse { e ->
+            log.warn("迁移源 json 解析失败，跳过孪生折叠: {}", e.message)
+            return
+        }
+        val folded = rows.groupBy { it.conversationId }
+            .values.flatMap { ChatHistoryFold.fold(it).kept }
+        if (folded.size >= rows.size) return
+        JsonFiles.writeAtomic(mapper, file, folded)
+        log.info("迁移源 json 孪生折叠：{} → {} 条", rows.size, folded.size)
+    }
 
     init {
         log.info(

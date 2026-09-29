@@ -155,9 +155,12 @@ internal class MainPlugin: BotPlugin() {
                 val content = decision.content.orEmpty()
                 val resp = bot.sendMsg(event, content, false)
                 if (resp?.status == "ok") {
-                    // 回执 message_id 入档：网友回复这条戳一戳回应时引用可解析
+                    // 回执 message_id 入档：网友回复这条戳一戳回应时引用可解析。
+                    // data 是 MsgId 对象（as? Number 曾恒为 null → 全部 UUID 兜底行）
+                    val receiptId = (resp.data as? com.mikuac.shiro.dto.action.common.MsgId)?.messageId?.toLong()
+                        ?: (resp.data as? Number)?.toLong()
                     chatHistoryService.recordBotReply(
-                        "private:${event.userId}", content, (resp.data as? Number)?.toLong()
+                        "private:${event.userId}", content, receiptId
                     )
                     sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, content, isBot = true)
                     actionLog.append("戳一戳回应：$content")

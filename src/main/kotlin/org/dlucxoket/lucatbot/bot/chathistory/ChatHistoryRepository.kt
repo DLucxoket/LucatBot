@@ -29,6 +29,16 @@ interface ChatHistoryRepository {
     fun findByConversation(conversationId: String, limit: Int = 0, before: Long = 0): List<ChatMessageRecord>
 
     /**
+     * 全部记录（启动清理 `collapseStoredTwins` 用——按会话分组折叠孪生双份行）
+     */
+    fun findAll(): List<ChatMessageRecord>
+
+    /**
+     * 删除一条记录（启动清理时移除被并掉的孪生行；不存在则为无操作）
+     */
+    fun delete(id: String)
+
+    /**
      * 持久化
      */
     fun flush()

@@ -107,6 +107,13 @@ class MySqlStorageSmokeTest {
         repo.save(all[0].copy(content = "改过了"))
         assertEquals(3, repo.findByConversation(conv, 0).size)
         assertEquals("改过了", repo.findByConversation(conv, 0).first().content)
+
+        // findAll / delete——启动清理（collapseStoredTwins）依赖的两个接口操作
+        assertEquals(3, repo.findAll().count { it.conversationId == conv }, "findAll 按会话计数")
+        repo.delete("m3")
+        assertEquals(2, repo.findByConversation(conv, 0).size, "delete 移除指定行")
+        repo.delete("m3")  // 不存在 → 无操作
+        assertEquals(2, repo.findByConversation(conv, 0).size, "重复删除是无操作")
         clean(storage)
     }
 

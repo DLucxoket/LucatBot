@@ -146,10 +146,10 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 
 | 库 | 用途 |
 |----|------|
-| `com.mikuac:shiro:2.5.0` | OneBot 协议（QQ 机器人框架） |
+| `com.mikuac:shiro:2.5.3` | OneBot 协议（QQ 机器人框架） |
 | `dev.langchain4j:langchain4j-open-ai-spring-boot-starter` | OpenAI 兼容 LLM 客户端 |
 | `io.github.classgraph:classgraph` | 运行时 Agent/Tool 类自动发现 |
-| `com.fasterxml.jackson` | JSON↔OOP 边界序列化（Shiro 传递依赖） |
+| `com.fasterxml.jackson` | JSON↔OOP 边界序列化（`jackson-module-kotlin:2.20.0` 显式依赖；Shiro 自身走 Jackson 3/`tools.jackson`，见「容易搞错的地方」） |
 | `com.mysql:mysql-connector-j` | MySQL 驱动（`storage.type=mysql` 默认后端；代码只用 java.sql 标准接口） |
 
 ## Shiro 框架参考
@@ -167,6 +167,9 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 - **Gradle 使用国内镜像**——`gradle-wrapper.properties` 指向 `mirrors.aliyun.com`。
 - **Spring Boot 4.0.3 + Kotlin 2.2.21**——版本很新，不要假设 Spring Boot 3.x 写法。
 - **Shiro API**：`ArrayMsg.type` 是 `MsgTypeEnum` 枚举；`sendMsg(event, msg, autoEscape)` 签名。
+- **发送回执的 `data` 是 `MsgId` 对象**（`ActionData<MsgId>`，字段 `messageId: Integer`）——`resp.data as? Number` 恒为 null；写入档前必须 `(resp.data as? MsgId)?.messageId?.toLong()`。
+- **类型化爬楼 DTO 拿不到 message_id**（`GetMsgListResp → MsgResp → MessageEvent` 没有该字段）——需要 id 时走 `Bot.customRequest(ActionPath, params, Class<T>)` + 自定义 DTO（见 `bot/tool/OneBotHistoryDto.kt`），参数键与 Shiro 内部一致（`group_id`/`user_id`/`count`/`reverseOrder`）。
+- **Shiro 2.5.x 走 Jackson 3**：`JsonUtils`/`customRequest` 的 JsonNode 类型是 `tools.jackson.databind.JsonNode`（Spring Boot 4 同代），但**注解包仍是 `com.fasterxml.jackson.annotation`**（两代通用）——自定义 DTO 的 JsonNode 字段必须用 `tools.jackson` 类型，注解不用换。
 - **Shiro 2.5.0 + Spring Boot 4 / Tomcat 11 兼容性**：Tomcat 11 在 WebSocket 升级后回收 request，导致 `ConnectionUtils.parseSelfId` 读 `getHandshakeHeaders()` 崩溃。已通过 `CachedHandshakeSessionDecorator` 缓存 handshake headers 修复（见 `adapter/onebot/config/ShiroWebSocketConfig.kt`）。
 - **Shiro WS 端点**：默认在 Spring Boot Tomcat 主端口（8080）的 `/ws/shiro` 路径，不是独立端口。
 - **NapCat 连接地址**：`ws://localhost:8080/ws/shiro?self_id=机器人QQ号`

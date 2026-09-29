@@ -52,8 +52,11 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
             }
 
             // 发出后必须写入聊天记录（isBot=true）；回执里的 message_id 一并入档，
-            // 网友回复这条消息时引用解析（回复 #id）才能定位到它
-            val sentMessageId = (resp?.data as? Number)?.toLong()
+            // 网友回复这条消息时引用解析（回复 #id）才能定位到它。
+            // 回执 data 是 MsgId 对象（ActionData<MsgId>），不是裸数字——
+            // 曾用 `as? Number` 恒为 null，机器人消息全部丢失 id（UUID 兜底行）
+            val sentMessageId = (resp?.data as? com.mikuac.shiro.dto.action.common.MsgId)?.messageId?.toLong()
+                ?: (resp?.data as? Number)?.toLong()
             chatHistoryService?.recordBotReply(input.conversationId, input.content, sentMessageId)
 
             SendMessageResult(success = true)
