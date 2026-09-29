@@ -131,6 +131,9 @@ class MemoryService(
      *
      * 模拟真人回忆："我记得这个人..."
      *
+     * **每行带写入日期**（记于MM-DD，跨年带年份）——无日期的旧记忆会被
+     * LLM 当成刚发生的事（实盘出过：昨天的对话被当成当前剧情去接话）。
+     *
      * @param factLimit/opinionLimit/eventLimit/relationLimit 各类条数上限——
      *   会话注入用默认值（控制 prompt 体积）；**退出整理判重时调大**
      *   （看不见已有记忆 → LLM 会把同一件事再记一遍）
@@ -155,22 +158,30 @@ class MemoryService(
 
         if (facts.isNotEmpty()) {
             sb.appendLine("事实：")
-            facts.take(factLimit).forEach { sb.appendLine("- ${it.content}") }
+            facts.take(factLimit).forEach { sb.appendLine("- ${it.content}（记于${datedOn(it.createdAt)}）") }
         }
         if (opinions.isNotEmpty()) {
             sb.appendLine("看法：")
-            opinions.take(opinionLimit).forEach { sb.appendLine("- ${it.content}") }
+            opinions.take(opinionLimit).forEach { sb.appendLine("- ${it.content}（记于${datedOn(it.createdAt)}）") }
         }
         if (events.isNotEmpty()) {
             sb.appendLine("经历：")
-            events.take(eventLimit).forEach { sb.appendLine("- ${it.content}") }
+            events.take(eventLimit).forEach { sb.appendLine("- ${it.content}（记于${datedOn(it.createdAt)}）") }
         }
         if (relations.isNotEmpty()) {
             sb.appendLine("人际关系：")
-            relations.take(relationLimit).forEach { sb.appendLine("- ${it.content}") }
+            relations.take(relationLimit).forEach { sb.appendLine("- ${it.content}（记于${datedOn(it.createdAt)}）") }
         }
 
         return sb.toString().trim()
+    }
+
+    /** 记忆写入日期（MMdd；跨年带年份）——摘要行尾的「（记于…）」 */
+    private fun datedOn(epochMs: Long): String {
+        val zone = java.time.ZoneId.of("Asia/Shanghai")
+        val date = java.time.Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
+        val pattern = if (date.year == java.time.LocalDate.now(zone).year) "MM-dd" else "yyyy-MM-dd"
+        return date.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
     }
 
     /**

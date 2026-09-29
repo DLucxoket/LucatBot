@@ -166,7 +166,9 @@ class ChatHistoryService(
     }
 
     /**
-     * 获取聊天历史摘要（注入 LLM prompt）
+     * 获取聊天历史摘要（注入 LLM prompt——当前消费方是记忆整理）
+     *
+     * 已入记忆的行带「（已记忆）」尾标——整理智能体据此跳过、不再改写复读。
      */
     fun getHistorySummary(conversationId: String, limit: Int = 10): String {
         val records = getHistory(conversationId, limit)
@@ -179,8 +181,42 @@ class ChatHistoryService(
             } else {
                 "${formatSenderDisplay(record.senderName, record.senderNickname)}(${record.senderId})"
             }
-            "$role: ${record.content}"
+            val marker = if (record.memorized) "（已记忆）" else ""
+            "$role: ${record.content}$marker"
         }
+    }
+
+    /**
+     * 标记某条消息**已入记忆**（提取器/整理写入记忆后调用）
+     *
+     * 定位：优先 messageId（实时入档行精确命中）；否则按内容匹配第一条
+     * 非机器人未打标行（内容经引用解析改写过的行可能匹配不上——匹配不上
+     * 就是无操作，绝不误标）。同一消息孪生行由 fold 的 OR 合并共享标记。
+     *
+     * @param messageId 来源消息的 OneBot id（可空）
+     * @param content   来源消息内容（prompt 渲染前的原文）
+     */
+    fun markMemorized(conversationId: String, messageId: Long?, content: String) {
+        if (messageId == null && content.isBlank()) return
+        val target = repository.findByConversation(conversationId, 0).firstOrNull { r ->
+            !r.isFromBot && !r.memorized &&
+                ((messageId != null && r.messageId == messageId) || r.content == content)
+        } ?: return
+        repository.save(target.copy(memorized = true))
+        log.debug("标记已入记忆: {} id={} {}", conversationId, target.id, content.take(40))
+    }
+
+    /**
+     * 标记最近 [limit] 条消息**已入记忆**（退出整理写过记忆后调用——整段
+     * 窗口已被整理过一轮，下次退出整理不再从中改写复读）
+     *
+     * 只标非机器人行（「我」的发言不是记忆素材）。
+     */
+    fun markWindowMemorized(conversationId: String, limit: Int = 30) {
+        val rows = getHistory(conversationId, limit).filter { !it.isFromBot && !it.memorized }
+        if (rows.isEmpty()) return
+        rows.forEach { repository.save(it.copy(memorized = true)) }
+        log.info("记忆整理后标记 {} 条消息已入记忆: {}", rows.size, conversationId)
     }
 
     /**

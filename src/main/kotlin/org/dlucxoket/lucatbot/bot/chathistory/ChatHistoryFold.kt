@@ -93,7 +93,9 @@ object ChatHistoryFold {
             val merged = contentSource.copy(
                 id = idSource.id,
                 messageId = contentSource.messageId ?: survivor.messageId ?: record.messageId,
-                imageUrls = contentSource.imageUrls ?: survivor.imageUrls ?: record.imageUrls
+                imageUrls = contentSource.imageUrls ?: survivor.imageUrls ?: record.imageUrls,
+                // 已记忆标记任一行为真即真（孪生行可能一条被打标一条没有）
+                memorized = contentSource.memorized || survivor.memorized || record.memorized
             )
             listOf(survivor.id, record.id)
                 .filter { it != merged.id && it !in dropped }

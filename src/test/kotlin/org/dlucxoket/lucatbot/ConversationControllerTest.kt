@@ -335,6 +335,34 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `extractor marks source line memorized after writing`() {
+        // 提取器从对方消息写出记忆后给该行打标——退出整理时不再改写复读
+        val chatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-mark", ".json").absolutePath)
+        )
+        chatHistoryService.recordHistoryMessage(
+            conversationId = "private:123", senderId = 123L, senderName = "用户A",
+            content = "我叫小明", timestamp = 1_000L, isFromBot = false, messageId = 7L
+        )
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"好名字"}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, _) = buildController(
+            llm,
+            chatHistoryService = chatHistoryService,
+            historyLines = listOf(
+                HistoryMessageItem(sender = "用户A", content = "我叫小明", timestamp = 1_000L, senderId = 123L, messageId = 7L)
+            )
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val summary = chatHistoryService.getHistorySummary("private:123", 10)
+        assertTrue(summary.contains("我叫小明（已记忆）"), "提取器写记忆后源行打标：$summary")
+    }
+
+    @Test
     fun `new message note carries message id so llm can reply to it`() {
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val (controller, lucatBot, _) = buildController(llm)

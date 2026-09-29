@@ -99,6 +99,7 @@ class MySqlStorage(private val config: MySqlConfig) {
             // 加列演进：老库已有 chat_history 但缺新列（IF NOT EXISTS 不会补列）
             ensureColumn(conn, "chat_history", "sender_nickname", "sender_nickname VARCHAR(128) NULL")
             ensureColumn(conn, "chat_history", "image_urls", "image_urls TEXT NULL")
+            ensureColumn(conn, "chat_history", "memorized", "memorized BOOLEAN NOT NULL DEFAULT FALSE")
             if (legacy != null) restoreLegacy(conn, legacy)
         }
         if (config.importFromJson) {
@@ -361,7 +362,7 @@ class MySqlStorage(private val config: MySqlConfig) {
         legacy.chat?.forEach { c ->
             update(
                 conn, MySqlChatHistoryRepository.INSERT,
-                c.id, c.conv, c.senderId, c.senderName, null, null, c.content,
+                c.id, c.conv, c.senderId, c.senderName, null, null, false, c.content,
                 c.type, MySqlTime.of(c.tsMs), c.messageId, c.isBot
             )
         }
@@ -402,6 +403,7 @@ class MySqlStorage(private val config: MySqlConfig) {
             arrayOf(
                 r.id, r.conversationId, r.senderId, r.senderName, r.senderNickname,
                 r.imageUrls?.let { mapper.writeValueAsString(it) },
+                r.memorized,
                 r.content,
                 r.messageType.name, MySqlTime.of(r.timestamp), r.messageId, r.isFromBot
             )
@@ -465,6 +467,7 @@ class MySqlStorage(private val config: MySqlConfig) {
                 sender_name VARCHAR(128) NOT NULL DEFAULT '',
                 sender_nickname VARCHAR(128) NULL,
                 image_urls TEXT NULL,
+                memorized BOOLEAN NOT NULL DEFAULT FALSE,
                 content TEXT NOT NULL,
                 message_type VARCHAR(16) NOT NULL DEFAULT 'TEXT',
                 sent_at DATETIME(3) NOT NULL,

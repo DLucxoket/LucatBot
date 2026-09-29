@@ -110,6 +110,100 @@ class MemoryDedupeTest {
     )
 
     // ------------------------------------------------------------------
+    // 「已记忆」标记（防退出整理把同一段对话改写一遍又记一遍）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `markMemorized annotates summary and is idempotent`() {
+        val f = Fixture()
+        f.chat.recordHistoryMessage(
+            conversationId = "private:5", senderId = 5L, senderName = "甲",
+            content = "我叫小明", timestamp = 1_000L, isFromBot = false, messageId = 42L
+        )
+        // messageId 精确定位
+        f.chat.markMemorized("private:5", 42L, "我叫小明")
+        assertTrue(f.chat.getHistorySummary("private:5", 10).contains("我叫小明（已记忆）"),
+            "摘要行尾带（已记忆）：${f.chat.getHistorySummary("private:5", 10)}")
+        // 幂等 + 无目标不动
+        f.chat.markMemorized("private:5", 42L, "我叫小明")
+        f.chat.markMemorized("private:5", null, "不存在的内容")
+        assertEquals(1, f.chat.getHistory("private:5", 10).size, "重复打标不产生新行")
+    }
+
+    @Test
+    fun `markWindowMemorized marks non bot lines only`() {
+        val f = Fixture()
+        f.chat.recordHistoryMessage(
+            conversationId = "private:6", senderId = 6L, senderName = "甲",
+            content = "第一句", timestamp = 1_000L, isFromBot = false
+        )
+        f.chat.recordHistoryMessage(
+            conversationId = "private:6", senderId = 0L, senderName = "bot",
+            content = "回你", timestamp = 2_000L, isFromBot = true
+        )
+        f.chat.markWindowMemorized("private:6", 30)
+        val summary = f.chat.getHistorySummary("private:6", 10)
+        assertTrue(summary.contains("第一句（已记忆）"), "对方消息被打标：$summary")
+        assertFalse(summary.contains("回你（已记忆）"), "机器人发言不是记忆素材，不打标：$summary")
+    }
+
+    @Test
+    fun `memory summary lines carry write dates`() {
+        val repo = JsonFileMemoryRepository(File.createTempFile("mem-date", ".json").absolutePath)
+        val s = MemoryService(repo)
+        s.rememberFact(MemorySubject.user(3L), "他叫小明")
+        // 一年前写入的记忆 → 带年份，LLM 才知道是旧事
+        repo.save(MemoryItem(
+            userId = 3L, subjectType = MemorySubject.Type.USER,
+            type = MemoryItem.MemoryType.FACT, content = "一年前的旧事",
+            createdAt = java.time.ZoneId.of("Asia/Shanghai").let { z ->
+                java.time.LocalDate.of(java.time.LocalDate.now(z).year - 1, 6, 1)
+                    .atStartOfDay(z).toInstant().toEpochMilli()
+            }
+        ))
+
+        val summary = s.getMemorySummary(MemorySubject.user(3L))
+        assertTrue(summary.contains("（记于"), "记忆行带写入日期：$summary")
+        assertTrue(summary.contains("- 一年前的旧事（记于"), "旧记忆带日期前缀：$summary")
+        assertTrue(
+            summary.lines().any { it.contains("一年前的旧事") && Regex("""记于\d{4}-\d{2}-\d{2}）""").containsMatchIn(it) },
+            "跨年记忆用 yyyy-MM-dd：$summary"
+        )
+        assertTrue(summary.contains("他叫小明（记于"), "当年记忆用 MM-dd：$summary")
+    }
+
+    private class Fixture {
+        val chat = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-mark", ".json").absolutePath)
+        )
+    }
+
+    @Test
+    fun `reflector marks window lines as memorized after writing`() {
+        val f = Fixture()
+        f.chat.recordHistoryMessage(
+            conversationId = "private:7", senderId = 7L, senderName = "甲",
+            content = "我最喜欢的颜色是蓝色", timestamp = 1_000L, isFromBot = false
+        )
+        val memSvc = MemoryService(JsonFileMemoryRepository(File.createTempFile("mem-mark", ".json").absolutePath))
+        val llm = FakeLLM(mutableListOf("""{"memories":[{"kind":"fact","content":"他最喜欢蓝色","tags":[]}]}"""))
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = memSvc,
+            chatHistoryService = f.chat,
+            actionLog = ActionLog()
+        )
+
+        reflector.reflect("private:7")
+
+        assertEquals(1, memSvc.getMemoriesOf(MemorySubject.user(7L)).size, "整理写入一条")
+        assertTrue(
+            f.chat.getHistorySummary("private:7", 10).contains("（已记忆）"),
+            "写入成功后窗口行打标：${f.chat.getHistorySummary("private:7", 10)}"
+        )
+    }
+
+    // ------------------------------------------------------------------
     // 退出整理判重视野：已有记忆要让 LLM 看得见（默认上限太小会漏判重）
     // ------------------------------------------------------------------
 

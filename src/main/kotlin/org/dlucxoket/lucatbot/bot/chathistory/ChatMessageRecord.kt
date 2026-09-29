@@ -72,7 +72,16 @@ data class ChatMessageRecord(
     val messageId: Long? = null,
 
     /** 是否是机器人发的 */
-    val isFromBot: Boolean = false
+    val isFromBot: Boolean = false,
+
+    /**
+     * 这条消息**已入长期记忆**——记忆整理/提取器以它为来源写过记忆后打标。
+     *
+     * 打标后注入记忆整理 prompt 的行尾带「（已记忆）」：整理智能体看到标记
+     * 就不再为这条消息产出记忆——防「退出整理把同一段对话改写一遍又记一遍」
+     * （写入判重是精确匹配，改写式重复拦不住，靠这个标记在源头堵）。
+     */
+    val memorized: Boolean = false
 ) {
     /** 消息内容类型：纯文本 / 图片 / 表情 / 表情包 / @ / 混合 */
     enum class MessageType {

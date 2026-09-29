@@ -307,14 +307,20 @@ class ConversationController(
                         )
                         // 只从「对方最后一条消息」提取记忆：recentLines 末尾可能是
                         // 机器人自己的回复，把 bot 的话喂给正则会误记成用户的长期 FACT
-                        val lastUserContent = recentLines.lastOrNull { !it.isMe }?.content.orEmpty()
+                        val lastUser = recentLines.lastOrNull { !it.isMe }
+                        val lastUserContent = lastUser?.content.orEmpty()
                         if (lastUserContent.isNotBlank()) {
-                            memoryService.saveAll(
-                                MemoryExtractor.extract(
-                                    MemorySubject.fromConversation(conversationId),
-                                    lastUserContent
-                                )
+                            val extracted = MemoryExtractor.extract(
+                                MemorySubject.fromConversation(conversationId),
+                                lastUserContent
                             )
+                            if (extracted.isNotEmpty()) {
+                                memoryService.saveAll(extracted)
+                                // 该行已产出记忆 → 打标，退出整理时不再被改写复读
+                                chatHistoryService.markMemorized(
+                                    conversationId, lastUser?.messageId, lastUserContent
+                                )
+                            }
                         }
                         actionLog.append("回复：$content")
                         lucatBot.mood = lucatBot.mood.boost()

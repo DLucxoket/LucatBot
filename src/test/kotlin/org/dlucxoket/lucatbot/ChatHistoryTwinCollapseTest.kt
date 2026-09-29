@@ -189,6 +189,29 @@ class ChatHistoryTwinCollapseTest {
     }
 
     @Test
+    fun `fold preserves memorized flag across twins`() {
+        // 未打标的实时行（折叠时当 survivor）+ 已打标的爬楼孪生行 → 标记不能丢
+        val f = fixture()
+        f.repo.save(
+            ChatMessageRecord(
+                conversationId = "group:3", senderId = 5L, senderName = "甲",
+                content = "他叫我老大", timestamp = 5_000L, memorized = false
+            )
+        )
+        f.repo.save(
+            ChatMessageRecord(
+                id = "hist:group:3:5:5100:123", conversationId = "group:3",
+                senderId = 5L, senderName = "甲",
+                content = "他叫我老大", timestamp = 5_100L, memorized = true
+            )
+        )
+        val history = f.service.getHistory("group:3", 10)
+        assertEquals(1, history.size)
+        assertTrue(history[0].memorized, "折叠 OR 合并保留已记忆标记")
+        assertTrue(f.service.getHistorySummary("group:3", 10).contains("（已记忆）"))
+    }
+
+    @Test
     fun `collapse skips single row conversations untouched`() {
         val f = fixture()
         f.repo.save(

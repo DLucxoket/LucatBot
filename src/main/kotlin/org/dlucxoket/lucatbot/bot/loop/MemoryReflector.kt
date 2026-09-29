@@ -99,6 +99,9 @@ class MemoryReflector(
             log.info("退出时记忆整理：写入 {} 条", written)
             if (written > 0) {
                 actionLog.append("整理记忆 $written 条")
+                // 窗口行打标「已记忆」：本轮已整理过这段对话，下次退出整理
+                // 看到标记不再改写复读（写入判重是精确匹配，改写式重复拦不住）
+                chatHistoryService.markWindowMemorized(conversationId, reflectHistoryCount)
             }
         } catch (e: Exception) {
             log.warn("退出时记忆整理失败（忽略，不影响返回消息列表）: {}", e.message)

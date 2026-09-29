@@ -77,6 +77,7 @@ class MySqlStorageSmokeTest {
             ChatMessageRecord(id = "m1", conversationId = conv, senderId = 1L, senderName = "甲",
                 senderNickname = "甲QQ名",
                 imageUrls = listOf("https://x/a.png", "https://x/b.png"),
+                memorized = true,
                 content = "第一句", timestamp = 1000L, messageId = 11L),
             ChatMessageRecord(id = "m2", conversationId = conv, senderId = 2L, senderName = "乙",
                 content = "第二句", timestamp = 2123L),   // 非整秒：验证 DATETIME(3) 毫秒不丢
@@ -106,6 +107,8 @@ class MySqlStorageSmokeTest {
             "image_urls 列（JSON 存 TEXT）往返"
         )
         assertNull(all[1].imageUrls, "无图记录 → NULL 往返仍为 null")
+        assertTrue(first.memorized, "memorized 列往返（true）")
+        assertFalse(all[1].memorized, "memorized 列默认 false")
         assertEquals(11L, first.messageId)
         assertNull(all[1].messageId)
         assertTrue(first.isFromBot == false && all[2].isFromBot)
@@ -294,5 +297,19 @@ class MySqlStorageSmokeTest {
             map = { it.getString("tp") }
         )
         assertEquals("text", type, "chat_history.image_urls 列应存在且为 TEXT（老库自动补列）")
+    }
+
+    @Test
+    fun `chat history has memorized column`() = withDbOrSkip {
+        // 「已记忆」标记列（同为启动期 ensureColumn 补列路径）
+        val storage = initOrSkip()
+        val type = storage.queryOne(
+            "SELECT DATA_TYPE AS tp FROM information_schema.COLUMNS " +
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            testConfig.database, "chat_history", "memorized",
+            map = { it.getString("tp") }
+        )
+        // MySQL 的 BOOLEAN 是 TINYINT(1) 别名 → DATA_TYPE=tinyint
+        assertEquals("tinyint", type, "chat_history.memorized 列应存在（老库自动补列）")
     }
 }

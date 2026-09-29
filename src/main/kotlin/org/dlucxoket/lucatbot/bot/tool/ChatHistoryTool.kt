@@ -130,11 +130,13 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                     ?: if (senderId == selfId) "bot" else senderId.toString()
 
                 val rawTime = msg.time ?: 0L
-                val timestamp = when {
-                    rawTime <= 0L -> System.currentTimeMillis()
-                    rawTime < 1_000_000_000_000L -> rawTime * 1000L  // 秒级时间戳
-                    else -> rawTime
+                // 缺 time 宁可跳过也不盖当前时间——否则旧消息会被顶到窗口最前面、
+                // 被 LLM 当成刚发生的事（时间戳污染比少一条消息更糟）
+                if (rawTime <= 0L) {
+                    log.warn("爬楼消息缺少 time，跳过不入档（宁缺勿把旧消息标成现在）sender={}", senderId)
+                    return@forEach
                 }
+                val timestamp = if (rawTime < 1_000_000_000_000L) rawTime * 1000L else rawTime  // 秒级时间戳
 
                 service.recordHistoryMessage(
                     conversationId = conversationId,

@@ -64,6 +64,19 @@ class MemoryAgentTest {
     }
 
     @Test
+    fun `prompt explains memorized marker and memory dates`() {
+        // 实盘：昨天的对话被无日期记忆当成当前剧情续话 + 同一段对话被改写复读
+        val llm = FakeLLM(mutableListOf("""{"memories":[]}"""))
+        MemoryAgent(llm).processObject(MemoryReflectRequest(conversationContent = "对话"))
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("（已记忆）"), "已记忆标记规则：$prompt")
+        assertTrue(prompt.contains("已经记过了"), "点明标记语义：$prompt")
+        assertTrue(prompt.contains("换个说法复读也算重复"), "堵改写式重复：$prompt")
+        assertTrue(prompt.contains("（记于MM-DD）是写入日期"), "记忆日期规则：$prompt")
+        assertTrue(prompt.contains("不是刚发生的"), "点明旧记忆非当前剧情")
+    }
+
+    @Test
     fun `prompt contains conversation content and existing memory`() {
         val llm = FakeLLM(mutableListOf("""{"memories":[]}"""))
         val agent = MemoryAgent(llm)
