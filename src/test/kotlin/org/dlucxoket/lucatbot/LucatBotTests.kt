@@ -12,6 +12,7 @@ import org.dlucxoket.lucatbot.model.message.member.ReplyMessageMember
 import org.dlucxoket.lucatbot.model.message.member.TextMessageMember
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
+import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import java.io.File
 import org.junit.jupiter.api.Assertions.*
@@ -284,7 +285,7 @@ class MemoryExtractorTest {
 
     @Test
     fun `extract name from message`() {
-        val memories = MemoryExtractor.extract(123L, "我叫张三")
+        val memories = MemoryExtractor.extract(MemorySubject.user(123L), "我叫张三")
         val nameMemory = memories.find { it.type == MemoryItem.MemoryType.FACT }
         assertNotNull(nameMemory)
         assertTrue(nameMemory!!.content.contains("张三"))
@@ -292,7 +293,7 @@ class MemoryExtractorTest {
 
     @Test
     fun `extract like from message`() {
-        val memories = MemoryExtractor.extract(123L, "我喜欢猫")
+        val memories = MemoryExtractor.extract(MemorySubject.user(123L), "我喜欢猫")
         val likeMemory = memories.find { it.type == MemoryItem.MemoryType.FACT }
         assertNotNull(likeMemory)
         assertTrue(likeMemory!!.content.contains("猫"))
@@ -300,7 +301,7 @@ class MemoryExtractorTest {
 
     @Test
     fun `does not store plain messages as memories`() {
-        val memories = MemoryExtractor.extract(123L, "你好")
+        val memories = MemoryExtractor.extract(MemorySubject.user(123L), "你好")
         assertTrue(memories.none { it.type == MemoryItem.MemoryType.EVENT },
             "普通消息不应写入记忆")
         assertTrue(memories.isEmpty(), "无策略命中时不应产出记忆")
@@ -308,7 +309,7 @@ class MemoryExtractorTest {
 
     @Test
     fun `no fact when nothing to extract`() {
-        val memories = MemoryExtractor.extract(123L, "今天天气不错")
+        val memories = MemoryExtractor.extract(MemorySubject.user(123L), "今天天气不错")
         assertTrue(memories.none { it.type == MemoryItem.MemoryType.FACT })
     }
 }

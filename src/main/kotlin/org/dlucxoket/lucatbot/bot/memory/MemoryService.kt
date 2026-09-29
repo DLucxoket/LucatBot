@@ -27,92 +27,100 @@ class MemoryService(
     /**
      * 记住一个事实
      *
-     * @param userId 关联的用户
+     * @param subject 记忆主体（个人 / 群，键空间隔离）
      * @param content 事实描述（自然语言）
      * @param tags 标签（用于检索）
      */
-    fun rememberFact(userId: Long, content: String, tags: List<String> = emptyList()) {
+    fun rememberFact(subject: MemorySubject, content: String, tags: List<String> = emptyList()) {
         repository.save(
             MemoryItem(
-                userId = userId,
+                userId = subject.id,
+                subjectType = subject.type,
                 type = MemoryItem.MemoryType.FACT,
                 content = content,
                 tags = tags
             )
         )
-        log.info("记住事实: user=$userId, content=$content")
+        log.info("记住事实: subject=$subject, content=$content")
     }
 
     /**
      * 记住一个看法/印象
      *
-     * @param userId 关联的用户
+     * @param subject 记忆主体
      * @param opinion 看法描述
      */
-    fun rememberOpinion(userId: Long, opinion: String) {
+    fun rememberOpinion(subject: MemorySubject, opinion: String) {
         repository.save(
             MemoryItem(
-                userId = userId,
+                userId = subject.id,
+                subjectType = subject.type,
                 type = MemoryItem.MemoryType.OPINION,
                 content = opinion
             )
         )
-        log.info("记住看法: user=$userId, opinion=$opinion")
+        log.info("记住看法: subject=$subject, opinion=$opinion")
     }
 
     /**
      * 记住一个事件
      *
-     * @param userId 关联的用户
+     * @param subject 记忆主体
      * @param event 事件描述
      * @param relatedUserIds 涉及的其他用户
      */
-    fun rememberEvent(userId: Long, event: String, relatedUserIds: List<Long> = emptyList()) {
+    fun rememberEvent(subject: MemorySubject, event: String, relatedUserIds: List<Long> = emptyList()) {
         repository.save(
             MemoryItem(
-                userId = userId,
+                userId = subject.id,
+                subjectType = subject.type,
                 type = MemoryItem.MemoryType.EVENT,
                 content = event,
                 relatedUserIds = relatedUserIds
             )
         )
-        log.info("记住事件: user=$userId, event=$event")
+        log.info("记住事件: subject=$subject, event=$event")
     }
 
     /**
      * 记住人际关系
      *
-     * @param userId 主用户
+     * @param subject 主主体
      * @param relatedUserId 关联用户
      * @param relation 关系描述
      */
-    fun rememberRelation(userId: Long, relatedUserId: Long, relation: String) {
+    fun rememberRelation(subject: MemorySubject, relatedUserId: Long, relation: String) {
         repository.save(
             MemoryItem(
-                userId = userId,
+                userId = subject.id,
+                subjectType = subject.type,
                 type = MemoryItem.MemoryType.RELATION,
                 content = relation,
                 relatedUserIds = listOf(relatedUserId)
             )
         )
-        log.info("记住关系: $userId ↔ $relatedUserId, $relation")
+        log.info("记住关系: $subject ↔ $relatedUserId, $relation")
     }
 
     /**
-     * 获取某个用户的全部记忆（按强度排序）
+     * 获取某个主体的全部记忆（按强度排序）
+     *
+     * 仓库按数值 ID 粗查后，这里按 [MemorySubject.Type] 精确过滤——
+     * 群号与个人 QQ 号即使相同也不会互相泄漏。
      */
-    fun getMemoriesOf(userId: Long): List<MemoryItem> {
-        return repository.findByUserId(userId)
+    fun getMemoriesOf(subject: MemorySubject): List<MemoryItem> {
+        return repository.findByUserId(subject.id)
+            .filter { it.subjectType == subject.type }
             .sortedByDescending { it.strength }
     }
 
     /**
-     * 获取某个用户的记忆摘要（注入 LLM prompt）
+     * 获取某个主体的记忆摘要（注入 LLM prompt）
      *
      * 模拟真人回忆："我记得这个人..."
      */
-    fun getMemorySummary(userId: Long): String {
-        val memories = getMemoriesOf(userId)
+    fun getMemorySummary(subject: MemorySubject): String {
+        val memories = getMemoriesOf(subject)
         if (memories.isEmpty()) return ""
 
         val facts = memories.filter { it.type == MemoryItem.MemoryType.FACT }
@@ -147,12 +155,12 @@ class MemoryService(
      * 搜索相关记忆
      *
      * @param query 搜索关键词
-     * @param userId 可选：限定某个用户
+     * @param subject 可选：限定某个记忆主体（null = 全部）
      * @return 相关记忆列表
      */
-    fun search(query: String, userId: Long? = null): List<MemoryItem> {
+    fun search(query: String, subject: MemorySubject? = null): List<MemoryItem> {
         val keywords = query.split(Regex("\\s+")).filter { it.isNotBlank() }
-        val pool = if (userId != null) repository.findByUserId(userId) else repository.findAll()
+        val pool = if (subject != null) getMemoriesOf(subject) else repository.findAll()
 
         return pool.filter { item ->
             keywords.any { keyword ->
@@ -163,10 +171,10 @@ class MemoryService(
     }
 
     /**
-     * 获取与某用户相关的其他人（人际关系网络）
+     * 获取与某主体相关的其他人（人际关系网络）
      */
-    fun getRelatedUsers(userId: Long): Map<Long, String> {
-        return repository.findByUserId(userId)
+    fun getRelatedUsers(subject: MemorySubject): Map<Long, String> {
+        return getMemoriesOf(subject)
             .filter { it.type == MemoryItem.MemoryType.RELATION }
             .flatMap { item ->
                 item.relatedUserIds.map { it to item.content }

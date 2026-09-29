@@ -19,6 +19,7 @@ import org.dlucxoket.lucatbot.bot.loop.ConversationController
 import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
@@ -342,7 +343,7 @@ class ConversationControllerTest {
             JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
         )
         // 预置一条现有记忆：应作为「读取参考」出现在记忆整理 prompt 里
-        memoryService.rememberFact(123L, "他在上海工作")
+        memoryService.rememberFact(MemorySubject.user(123L), "他在上海工作")
         val chatHistoryService = ChatHistoryService(
             JsonFileChatHistoryRepository(File.createTempFile("hist", ".json").absolutePath)
         )
@@ -364,7 +365,7 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
-        val items = memoryService.getMemoriesOf(123L)
+        val items = memoryService.getMemoriesOf(MemorySubject.user(123L))
         assertTrue(
             items.any {
                 it.type == MemoryItem.MemoryType.FACT &&
@@ -399,8 +400,8 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
-        assertTrue(memoryService.getMemoriesOf(123L).isEmpty(), "空 memories 不应新增记忆")
-        assertEquals("", memoryService.getMemorySummary(123L))
+        assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty(), "空 memories 不应新增记忆")
+        assertEquals("", memoryService.getMemorySummary(MemorySubject.user(123L)))
     }
 
     @Test
@@ -418,7 +419,7 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
-        assertTrue(memoryService.getMemoriesOf(123L).isEmpty())
+        assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty())
     }
 }
 

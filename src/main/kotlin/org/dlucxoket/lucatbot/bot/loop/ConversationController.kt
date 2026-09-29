@@ -13,6 +13,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
@@ -138,7 +139,7 @@ class ConversationController(
                 conversationName = pickName(conversationId),
                 conversationId = conversationId,
                 shortTermMemory = memoryService.getMemorySummary(
-                    conversationId.substringAfter(":").toLongOrNull() ?: 0L
+                    MemorySubject.fromConversation(conversationId)
                 ) + sessionManager.getFatigueHint(conversationId),
                 todos = todoService.pendingSummary(),
                 actionLog = actionLog.dump(),
@@ -201,12 +202,17 @@ class ConversationController(
                         conversationId, lucatBot.persona.name, content,
                         isBot = true
                     )
-                    memoryService.saveAll(
-                        MemoryExtractor.extract(
-                            conversationId.substringAfter(":").toLongOrNull() ?: 0L,
-                            recentLines.lastOrNull()?.content.orEmpty()
+                    // 只从「对方最后一条消息」提取记忆：recentLines 末尾可能是
+                    // 机器人自己的回复，把 bot 的话喂给正则会误记成用户的长期 FACT
+                    val lastUserContent = recentLines.lastOrNull { !it.isMe }?.content.orEmpty()
+                    if (lastUserContent.isNotBlank()) {
+                        memoryService.saveAll(
+                            MemoryExtractor.extract(
+                                MemorySubject.fromConversation(conversationId),
+                                lastUserContent
+                            )
                         )
-                    )
+                    }
                     actionLog.append("回复：$content")
                     lucatBot.mood = lucatBot.mood.boost()
 
@@ -254,13 +260,13 @@ class ConversationController(
      */
     private fun reflectMemory(conversationId: String) {
         try {
-            val userId = conversationId.substringAfter(":").toLongOrNull() ?: 0L
+            val subject = MemorySubject.fromConversation(conversationId)
             val result = memoryAgent.processObject(
                 MemoryReflectRequest(
                     conversationContent = chatHistoryService.getHistorySummary(
                         conversationId, reflectHistoryCount
                     ),
-                    existingMemory = memoryService.getMemorySummary(userId),
+                    existingMemory = memoryService.getMemorySummary(subject),
                     timeHint = TimeAwareness.timeHint()
                 )
             )
@@ -272,15 +278,15 @@ class ConversationController(
             for (item in result.memories) {
                 when (item.kind.lowercase()) {
                     "fact" -> {
-                        memoryService.rememberFact(userId, item.content, item.tags)
+                        memoryService.rememberFact(subject, item.content, item.tags)
                         written++
                     }
                     "opinion" -> {
-                        memoryService.rememberOpinion(userId, item.content)
+                        memoryService.rememberOpinion(subject, item.content)
                         written++
                     }
                     "event" -> {
-                        memoryService.rememberEvent(userId, item.content)
+                        memoryService.rememberEvent(subject, item.content)
                         written++
                     }
                     else -> log.debug("退出时记忆整理：跳过未知 kind={}（content={}）", item.kind, item.content)
@@ -306,7 +312,7 @@ class ConversationController(
         decision.remember?.let { note ->
             try {
                 memoryService.rememberEvent(
-                    conversationId.substringAfter(":").toLongOrNull() ?: 0L,
+                    MemorySubject.fromConversation(conversationId),
                     note
                 )
                 actionLog.append("记住：$note")

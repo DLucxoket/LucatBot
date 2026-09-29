@@ -18,8 +18,21 @@ data class MemoryItem(
     /** 记忆 ID（唯一标识） */
     val id: String = java.util.UUID.randomUUID().toString(),
 
-    /** 关联的用户 QQ 号（记忆的主体） */
+    /**
+     * 记忆主体的数值 ID
+     *
+     * 配合 [subjectType] 构成键空间：USER=个人 QQ 号，GROUP=群号。
+     * 单看本字段无法区分主体，取用一律走 [MemorySubject]。
+     */
     val userId: Long = 0L,
+
+    /**
+     * 主体类型（键空间隔离：同号的个人与群互不污染）
+     *
+     * 旧数据（memories.json 无此字段）反序列化默认 USER——历史群聊记忆
+     * 无法追溯归属，按个人保留，属已知迁移限制。
+     */
+    val subjectType: MemorySubject.Type = MemorySubject.Type.USER,
 
     /** 记忆类型 */
     val type: MemoryType = MemoryType.FACT,

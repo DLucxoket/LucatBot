@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.tool
 
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.tool.data.MemoryQueryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.MemoryQueryResult
 
@@ -31,7 +32,7 @@ object MemoryQueryTool : Tool<MemoryQueryRequest, MemoryQueryResult>() {
         val service = memoryService ?: return MemoryQueryResult(success = false, error = "MemoryService 未绑定")
 
         val results = if (input.userId != null) {
-            service.getMemoriesOf(input.userId)
+            service.getMemoriesOf(MemorySubject.user(input.userId))
         } else {
             service.search(input.query)
         }

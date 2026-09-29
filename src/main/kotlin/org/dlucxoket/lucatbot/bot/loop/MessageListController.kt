@@ -8,6 +8,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionSummaryLine
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
@@ -114,8 +115,8 @@ class MessageListController(
             .filter { it.startsWith("private:") }
             .take(cap)
             .map { convId ->
-                val userId = convId.substringAfter(":").toLongOrNull() ?: 0L
-                val memory = memoryService.getMemorySummary(userId).lineSequence().firstOrNull().orEmpty()
+                val subject = MemorySubject.fromConversation(convId)
+                val memory = memoryService.getMemorySummary(subject).lineSequence().firstOrNull().orEmpty()
                 val hint = when {
                     memory.isNotBlank() -> memory
                     sessionManager.isActive(convId, withinMinutes = 60) -> "刚才还在聊"
@@ -133,7 +134,13 @@ class MessageListController(
         val parts = mutableListOf<String>()
         for (s in sessions.take(3)) {
             val userId = s.id.toLongOrNull() ?: continue
-            val m = memoryService.getMemorySummary(userId)
+            // 记忆按主体隔离：群聊会话取群记忆，私聊取个人记忆
+            val subject = if (s.conversationType == "群聊") {
+                MemorySubject.group(userId)
+            } else {
+                MemorySubject.user(userId)
+            }
+            val m = memoryService.getMemorySummary(subject)
             if (m.isNotBlank()) parts += m
         }
         return parts.joinToString("\n")
