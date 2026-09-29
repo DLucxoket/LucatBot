@@ -863,6 +863,17 @@ class ConversationAgentFallbackTest {
     }
 
     @Test
+    fun `qq face usage is restrained to necessary cases`() {
+        // 表情语法刚教会 LLM，必须同时教会克制——否则容易每条消息都挂个表情
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("只有确有必要"), "约束应要求确有必要才带表情：$prompt")
+        assertTrue(prompt.contains("绝不每条消息都带"), "约束应点明不许每条都带：$prompt")
+        assertTrue(prompt.contains("对方先发了表情要回应"), "应给出什么算『有必要』的判据：$prompt")
+    }
+
+    @Test
     fun `history line renders message id tag only when present`() {
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         ConversationAgent(llm).processObject(

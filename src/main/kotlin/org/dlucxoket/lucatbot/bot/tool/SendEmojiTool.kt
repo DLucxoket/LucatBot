@@ -8,7 +8,7 @@ package org.dlucxoket.lucatbot.bot.tool
 object SendEmojiTool : Tool<SendEmojiRequest, SendEmojiResult>() {
     override val name: String = "SendEmojiTool"
 
-    override val description: String = "功能：向指定会话发送一个 QQ 小表情，emojiName 传数字表情 ID（非数字则回退为默认笑脸 66），返回是否成功；成功后不自动写入聊天记录。\n何时使用：想用表情代替文字回应、或给文字补充情绪时调用；注意 send 动作只发文本，发表情需要单独调用本工具。"
+    override val description: String = "功能：向指定会话单独发送一个 QQ 小表情（不带文字），emojiName 传数字表情 ID（非数字则回退为默认笑脸 66），返回是否成功；成功后不自动写入聊天记录。\n何时使用：只想发个表情不配文字时调用；带文字的表情直接在 send 的 content 里写 [表情:数字] 即可、无需本工具。表情只在确有必要时用（回应对方的表情、情绪到了），不要每条消息都带。"
 
     override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"emojiName\": \"66\"}"
 
