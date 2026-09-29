@@ -101,11 +101,16 @@ class ChatHistoryService(
     /** CQ 码段（[CQ:at,qq=1] 等），比较内容前剥掉 */
     private val cqCodeRegex = Regex("""\[CQ:[^\]]*]""")
 
+    /** describe 富占位符（[图片]/[表情:14]/@昵称(QQ)/回复 #id：等），比较内容前剥掉 */
+    private val richPlaceholderRegex = Regex(
+        """\[图片[^\]]*]|\[表情:[^\]]*]|\[表情[^\]]*]|@\S+\(\d+\)|@\d+|回复\s*#\d+：|回复\s*@\S+\(\d+\)："""
+    )
+
     /** 同一物理消息的时间容差（实时入档用本地时钟，爬楼用服务端秒级时间戳） */
     private val duplicateWindowMs = 10_000L
 
     private fun normalize(content: String): String =
-        content.replace(cqCodeRegex, "").trim()
+        content.replace(cqCodeRegex, "").replace(richPlaceholderRegex, "").trim()
 
     /** bot 记录 senderId 不一致（实时 0 / 爬楼 selfId），用 isFromBot 区分即可 */
     private fun sameSender(a: ChatMessageRecord, b: ChatMessageRecord): Boolean =
@@ -192,14 +197,35 @@ class ChatHistoryService(
 
     /**
      * 检测消息类型
+     *
+     * 兼容两种风格：
+     * - 旧：`[CQ:at,qq=1]` / 保留 CQ
+     * - 新：describe 富占位符 `[图片]` `[表情:14]` `@昵称(QQ)` `回复 #id：`
      */
     private fun detectMessageType(content: String): ChatMessageRecord.MessageType {
+        val markers = listOf(
+            "[图片",
+            "[表情:",
+            "[表情]",
+            "[表情包",
+            "[CQ:image",
+            "[CQ:face",
+            "[CQ:mface",
+            "[CQ:at",
+            "[CQ:reply",
+            "回复 #",
+            "回复 @"
+        )
+        val hit = markers.count { content.contains(it) } + if (content.contains("@")) 1 else 0
         return when {
-            content.contains("[图片]") && content.contains("[表情]") -> ChatMessageRecord.MessageType.MIXED
-            content.contains("[图片]") -> ChatMessageRecord.MessageType.IMAGE
-            content.contains("[表情]") -> ChatMessageRecord.MessageType.FACE
-            content.contains("[表情包]") -> ChatMessageRecord.MessageType.MEME
-            content.contains("@") -> ChatMessageRecord.MessageType.AT
+            hit >= 2 -> ChatMessageRecord.MessageType.MIXED
+            content.contains("[表情包") || content.contains("[CQ:mface") -> ChatMessageRecord.MessageType.MEME
+            content.contains("[图片") || content.contains("[CQ:image") -> ChatMessageRecord.MessageType.IMAGE
+            content.contains("[表情:") || content.contains("[表情]") || content.contains("[CQ:face") ->
+                ChatMessageRecord.MessageType.FACE
+            content.contains("@") || content.contains("[CQ:at") ||
+                content.startsWith("回复 #") || content.startsWith("回复 @") ||
+                content.contains("[CQ:reply") -> ChatMessageRecord.MessageType.AT
             else -> ChatMessageRecord.MessageType.TEXT
         }
     }

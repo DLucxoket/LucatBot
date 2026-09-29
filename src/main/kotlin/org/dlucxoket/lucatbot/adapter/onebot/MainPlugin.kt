@@ -67,19 +67,24 @@ internal class MainPlugin: BotPlugin() {
             }
 
             val modelEvent = ShiroConverter.toModelEvent(event)
-            val plainText = ShiroConverter.extractPlainText(event)
-            if (plainText.isBlank()) return MESSAGE_IGNORE
+            // 富内容：@/reply/图片/表情/表情包都要让 LLM 看到，不能再用纯文本
+            val content = ShiroConverter.richContent(event)
+            val chatMessage = modelEvent.message as? ChatMessage
+            // 纯空消息才忽略；纯图片/@/表情等非文本段也要处理
+            if (content.isBlank() && chatMessage?.hasNonTextContent() != true) {
+                return MESSAGE_IGNORE
+            }
 
             // 状态机决策：进未读 / 待插入 / 通知
             val isAtMe = isAtMe(event, bot.selfId)
-            val isAtAll = (modelEvent.message as? ChatMessage)?.isAtAll() ?: false
+            val isAtAll = chatMessage?.isAtAll() ?: false
             val action = lucatBot.handleMessage(modelEvent, isAtMe, isAtAll)
 
             // 无论是否立刻处理，都先记聊天记录与短期记忆
-            chatHistoryService.recordMessage(modelEvent, plainText)
+            chatHistoryService.recordMessage(modelEvent, content)
             val convId = modelEvent.conversationId
             sessionManager.addMessage(
-                convId, modelEvent.sender.nickname, plainText,
+                convId, modelEvent.sender.nickname, content,
                 senderId = modelEvent.sender.qqNumber
             )
 

@@ -7,8 +7,10 @@ package org.dlucxoket.lucatbot.model.message.member
  * 与 QQ 内置表情（FaceMessageMember）不同。
  *
  * @param url 表情包图片的地址
+ * @param fileName 可辨识文件名（协议 file 字段）；describe 优先展示它
  */
 class MemeMessageMember(
-    val url: String
+    val url: String,
+    val fileName: String? = null
 ) : org.dlucxoket.lucatbot.model.message.member.MessageMember {
 }

@@ -1,10 +1,14 @@
 package org.dlucxoket.lucatbot
 
 import org.dlucxoket.lucatbot.adapter.onebot.ReplySplitter
+import org.dlucxoket.lucatbot.adapter.onebot.ShiroConverter
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
+import org.dlucxoket.lucatbot.model.message.member.FaceMessageMember
 import org.dlucxoket.lucatbot.model.message.member.ImageMessageMember
+import org.dlucxoket.lucatbot.model.message.member.MemeMessageMember
+import org.dlucxoket.lucatbot.model.message.member.ReplyMessageMember
 import org.dlucxoket.lucatbot.model.message.member.TextMessageMember
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
@@ -45,10 +49,90 @@ class ChatMessageTest {
     }
 
     @Test
-    fun `describe with image`() {
-        val msg = ChatMessage(listOf(TextMessageMember("看这个"), ImageMessageMember("http://img.jpg")))
-        assertTrue(msg.describe().contains("[图片]"))
-        assertTrue(msg.describe().contains("看这个"))
+    fun `describe with image keeps order and marker`() {
+        val msg = ChatMessage(listOf(TextMessageMember("看这个"), ImageMessageMember("http://img.example/a.jpg")))
+        val described = msg.describe()
+        assertTrue(described.contains("看这个"), described)
+        assertTrue(described.contains("[图片"), described)
+        assertTrue(described.contains("a.jpg"), described)
+        assertFalse(described.contains("base64"), described)
+    }
+
+    @Test
+    fun `describe at with nickname`() {
+        val msg = ChatMessage(listOf(AtMessageMember(123456L, "小明"), TextMessageMember("这个你行吗")))
+        assertEquals("@小明(123456) 这个你行吗", msg.describe())
+    }
+
+    @Test
+    fun `describe at without nickname uses qq`() {
+        val msg = ChatMessage(listOf(AtMessageMember(123456L), TextMessageMember("在吗")))
+        assertEquals("@123456 在吗", msg.describe())
+    }
+
+    @Test
+    fun `describe at uses resolver when member name missing`() {
+        val msg = ChatMessage(listOf(AtMessageMember(777L), TextMessageMember("hi")))
+        val described = msg.describe { qq -> if (qq == 777L) "小红" else null }
+        assertEquals("@小红(777) hi", described)
+    }
+
+    @Test
+    fun `describe at all`() {
+        val msg = ChatMessage(listOf(AtMessageMember(-1L), TextMessageMember("集合")))
+        assertEquals("@全体成员 集合", msg.describe())
+    }
+
+    @Test
+    fun `describe reply with name and without`() {
+        val named = ChatMessage(listOf(ReplyMessageMember(99L, "小明"), TextMessageMember("我也是")))
+        assertEquals("回复 @小明：我也是", named.describe())
+        val byId = ChatMessage(listOf(ReplyMessageMember(99L), TextMessageMember("我也是")))
+        assertEquals("回复 #99：我也是", byId.describe())
+    }
+
+    @Test
+    fun `describe face and meme`() {
+        val face = ChatMessage(listOf(FaceMessageMember(14)))
+        assertEquals("[表情:14]", face.describe())
+        val meme = ChatMessage(listOf(MemeMessageMember("http://x/abc.jpg")))
+        val memeText = meme.describe()
+        assertTrue(memeText.startsWith("[表情包"), memeText)
+        assertTrue(memeText.contains("abc.jpg"), memeText)
+    }
+
+    @Test
+    fun `describe mixed keeps segment order`() {
+        val msg = ChatMessage(
+            listOf(
+                ReplyMessageMember(5L, "小明"),
+                AtMessageMember(123L, "小红"),
+                TextMessageMember("看看这个"),
+                ImageMessageMember("http://img.example/x.png"),
+                FaceMessageMember(201),
+                TextMessageMember("哈哈")
+            )
+        )
+        val described = msg.describe()
+        assertTrue(described.startsWith("回复 @小明：@小红(123) 看看这个"), described)
+        assertTrue(described.contains("[图片"), described)
+        assertTrue(described.contains("[表情:201]"), described)
+        assertTrue(described.endsWith("哈哈"), described)
+    }
+
+    @Test
+    fun `describe never dumps base64`() {
+        val msg = ChatMessage(listOf(ImageMessageMember("base64://" + "A".repeat(200))))
+        val described = msg.describe()
+        assertEquals("[图片]", described)
+        assertFalse(described.contains("base64://"))
+    }
+
+    @Test
+    fun `hasNonTextContent`() {
+        assertFalse(ChatMessage(listOf(TextMessageMember("hi"))).hasNonTextContent())
+        assertTrue(ChatMessage(listOf(AtMessageMember(1L))).hasNonTextContent())
+        assertTrue(ChatMessage(listOf(ReplyMessageMember(1L))).hasNonTextContent())
     }
 
     @Test
@@ -67,6 +151,51 @@ class ChatMessageTest {
     fun `extractText only text members`() {
         val msg = ChatMessage(listOf(TextMessageMember("你好"), ImageMessageMember("url")))
         assertEquals("你好", msg.extractText())
+    }
+}
+
+class ShiroConverterCqTest {
+
+    @Test
+    fun `cq reply at text converts to describe style`() {
+        val raw = "[CQ:reply,id=1683970346][CQ:at,qq=1923043992] 感觉玩街霸的太罕见了"
+        val described = ShiroConverter.describeRawMessage(raw)
+        assertEquals("回复 #1683970346：@1923043992 感觉玩街霸的太罕见了", described)
+    }
+
+    @Test
+    fun `cq image keeps file name without base64`() {
+        val raw = "看这个[CQ:image,file=BB83C7DE.jpg,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=xxx]"
+        val described = ShiroConverter.describeRawMessage(raw)
+        assertTrue(described.contains("看这个"), described)
+        assertTrue(described.contains("[图片"), described)
+        assertTrue(described.contains("BB83C7DE.jpg"), described)
+        assertFalse(described.contains("fileid=xxx"), described)
+    }
+
+    @Test
+    fun `cq face becomes face placeholder`() {
+        val described = ShiroConverter.describeRawMessage("好耶[CQ:face,id=354,raw={...}]")
+        assertEquals("好耶[表情:354]", described)
+    }
+
+    @Test
+    fun `plain text without cq is kept as-is`() {
+        assertEquals("你好啊", ShiroConverter.describeRawMessage("你好啊"))
+    }
+
+    @Test
+    fun `cq at with card name`() {
+        val members = ShiroConverter.cqToModelMembers("[CQ:at,qq=123,card=小明] hi")
+        val at = members.filterIsInstance<AtMessageMember>().single()
+        assertEquals(123L, at.targetQqNumber)
+        assertEquals("小明", at.targetName)
+    }
+
+    @Test
+    fun `cq image sub_type 1 is meme`() {
+        val members = ShiroConverter.cqToModelMembers("[CQ:image,file=a.jpg,sub_type=1,url=http://x/a.jpg]")
+        assertTrue(members.single() is MemeMessageMember)
     }
 }
 
@@ -205,6 +334,27 @@ class ChatHistoryPersistenceTest {
         val history = service.getHistory("private:1", 10)
         assertEquals(1, history.size, "同一历史消息重复写入应去重")
         assertEquals("爬楼看到的", history.first().content)
+    }
+
+    @Test
+    fun `rich live and cq crawl collapse`() {
+        val file = File.createTempFile("hist-rich-dedup", ".json")
+        val service = org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService(
+            org.dlucxoket.lucatbot.bot.chathistory.JsonFileChatHistoryRepository(file.absolutePath)
+        )
+        service.recordHistoryMessage(
+            conversationId = "group:1", senderId = 9L, senderName = "张三",
+            content = "回复 #1683970346：@123 帮我找找",
+            timestamp = 1000L, isFromBot = false
+        )
+        service.recordHistoryMessage(
+            conversationId = "group:1", senderId = 9L, senderName = "张三",
+            content = "[CQ:reply,id=1683970346][CQ:at,qq=123] 帮我找找",
+            timestamp = 1500L, isFromBot = false
+        )
+        val history = service.getHistory("group:1", 10)
+        assertEquals(1, history.size, "富内容与 CQ 原文应折叠")
+        assertFalse(history.single().content.contains("[CQ:"), history.single().content)
     }
 }
 

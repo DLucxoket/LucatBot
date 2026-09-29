@@ -1,5 +1,9 @@
 package org.dlucxoket.lucatbot.model.event.message
 
+import org.dlucxoket.lucatbot.model.event.Event
+import org.dlucxoket.lucatbot.model.message.Message
+import org.dlucxoket.lucatbot.model.user.User
+
 /**
  * 消息事件——所有消息类事件的抽象基类
  *
@@ -14,10 +18,10 @@ package org.dlucxoket.lucatbot.model.event.message
  * @param timestamp 消息时间戳（毫秒）
  */
 abstract class MessageEvent(
-    val message: org.dlucxoket.lucatbot.model.message.Message,
-    val sender: org.dlucxoket.lucatbot.model.user.User,
+    val message: Message,
+    val sender: User,
     val timestamp: Long
-): org.dlucxoket.lucatbot.model.event.Event {
+): Event {
     /**
      * 会话 ID（子类实现，如 "group:123" 或 "private:456"）
      */

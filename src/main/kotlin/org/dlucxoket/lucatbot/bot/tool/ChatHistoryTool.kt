@@ -81,8 +81,15 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
             val selfId = b.selfId
 
             messages.forEach { msg ->
-                val content = msg.message ?: return@forEach
+                val raw = msg.message ?: return@forEach
+                if (raw.isBlank()) return@forEach
+                // 远端爬楼：CQ 码转成与 ChatMessage.describe 同风格的富文本（禁止 base64 全量）
+                var content = org.dlucxoket.lucatbot.adapter.onebot.ShiroConverter.describeRawMessage(raw)
                 if (content.isBlank()) return@forEach
+                // 过长内容（如合并转发 JSON）截断，避免污染 prompt / 存储
+                if (content.length > 800) {
+                    content = content.take(800) + "…"
+                }
 
                 val senderId = msg.sender?.userId?.toLongOrNull()
                     ?: msg.userId

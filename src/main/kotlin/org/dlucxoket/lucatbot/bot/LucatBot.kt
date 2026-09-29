@@ -226,7 +226,7 @@ class LucatBot {
             conversationId = conversationId,
             senderId = event.sender.qqNumber,
             senderName = event.sender.nickname,
-            content = extractText(event),
+            content = extractRichContent(event),
             timestamp = event.timestamp,
             isAtMe = isAtMe,
             isAtAll = isAtAll
@@ -306,7 +306,7 @@ class LucatBot {
                 conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
                 senderId = event.sender.qqNumber,
                 senderName = event.sender.nickname,
-                content = extractText(event),
+                content = extractRichContent(event),
                 isAtMe = isAtMe,
                 isAtAll = isAtAll,
                 timestamp = event.timestamp
@@ -315,12 +315,12 @@ class LucatBot {
     }
 
     /**
-     * 提取消息文本（委托 model 层）
+     * 提取消息富内容（委托 model 层 describe，含 @/reply/图片/表情）
      */
-    private fun extractText(event: MessageEvent): String {
+    private fun extractRichContent(event: MessageEvent): String {
         val msg = event.message
         return if (msg is org.dlucxoket.lucatbot.model.message.ChatMessage) {
-            msg.extractText()
+            msg.describe()
         } else {
             ""
         }
