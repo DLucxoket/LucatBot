@@ -7,11 +7,14 @@ import org.junit.jupiter.api.Test
 
 /**
  * 人格文件解析测试
+ *
+ * 单一真相源契约：prompt 以原文（rawContent）为准；解析器只提取
+ * 「名字」（业务标识），其余结构化字段回退代码默认值。
  */
 class PersonaLoaderTest {
 
     @Test
-    fun `parse extracts all persona fields`() {
+    fun `parse extracts name and keeps raw content verbatim`() {
         val text = """
             # 机器人人格
             - 名字：测试号
@@ -24,11 +27,13 @@ class PersonaLoaderTest {
 
         val persona = PersonaLoader.parse(text)
         assertEquals("测试号", persona.name)
-        assertEquals("冷静毒舌", persona.personality)
-        assertEquals("简短，不爱废话", persona.speakingStyle)
-        assertEquals(listOf("打游戏", "睡觉"), persona.interests)
-        assertEquals(0.3, persona.socialness)
-        assertEquals(0.9, persona.responsiveness)
+        assertEquals(text, persona.rawContent, "原文必须逐字保留（prompt 以它为准）")
+        // 结构化字段不从文件解析（解析了没有消费方）——保持代码默认值
+        assertEquals(org.dlucxoket.lucatbot.bot.persona.BotPersona().personality, persona.personality)
+        assertEquals(org.dlucxoket.lucatbot.bot.persona.BotPersona().socialness, persona.socialness)
+        // 原文里的其他字段经 toPrompt 生效
+        assertTrue(persona.toPrompt().contains("- 性格：冷静毒舌"), persona.toPrompt())
+        assertTrue(persona.toPrompt().contains("- 社交倾向：0.3"), persona.toPrompt())
     }
 
     @Test

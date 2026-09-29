@@ -51,18 +51,16 @@ object PersonaLoader {
     /**
      * 解析 persona.md 文本（供测试直接调用）
      *
-     * 已知字段解析进结构化字段（name 供业务标识用），**原文整体存入
-     * [BotPersona.rawContent]**——prompt 注入以原文为准，解析器不认识
-     * 的字段（如「主人」）不会丢失；未出现的结构化字段回退默认值。
+     * **单一真相源定案**：prompt 一律以 [BotPersona.rawContent] 原文为准
+     * （整个文件直接注入，所见即所得）；解析器**只提取「名字」**——它是
+     * 业务标识（聊天记录里的「我」、会话内称呼）。文件里的其他字段
+     * （性格/兴趣/社交倾向…）进原文即可生效，不再解析成结构化值——
+     * 解析了也没有消费方（此前是隐性死代码）。
+     *
+     * 未出现「名字」时回退 [BotPersona] 构造默认值。
      */
     fun parse(text: String): BotPersona {
-        val base = BotPersona()
-        var name = base.name
-        var personality = base.personality
-        var speakingStyle = base.speakingStyle
-        var interests = base.interests
-        var socialness = base.socialness
-        var responsiveness = base.responsiveness
+        var name = BotPersona().name
 
         for (rawLine in text.lineSequence()) {
             val line = rawLine.trim()
@@ -74,26 +72,12 @@ object PersonaLoader {
             val value = body.substring(sepIdx + 1).trim()
             if (value.isEmpty()) continue
 
-            when (key) {
-                "名字" -> name = value
-                "性格" -> personality = value
-                "说话风格" -> speakingStyle = value
-                "兴趣" -> interests = value.split('、', ',', '，').map { it.trim() }.filter { it.isNotEmpty() }
-                "社交倾向" -> value.toDoubleOrNull()?.let { socialness = it.coerceIn(0.0, 1.0) }
-                "回复积极性" -> value.toDoubleOrNull()?.let { responsiveness = it.coerceIn(0.0, 1.0) }
-                // 未知字段不再丢弃：原文会整体进 prompt（rawContent）
-                else -> log.debug("persona.md 未知字段（保留进 prompt 原文）: {}", key)
+            if (key == "名字") {
+                name = value
             }
+            // 其余字段：不解析，保留在 rawContent 原文里整体进 prompt
         }
 
-        return BotPersona(
-            name = name,
-            personality = personality,
-            interests = interests,
-            socialness = socialness,
-            responsiveness = responsiveness,
-            speakingStyle = speakingStyle,
-            rawContent = text
-        )
+        return BotPersona(name = name, rawContent = text)
     }
 }
