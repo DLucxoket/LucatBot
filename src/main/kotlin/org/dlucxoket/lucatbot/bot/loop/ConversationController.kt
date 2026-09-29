@@ -58,7 +58,9 @@ class ConversationController(
     /** 退出会话时记忆整理读取的聊天记录条数 */
     private val reflectHistoryCount: Int = 30,
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
-    private val maxReadMoreWithInserts: Int = 3
+    private val maxReadMoreWithInserts: Int = 3,
+    /** 连续发送失败上限（病态护栏：如被禁言还反复试发，达上限强制收尾） */
+    private val maxSendFailures: Int = 3
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
 
@@ -116,6 +118,9 @@ class ConversationController(
         var mustIcebreak = proactive
         var justSent: String? = null // 本轮刚发出的消息（有新回应即清空，用于组装 hint）
         var noReplyRounds = 0 // 连续无新消息的轮数（自上次发送起累计；SEND 成功不重置，有新消息清零）
+        // 发送失败状态（注入下一轮 prompt 通知 LLM，由它决定去留；连续失败达上限强制收尾）
+        var sendFailureNote: String? = null
+        var sendFailStreak = 0
         // 工具上下文（本会话内累积：状态计数/目录/执行结果，随每轮注入 prompt）
         val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 12)
         // 会话身份：群名进会话时查一次（网络调用不每轮打）；私聊每轮现算（见 buildIdentity）
@@ -192,12 +197,13 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
-                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes),
+                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote),
                 toolNotes = toolNotes.snapshot()
             )
 
             var decision = conversationAgent.processObject(request)
-            applyDecisionSideEffects(decision, conversationId)
+            // send 动作的 remember 延后到发送成功才写（防「没发出去却记了『我回复了』」）
+            val deferredRemember = applyDecisionSideEffects(decision, conversationId)
 
             // proactive 破冰：首条必须 send（查目录/调工具是前置动作，不视为破冰失败）
             val isToolStep = decision.action == ConversationAction.LIST_TOOLS ||
@@ -250,35 +256,53 @@ class ConversationController(
                         SendMessageRequest(conversationId = conversationId, content = content)
                     )
                     if (!sendResult.success) {
-                        log.warn("发送失败: {}", sendResult.error)
+                        // 失败消息不入档（SendMessageTool 仅 ok 后写记录；短期记忆/正则提取
+                        // 也只走成功分支）——LLM 下一轮看到失败通知后自行决定去留
+                        sendFailStreak++
+                        val detail = sendResult.error.orEmpty()
+                        log.warn("发送失败: {}", detail)
                         actionLog.append("发送失败")
-                        // 发不出去就离开，避免原地空转
-                        lucatBot.backToConversationList()
-                        return
-                    }
-                    // 发出后：SendMessageTool 已写聊天记录（isBot=true）；这里补短期记忆
-                    sessionManager.addMessage(
-                        conversationId, lucatBot.persona.name, content,
-                        isBot = true
-                    )
-                    // 只从「对方最后一条消息」提取记忆：recentLines 末尾可能是
-                    // 机器人自己的回复，把 bot 的话喂给正则会误记成用户的长期 FACT
-                    val lastUserContent = recentLines.lastOrNull { !it.isMe }?.content.orEmpty()
-                    if (lastUserContent.isNotBlank()) {
-                        memoryService.saveAll(
-                            MemoryExtractor.extract(
-                                MemorySubject.fromConversation(conversationId),
-                                lastUserContent
-                            )
+                        sendFailureNote = buildSendFailureNote(detail, isGroup)
+                        mustIcebreak = false // 破冰已尝试——失败后去留交给 LLM，不许再强制重发
+                        if (deferredRemember != null) {
+                            // 没发出去就不能记「我回复了…」——丢弃（LLM 可下轮重新 decide）
+                            log.info("发送失败，丢弃随发送写入的记忆: {}", deferredRemember)
+                        }
+                        if (sendFailStreak >= maxSendFailures) {
+                            // 病态护栏：连续失败达上限（如一直被禁言还反复试发）强制收尾
+                            actionLog.append("连续发送失败 $sendFailStreak 次，返回消息列表")
+                            log.warn("连续发送失败 {} 次，强制离开会话", sendFailStreak)
+                            return
+                        }
+                    } else {
+                        sendFailStreak = 0
+                        sendFailureNote = null
+                        // 发送成功 → 才写延后的 remember（「我回复了xxx」此时才属实）
+                        deferredRemember?.let { writeRemember(it, conversationId) }
+                        // 发出后：SendMessageTool 已写聊天记录（isBot=true）；这里补短期记忆
+                        sessionManager.addMessage(
+                            conversationId, lucatBot.persona.name, content,
+                            isBot = true
                         )
-                    }
-                    actionLog.append("回复：$content")
-                    lucatBot.mood = lucatBot.mood.boost()
+                        // 只从「对方最后一条消息」提取记忆：recentLines 末尾可能是
+                        // 机器人自己的回复，把 bot 的话喂给正则会误记成用户的长期 FACT
+                        val lastUserContent = recentLines.lastOrNull { !it.isMe }?.content.orEmpty()
+                        if (lastUserContent.isNotBlank()) {
+                            memoryService.saveAll(
+                                MemoryExtractor.extract(
+                                    MemorySubject.fromConversation(conversationId),
+                                    lastUserContent
+                                )
+                            )
+                        }
+                        actionLog.append("回复：$content")
+                        lucatBot.mood = lucatBot.mood.boost()
 
-                    mustIcebreak = false
-                    readMoreWithInsertStreak = 0
-                    // 发完不等待，立即进入下一轮决策；连发由 hint 约束
-                    justSent = content
+                        mustIcebreak = false
+                        readMoreWithInsertStreak = 0
+                        // 发完不等待，立即进入下一轮决策；连发由 hint 约束
+                        justSent = content
+                    }
                 }
 
                 ConversationAction.STAY -> {
@@ -343,23 +367,20 @@ class ConversationController(
     /**
      * 处理决策信封的副作用字段（在执行 action 之前）
      *
-     * remember → 短期记忆；todo_add / todo_done → 待办清单。
+     * todo_add / todo_done → 待办清单；remember → 短期记忆，但
+     * **send 动作的 remember 延后到发送成功后才写**（返回值即待写的 remember）——
+     * 否则 LLM 边发边记的「我回复了 xxx」会在发送失败（如被禁言）时留下假记忆。
+     *
      * 每项单独 try/catch：失败只 log，不中断主循环；
      * 成功与失败都追加一行操作日志（记住 / 待办+ / 待办完成 / 写入失败）。
+     *
+     * @return 被延后的 remember（非 send 动作或无 remember → null，已即时写入）
      */
-    private fun applyDecisionSideEffects(decision: ConversationDecision, conversationId: String) {
-        decision.remember?.let { note ->
-            try {
-                memoryService.rememberEvent(
-                    MemorySubject.fromConversation(conversationId),
-                    note
-                )
-                actionLog.append("记住：$note")
-            } catch (e: Exception) {
-                log.warn("remember 写入失败: {}", e.message)
-                actionLog.append("记忆写入失败")
-            }
-        }
+    private fun applyDecisionSideEffects(decision: ConversationDecision, conversationId: String): String? {
+        val deferredRemember = decision.remember?.takeIf { decision.action == ConversationAction.SEND }
+        decision.remember
+            ?.takeIf { decision.action != ConversationAction.SEND }
+            ?.let { writeRemember(it, conversationId) }
         decision.todo_add?.let { content ->
             try {
                 todoService.add(content, conversationId)
@@ -382,11 +403,36 @@ class ConversationController(
                 actionLog.append("待办完成失败")
             }
         }
+        return deferredRemember
+    }
+
+    /** 写一条短期记忆 + 操作日志（失败只 log，不中断主循环） */
+    private fun writeRemember(note: String, conversationId: String) {
+        try {
+            memoryService.rememberEvent(MemorySubject.fromConversation(conversationId), note)
+            actionLog.append("记住：$note")
+        } catch (e: Exception) {
+            log.warn("remember 写入失败: {}", e.message)
+            actionLog.append("记忆写入失败")
+        }
+    }
+
+    /**
+     * 发送失败通知（注入下一轮 hint，让 LLM 知道失败原因并自行决定去留）：
+     * 带上原始错误（status/retCode，如被禁言 1200）+ 现场提示 + 行为选项；
+     * 明确点出「消息没发出也没入档」，避免 LLM 误以为已发送。
+     */
+    private fun buildSendFailureNote(detail: String, isGroup: Boolean): String {
+        val guess = if (isGroup) "你在本群可能被禁言了" else "发送通道可能异常（网络/对方限制）"
+        return "上一轮你发送的消息失败了：$detail——$guess。" +
+            "该消息没有发出去，也没有写入聊天记录，对方看不到。" +
+            "接下来自行决定：可以 stay 等一会儿重试、return 离开、或换个说法再发；不要假装已经发送过。"
     }
 
     /**
      * 组装决策 prompt 的强制约束提示（可多段，换行连接）
      *
+     * - 上一轮发送失败：通知 LLM 失败详情（如被禁言 retCode），由它决定去留
      * - 连续爬楼期间一直有新消息：打断爬楼，优先回应
      * - 刚 send 完且暂无新回应：按 [noReplyRounds] 递进提示——
      *   第 1 轮提示不要连发；N≥2 轮点明「已连续 N 轮行动但始终没有任何新消息」，
@@ -397,9 +443,11 @@ class ConversationController(
         readMoreWithInsertStreak: Int,
         justSent: String?,
         noReplyRounds: Int,
-        newNotes: List<String>
+        newNotes: List<String>,
+        sendFailureNote: String? = null
     ): String {
         val parts = mutableListOf<String>()
+        sendFailureNote?.let { parts += it }
         if (readMoreWithInsertStreak >= maxReadMoreWithInserts) {
             parts += "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
         }
@@ -415,8 +463,7 @@ class ConversationController(
         return parts.joinToString("\n")
     }
 
-    private fun toConversationId(pick: SessionPick): String {
-        return when (pick.conversationType) {
+    private fun toConversationId(pick: SessionPick): String {        return when (pick.conversationType) {
             SessionPickType.GROUP -> "group:${pick.targetId}"
             SessionPickType.PRIVATE, SessionPickType.PROACTIVE -> "private:${pick.targetId}"
         }

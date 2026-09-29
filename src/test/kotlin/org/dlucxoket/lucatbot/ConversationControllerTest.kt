@@ -288,13 +288,86 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `send failure exits loop`() {
-        val llm = FakeLLM(mutableListOf("""{"action":"send","params":{"content":"hi"}}"""))
+    fun `send failure notifies llm instead of exiting immediately`() {
+        // 失败不再直接退出：下一轮 prompt 带失败通知（错误详情 + 可选行为），由 LLM 决定去留
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"hi"}}""",
+            """{"action":"return"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply { fail = true }
+        val chatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-fail", ".json").absolutePath)
+        )
+        val (controller, lucatBot, _) = buildController(llm, sendTool = sendTool, chatHistoryService = chatHistoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "LLM 决定 return 后回到列表")
+        assertEquals(2, llm.prompts.size, "失败后不退出，还有一轮决策")
+        val secondPrompt = llm.prompts[1]
+        assertTrue(secondPrompt.contains("发送失败") || secondPrompt.contains("失败了"), "失败通知应注入 prompt：$secondPrompt")
+        assertTrue(secondPrompt.contains("没有写入聊天记录") || secondPrompt.contains("没有发出去"), "应说明消息未发出未入档：$secondPrompt")
+        // 失败的消息不入聊天记录
+        val history = chatHistoryService.getHistory("private:123", 10)
+        assertTrue(history.none { it.content == "hi" }, "发送失败的消息不能入档：$history")
+    }
+
+    @Test
+    fun `repeated send failures hit cap and force return`() {
+        // 连续失败达上限（maxSendFailures=3）→ 强制收尾，不再无限烧
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"一"}}""",
+            """{"action":"send","params":{"content":"二"}}""",
+            """{"action":"send","params":{"content":"三"}}""",
+            """{"action":"send","params":{"content":"四"}}"""
+        ))
         val sendTool = FakeSendMessageTool().apply { fail = true }
         val (controller, lucatBot, _) = buildController(llm, sendTool = sendTool)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
-        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "达上限强制返回")
+        assertEquals(3, llm.prompts.size, "3 次失败后强制收尾，第 4 条脚本不消费")
+        assertTrue(sendTool.sent.isEmpty(), "全部失败，无成功发送")
+    }
+
+    @Test
+    fun `remember attached to failed send is dropped not faked`() {
+        // 假记忆防护：send + remember（如「我回复了xxx」）在发送失败时不能写入
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-fail", ".json").absolutePath)
+        )
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"hi"},"remember":"我回复了hi"}""",
+            """{"action":"return"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply { fail = true }
+        val (controller, _, _) = buildController(llm, sendTool = sendTool, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val items = memoryService.getMemoriesOf(MemorySubject.user(123L)) +
+            memoryService.getMemoriesOf(MemorySubject.group(123L))
+        assertTrue(items.none { it.content.contains("我回复了") }, "发送失败不能留下『我回复了』记忆：$items")
+    }
+
+    @Test
+    fun `remember attached to successful send is written`() {
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-ok", ".json").absolutePath)
+        )
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"hi"},"remember":"我回复了hi"}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, sendTool) = buildController(llm, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(listOf("hi"), sendTool.sent, "发送成功")
+        val items = memoryService.getMemoriesOf(MemorySubject.user(123L)) +
+            memoryService.getMemoriesOf(MemorySubject.group(123L))
+        assertTrue(items.any { it.content == "我回复了hi" }, "发送成功后延后的 remember 应写入：$items")
     }
 
     @Test
