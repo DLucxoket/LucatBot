@@ -81,6 +81,17 @@ class DebouncedFlusher(
         if (inlineFlush) runFlush()
     }
 
+    /**
+     * 立即同步落盘（经 [flushLock] 与调度线程/shutdown 互斥）。
+     *
+     * 仓库的公开 `flush()` 必须走这里——直调 doFlush 会绕过互斥，
+     * 与防抖调度线程并发写同一 .tmp 文件，可能把交错损坏的 JSON
+     * move 进正位（这正是 JsonFiles 要防的雪崩链）。
+     */
+    fun flushNow() {
+        runFlush()
+    }
+
     /** 兜底：取消计时并立即落盘、关闭调度器 */
     fun shutdown() {
         synchronized(stateLock) {

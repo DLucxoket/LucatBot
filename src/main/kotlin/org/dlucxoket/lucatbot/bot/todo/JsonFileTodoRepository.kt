@@ -67,7 +67,7 @@ class JsonFileTodoRepository(
     }
 
     override fun flush() {
-        doFlush()
+        flusher.flushNow()  // 走互斥锁，避免与防抖调度线程并发写同一 .tmp
     }
 
     /** 进程退出兜底：立即写盘并关闭防抖调度器 */
