@@ -18,6 +18,7 @@ import java.io.File
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
+/** 回复拆条器：按句切分、长度合并与条数上限 */
 class ReplySplitterTest {
 
     @Test
@@ -41,6 +42,7 @@ class ReplySplitterTest {
     }
 }
 
+/** ChatMessage.describe() 富内容描述：@/reply/图片/表情的占位、顺序与 base64 禁令 */
 class ChatMessageTest {
 
     @Test
@@ -155,6 +157,7 @@ class ChatMessageTest {
     }
 }
 
+/** CQ 码字符串转 describe 同风格富文本的解析测试 */
 class ShiroConverterCqTest {
 
     @Test
@@ -200,6 +203,7 @@ class ShiroConverterCqTest {
     }
 }
 
+/** 心情状态机：boost / drop / decay 的类型与强度变化规则 */
 class BotMoodTest {
 
     @Test
@@ -243,6 +247,7 @@ class BotMoodTest {
     }
 }
 
+/** 会话上下文存取、容量上限与疲劳度提示 */
 class SessionManagerTest {
     private val manager = org.dlucxoket.lucatbot.model.session.SessionManager()
 
@@ -281,6 +286,7 @@ class SessionManagerTest {
     }
 }
 
+/** 正则提取名字/喜好；普通消息不写入记忆 */
 class MemoryExtractorTest {
 
     @Test
@@ -314,6 +320,7 @@ class MemoryExtractorTest {
     }
 }
 
+/** 聊天记录落盘、类型识别与按物理消息去重 */
 class ChatHistoryPersistenceTest {
 
     @Test
@@ -359,6 +366,7 @@ class ChatHistoryPersistenceTest {
     }
 }
 
+/** 读取时实时入档与爬楼入档的折叠去重 */
 class ChatHistoryReadDedupTest {
 
     private fun newService(): org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService {

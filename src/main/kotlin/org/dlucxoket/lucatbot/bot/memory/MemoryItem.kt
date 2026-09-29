@@ -55,6 +55,7 @@ data class MemoryItem(
     /** 最后一次被回忆的时间 */
     val lastRecalledAt: Long = System.currentTimeMillis()
 ) {
+    /** 记忆类型：事实 / 看法 / 事件 / 人际关系 */
     enum class MemoryType {
         /** 客观事实（名字、生日等） */
         FACT,

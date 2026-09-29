@@ -15,6 +15,7 @@ data class MemorySubject(
     val type: Type,
     val id: Long
 ) {
+    /** 主体类型：USER=个人（QQ 号），GROUP=群（群号） */
     enum class Type {
         /** 个人（QQ 号） */
         USER,

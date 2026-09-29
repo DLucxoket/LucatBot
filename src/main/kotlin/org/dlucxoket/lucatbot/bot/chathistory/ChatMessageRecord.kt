@@ -46,6 +46,7 @@ data class ChatMessageRecord(
     /** 是否是机器人发的 */
     val isFromBot: Boolean = false
 ) {
+    /** 消息内容类型：纯文本 / 图片 / 表情 / 表情包 / @ / 混合 */
     enum class MessageType {
         TEXT,
         IMAGE,

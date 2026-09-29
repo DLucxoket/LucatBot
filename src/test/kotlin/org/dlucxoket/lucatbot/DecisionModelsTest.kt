@@ -12,6 +12,7 @@ import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
+/** SessionPickParser 对统一信封（open_conversation / idle）的解析与容错 */
 class SessionPickParserTest {
 
     @Test
@@ -57,6 +58,7 @@ class SessionPickParserTest {
     }
 }
 
+/** ConversationDecision.parse 的动作映射、参数提取与非法输入兜底 */
 class ConversationDecisionParseTest {
 
     @Test
@@ -146,6 +148,7 @@ class ConversationDecisionParseTest {
     }
 }
 
+/** LlmJson 剥离 markdown 代码块、提取 JSON 的边界测试 */
 class LlmJsonTest {
 
     @Test
@@ -169,6 +172,7 @@ class LlmJsonTest {
     }
 }
 
+/** 滚动操作日志：行数上限、时间戳与导出 */
 class ActionLogTest {
 
     @Test
@@ -198,6 +202,7 @@ class ActionLogTest {
     }
 }
 
+/** 空闲休眠时长的心情加权计算 */
 class IdleMillisTest {
 
     @Test

@@ -22,6 +22,7 @@ data class BotMood(
     /** 心情持续到的时间戳 */
     val expiresAt: Long = 0L
 ) {
+    /** 心情类型 */
     enum class MoodType {
         HAPPY,      // 开心
         NORMAL,     // 普通
