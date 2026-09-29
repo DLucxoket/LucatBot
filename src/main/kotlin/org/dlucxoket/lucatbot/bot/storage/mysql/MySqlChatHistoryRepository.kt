@@ -23,7 +23,7 @@ class MySqlChatHistoryRepository(
         storage.update(
             INSERT,
             record.id, record.conversationId, record.senderId, record.senderName, record.content,
-            record.messageType.name, record.timestamp, record.messageId, record.isFromBot
+            record.messageType.name, MySqlTime.of(record.timestamp), record.messageId, record.isFromBot
         )
     }
 
@@ -37,15 +37,15 @@ class MySqlChatHistoryRepository(
         )
         val params = mutableListOf<Any?>(conversationId)
         if (before > 0L) {
-            sql.append(" AND timestamp_ms < ?")
-            params += before
+            sql.append(" AND sent_at < ?")
+            params += MySqlTime.of(before)
         }
-        sql.append(" ORDER BY timestamp_ms DESC")
+        sql.append(" ORDER BY sent_at DESC")
         if (limit > 0) {
             sql.append(" LIMIT ?")
             params += limit
         }
-        sql.append(") t ORDER BY timestamp_ms ASC")
+        sql.append(") t ORDER BY sent_at ASC")
 
         return storage.query(sql.toString(), *params.toTypedArray(), map = ::mapRow)
     }
@@ -66,7 +66,7 @@ class MySqlChatHistoryRepository(
         senderName = rs.getString("sender_name"),
         content = rs.getString("content"),
         messageType = messageTypeOf(rs.getString("message_type")),
-        timestamp = rs.getLong("timestamp_ms"),
+        timestamp = MySqlTime.toEpochMs(rs, "sent_at"),
         messageId = rs.getLong("message_id").let { if (rs.wasNull()) null else it },
         isFromBot = rs.getBoolean("is_from_bot")
     )
@@ -79,10 +79,10 @@ class MySqlChatHistoryRepository(
         /** save 用 upsert（与 JSON 缓存覆盖语义一致：同 id 全字段覆盖） */
         internal const val INSERT =
             "INSERT INTO chat_history (id, conversation_id, sender_id, sender_name, content, " +
-                "message_type, timestamp_ms, message_id, is_from_bot) VALUES (?,?,?,?,?,?,?,?,?) " +
+                "message_type, sent_at, message_id, is_from_bot) VALUES (?,?,?,?,?,?,?,?,?) " +
                 "ON DUPLICATE KEY UPDATE conversation_id=VALUES(conversation_id), " +
                 "sender_id=VALUES(sender_id), sender_name=VALUES(sender_name), content=VALUES(content), " +
-                "message_type=VALUES(message_type), timestamp_ms=VALUES(timestamp_ms), " +
+                "message_type=VALUES(message_type), sent_at=VALUES(sent_at), " +
                 "message_id=VALUES(message_id), is_from_bot=VALUES(is_from_bot)"
 
         /** json 同步用：主键冲突即跳过（不覆盖库里已更新的行）——由 [INSERT] 派生防漂移 */

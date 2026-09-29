@@ -77,14 +77,15 @@ class MySqlStorageSmokeTest {
             ChatMessageRecord(id = "m1", conversationId = conv, senderId = 1L, senderName = "甲",
                 content = "第一句", timestamp = 1000L, messageId = 11L),
             ChatMessageRecord(id = "m2", conversationId = conv, senderId = 2L, senderName = "乙",
-                content = "第二句", timestamp = 2000L),
+                content = "第二句", timestamp = 2123L),   // 非整秒：验证 DATETIME(3) 毫秒不丢
             ChatMessageRecord(id = "m3", conversationId = conv, senderId = 1L, senderName = "甲",
                 content = "第三句", timestamp = 3000L, isFromBot = true)
         ).forEach { repo.save(it) }
 
-        // 全量按时间升序
+        // 全量按时间升序 + 毫秒级时间戳往返无损
         val all = repo.findByConversation(conv, 0)
         assertEquals(listOf("m1", "m2", "m3"), all.map { it.id })
+        assertEquals(listOf(1000L, 2123L, 3000L), all.map { it.timestamp }, "DATETIME(3) 往返保毫秒")
 
         // limit=2 → 最近 2 条（JSON 实现 takeLast 语义）
         assertEquals(listOf("m2", "m3"), repo.findByConversation(conv, 2).map { it.id })
@@ -232,4 +233,24 @@ class MySqlStorageSmokeTest {
 
     private fun idsOf(storage: MySqlStorage): Set<String> =
         storage.query("SELECT id FROM chat_history", map = { it.getString("id") }).toSet()
+
+    @Test
+    fun `time columns are datetime with millisecond precision`() = withDbOrSkip {
+        val storage = initOrSkip()
+        // 旧 BIGINT 结构已在本次 init 中迁移；断言列类型 = datetime(3)
+        listOf(
+            "chat_history" to "sent_at",
+            "memories" to "created_at",
+            "todos" to "created_at"
+        ).forEach { (table, column) ->
+            val type = storage.queryOne(
+                "SELECT CONCAT(DATA_TYPE, '(', DATETIME_PRECISION, ')') AS tp " +
+                    "FROM information_schema.COLUMNS " +
+                    "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                testConfig.database, table, column,
+                map = { it.getString("tp") }
+            )
+            assertEquals("datetime(3)", type, "$table.$column 应为 DATETIME(3)")
+        }
+    }
 }

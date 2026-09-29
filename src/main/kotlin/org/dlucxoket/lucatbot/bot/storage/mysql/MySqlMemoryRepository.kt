@@ -158,7 +158,7 @@ class MySqlMemoryRepository(
     private fun argsOf(m: MemoryItem): Array<Any?> = arrayOf(
         m.id, m.userId, m.subjectType.name, m.type.name, m.content,
         storage.mapper.writeValueAsString(m.relatedUserIds),
-        m.strength, m.createdAt
+        m.strength, MySqlTime.of(m.createdAt)
     )
 
     /** tags 不在行里（规范化到关联表），由 [attachTags] 统一补齐 */
@@ -172,7 +172,7 @@ class MySqlMemoryRepository(
             content = rs.getString("content"),
             relatedUserIds = readLongList(rs.getString("related_user_ids")),
             strength = rs.getDouble("strength"),
-            createdAt = rs.getLong("created_at")
+            createdAt = MySqlTime.toEpochMs(rs, "created_at")
         )
     }
 

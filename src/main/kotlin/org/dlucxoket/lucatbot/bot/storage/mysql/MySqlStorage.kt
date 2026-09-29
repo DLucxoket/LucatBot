@@ -48,15 +48,22 @@ data class MySqlConfig(
  * 连接模型：**每次操作短连接**（`use` 自动关闭）。写入即落库（无防抖），
  * 机器人存储量级（本地 MySQL、低频写）完全够用，不引入连接池的复杂度。
  *
+ * **时间列用 DATETIME(3)**（毫秒精度）：领域模型保持 `Long` epoch 毫秒，
+ * 仓库层经 [MySqlTime] 用 JDBC Timestamp 对称转换（同 JVM 写读往返无损毫秒）；
+ * 旧 BIGINT 毫秒数据在启动时经「读出 → 重建 → 回填」转换（见下）。
+ *
  * **记忆关键词规范化**（m:n 两表）：
  * - `tags`：关键词注册表（name 唯一）——按词查询走索引，词条可统计、无重复存储
  * - `memory_tags`：记忆 ↔ 关键词 关联表（FK 级联：删记忆自动清关联）
  *
  * 引导流程（[init]，StorageConfig 启动时调用一次，幂等）：
  * 1. 服务级连接 `CREATE DATABASE IF NOT EXISTS`
- * 2. **旧结构检测**：memories 若还带旧 `tags` 列 → 读出数据 → DROP（结构演进
- *    模式：读出 → 重建 → 回填，数据无损）
- * 3. 库级连接建五张表（`IF NOT EXISTS`）→ 回填旧结构数据（tags 列 → 关联表）
+ * 2. **结构演进检测**（information_schema）：
+ *    - 时间列仍是 BIGINT（epoch 毫秒）→ 读出行数据 → DROP → 重建为 DATETIME(3) 并回填转换
+ *    - memories 还带旧 `tags` 列 → 读出 → DROP → 关键词回填到关联表
+ *    （DROP memories 时置 FOREIGN_KEY_CHECKS=0：memory_tags 的 FK 行
+ *     在重建后 id 不变、自动恢复有效，无需搬动）
+ * 3. 库级连接建五张表（`IF NOT EXISTS`）→ 回填旧结构数据
  * 4. [MySqlConfig.importFromJson] 开启时，**每次启动**把 json 中缺失的行导入
  *    （`INSERT IGNORE`——已存在的行不覆盖，MySQL 为权威源）
  */
@@ -86,10 +93,10 @@ class MySqlStorage(private val config: MySqlConfig) {
             }
         }
         connection().use { conn ->
-            // 旧结构（memories.tags 列）→ 读出、DROP（必须在建关联表之前，否则 FK 依赖挡住）
-            val legacy = drainLegacyMemories(conn)
+            // 旧结构 → 读出 + DROP（须在建表/建关联表之前；DROP memories 关掉 FK 检查）
+            val legacy = drainLegacy(conn)
             conn.createStatement().use { st -> SCHEMA.forEach { st.executeUpdate(it) } }
-            if (legacy.isNotEmpty()) restoreLegacyMemories(conn, legacy)
+            if (legacy != null) restoreLegacy(conn, legacy)
         }
         if (config.importFromJson) {
             importFromJson()
@@ -198,54 +205,169 @@ class MySqlStorage(private val config: MySqlConfig) {
     }
 
     // ------------------------------------------------------------------
-    // 旧结构演进：memories.tags 列 → tags/memory_tags 关联表（数据无损）
+    // 结构演进：BIGINT 时间列 → DATETIME(3)；旧 memories.tags 列 → 关联表
     // ------------------------------------------------------------------
 
-    private data class LegacyMemory(val values: Array<Any?>, val tags: List<String>)
+    /** chat_history 旧行（timestamp_ms 为 BIGINT epoch 毫秒） */
+    private class LegacyChat(
+        val id: String, val conv: String, val senderId: Long, val senderName: String,
+        val content: String, val type: String, val tsMs: Long, val messageId: Long?, val isBot: Boolean
+    )
 
-    /** 检测旧 tags 列：有则读出全部行并 DROP（须在建 FK 关联表之前） */
-    private fun drainLegacyMemories(conn: Connection): List<LegacyMemory> {
-        val hasLegacy = conn.prepareStatement(
-            "SELECT COUNT(*) FROM information_schema.COLUMNS " +
-                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'tags'"
+    /** todos 旧行（created_at 为 BIGINT epoch 毫秒） */
+    private class LegacyTodo(
+        val id: String, val content: String, val createdMs: Long,
+        val done: Boolean, val convId: String?
+    )
+
+    /** memories 旧行；[tagsFromColumn] 非空 = 还带旧 tags 列（更早的结构） */
+    private class LegacyMemory(
+        val id: String, val userId: Long, val subject: String, val type: String,
+        val content: String, val relatedJson: String, val strength: Double,
+        val createdMs: Long, val tagsFromColumn: List<String>?
+    )
+
+    private class LegacySnapshot(
+        val chat: List<LegacyChat>?,
+        val memories: List<LegacyMemory>?,
+        val todos: List<LegacyTodo>?
+    )
+
+    /** 列的 DATA_TYPE（information_schema；表/列不存在 → null） */
+    private fun columnType(conn: Connection, table: String, column: String): String? =
+        conn.prepareStatement(
+            "SELECT DATA_TYPE FROM information_schema.COLUMNS " +
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?"
         ).use { ps ->
             ps.setString(1, config.database)
-            ps.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
+            ps.setString(2, table)
+            ps.setString(3, column)
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getString(1).lowercase() else null }
         }
-        if (!hasLegacy) return emptyList()
 
-        val legacy = conn.prepareStatement(
-            "SELECT id, user_id, subject_type, type, content, related_user_ids, tags, strength, created_at FROM memories"
+    /**
+     * 检测旧结构：有则读出全部行并 DROP（须在建表之前；DROP memories 关 FK 检查，
+     * memory_tags 的关联行在表重建后 id 不变、自动恢复有效）
+     *
+     * @return null = 无旧结构（常规幂等路径，零开销）
+     */
+    private fun drainLegacy(conn: Connection): LegacySnapshot? {
+        val chatLegacy = columnType(conn, "chat_history", "timestamp_ms") == "bigint"
+        val todoLegacy = columnType(conn, "todos", "created_at") == "bigint"
+        val memCreatedLegacy = columnType(conn, "memories", "created_at") == "bigint"
+        val memTagsLegacy = columnType(conn, "memories", "tags") != null
+        if (!chatLegacy && !todoLegacy && !memCreatedLegacy && !memTagsLegacy) return null
+
+        val chat = if (chatLegacy) conn.prepareStatement(
+            "SELECT id, conversation_id, sender_id, sender_name, content, message_type, " +
+                "timestamp_ms, message_id, is_from_bot FROM chat_history"
         ).use { ps ->
             ps.executeQuery().use { rs ->
-                val out = mutableListOf<LegacyMemory>()
+                val out = mutableListOf<LegacyChat>()
                 while (rs.next()) {
-                    // 列序：id, user_id, subject_type, type, content, related_user_ids, tags, strength, created_at
-                    val tags = runCatching { mapper.readValue<List<String>>(rs.getString("tags") ?: "[]") }
-                        .getOrDefault(emptyList())
-                    out += LegacyMemory(
-                        values = arrayOf(
-                            rs.getString(1), rs.getLong(2), rs.getString(3), rs.getString(4),
-                            rs.getString(5), rs.getString(6), rs.getDouble(8), rs.getLong(9)
-                        ),
-                        tags = tags
+                    out += LegacyChat(
+                        rs.getString(1), rs.getString(2), rs.getLong(3), rs.getString(4),
+                        rs.getString(5), rs.getString(6), rs.getLong(7),
+                        rs.getLong(8).let { if (rs.wasNull()) null else it },
+                        rs.getBoolean(9)
                     )
                 }
                 out
             }
+        } else null
+
+        val memories = if (memCreatedLegacy || memTagsLegacy) {
+            // 列序：1..6 = id..related_user_ids；[7 = tags（仅旧结构）]；末两列 = strength, created_at
+            val sql = buildString {
+                append("SELECT id, user_id, subject_type, type, content, related_user_ids, ")
+                if (memTagsLegacy) append("tags, ")
+                append("strength, created_at FROM memories")
+            }
+            conn.prepareStatement(sql).use { ps ->
+                ps.executeQuery().use { rs ->
+                    val out = mutableListOf<LegacyMemory>()
+                    while (rs.next()) {
+                        val tagsCol: List<String>? = if (memTagsLegacy) {
+                            runCatching { mapper.readValue<List<String>>(rs.getString("tags") ?: "[]") }
+                                .getOrDefault(emptyList())
+                        } else null
+                        out += LegacyMemory(
+                            id = rs.getString(1), userId = rs.getLong(2),
+                            subject = rs.getString(3), type = rs.getString(4),
+                            content = rs.getString(5), relatedJson = rs.getString(6) ?: "[]",
+                            strength = rs.getDouble(if (memTagsLegacy) 8 else 7),
+                            createdMs = rs.getLong(if (memTagsLegacy) 9 else 8),
+                            tagsFromColumn = tagsCol
+                        )
+                    }
+                    out
+                }
+            }
+        } else null
+
+        val todos = if (todoLegacy) conn.prepareStatement(
+            "SELECT id, content, created_at, done, conversation_id FROM todos"
+        ).use { ps ->
+            ps.executeQuery().use { rs ->
+                val out = mutableListOf<LegacyTodo>()
+                while (rs.next()) {
+                    out += LegacyTodo(
+                        rs.getString(1), rs.getString(2), rs.getLong(3),
+                        rs.getBoolean(4), rs.getString(5)
+                    )
+                }
+                out
+            }
+        } else null
+
+        conn.createStatement().use { st ->
+            st.executeUpdate("SET FOREIGN_KEY_CHECKS = 0")
         }
-        conn.createStatement().use { it.executeUpdate("DROP TABLE memories") }
-        log.info("检测到旧版 memories.tags 列：读出 {} 条，重建为 tags/memory_tags 规范化结构", legacy.size)
-        return legacy
+        try {
+            conn.createStatement().use { st ->
+                if (chatLegacy) st.executeUpdate("DROP TABLE chat_history")
+                if (memCreatedLegacy || memTagsLegacy) st.executeUpdate("DROP TABLE memories")
+                if (todoLegacy) st.executeUpdate("DROP TABLE todos")
+            }
+        } finally {
+            conn.createStatement().use { st ->
+                st.executeUpdate("SET FOREIGN_KEY_CHECKS = 1")
+            }
+        }
+        log.info(
+            "结构演进：检测到旧时间列/tags 列，读出待回填 chat={} memories={} todos={}",
+            chat?.size ?: "-", memories?.size ?: "-", todos?.size ?: "-"
+        )
+        return LegacySnapshot(chat, memories, todos)
     }
 
-    /** 回填旧结构数据（行 + 关键词关联），全部在建好的新表上执行 */
-    private fun restoreLegacyMemories(conn: Connection, legacy: List<LegacyMemory>) {
-        legacy.forEach { row ->
-            update(conn, MySqlMemoryRepository.INSERT, *row.values)
-            syncMemoryTags(conn, row.values[0] as String, row.tags)
+    /** 回填旧结构数据（BIGINT 毫秒 → DATETIME(3) 经 [MySqlTime] 对称转换） */
+    private fun restoreLegacy(conn: Connection, legacy: LegacySnapshot) {
+        legacy.chat?.forEach { c ->
+            update(
+                conn, MySqlChatHistoryRepository.INSERT,
+                c.id, c.conv, c.senderId, c.senderName, c.content,
+                c.type, MySqlTime.of(c.tsMs), c.messageId, c.isBot
+            )
         }
-        log.info("旧结构回填完成：{} 条记忆及其关键词", legacy.size)
+        legacy.memories?.forEach { m ->
+            update(
+                conn, MySqlMemoryRepository.INSERT,
+                m.id, m.userId, m.subject, m.type, m.content,
+                m.relatedJson, m.strength, MySqlTime.of(m.createdMs)
+            )
+            m.tagsFromColumn?.let { tags -> syncMemoryTags(conn, m.id, tags) }
+        }
+        legacy.todos?.forEach { t ->
+            update(
+                conn, MySqlTodoRepository.INSERT,
+                t.id, t.content, MySqlTime.of(t.createdMs), t.done, t.convId
+            )
+        }
+        log.info(
+            "结构演进回填完成：chat={} memories={} todos={}",
+            legacy.chat?.size ?: "-", legacy.memories?.size ?: "-", legacy.todos?.size ?: "-"
+        )
     }
 
     // ------------------------------------------------------------------
@@ -264,7 +386,7 @@ class MySqlStorage(private val config: MySqlConfig) {
             MySqlChatHistoryRepository.INSERT_IGNORE) { r ->
             arrayOf(
                 r.id, r.conversationId, r.senderId, r.senderName, r.content,
-                r.messageType.name, r.timestamp, r.messageId, r.isFromBot
+                r.messageType.name, MySqlTime.of(r.timestamp), r.messageId, r.isFromBot
             )
         }
         // 记忆走仓库（行 + 关键词关联同事务）
@@ -278,7 +400,7 @@ class MySqlStorage(private val config: MySqlConfig) {
             }
         importFile<TodoItem>("待办", "data/todos.json",
             MySqlTodoRepository.INSERT_IGNORE) { t ->
-            arrayOf(t.id, t.content, t.createdAt, t.done, t.conversationId)
+            arrayOf(t.id, t.content, MySqlTime.of(t.createdAt), t.done, t.conversationId)
         }
     }
 
@@ -314,6 +436,8 @@ class MySqlStorage(private val config: MySqlConfig) {
         /**
          * 建表 DDL（幂等）：五张表——三个 Repository 各一张 +
          * 关键词规范化两张（tags 注册表、memory_tags 关联表）
+         *
+         * 时间列统一 **DATETIME(3)**（毫秒精度，配合 [MySqlTime] 对称转换）。
          */
         val SCHEMA = listOf(
             """
@@ -324,10 +448,10 @@ class MySqlStorage(private val config: MySqlConfig) {
                 sender_name VARCHAR(128) NOT NULL DEFAULT '',
                 content TEXT NOT NULL,
                 message_type VARCHAR(16) NOT NULL DEFAULT 'TEXT',
-                timestamp_ms BIGINT NOT NULL,
+                sent_at DATETIME(3) NOT NULL,
                 message_id BIGINT NULL,
                 is_from_bot BOOLEAN NOT NULL DEFAULT FALSE,
-                KEY idx_conv_time (conversation_id, timestamp_ms)
+                KEY idx_conv_time (conversation_id, sent_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent(),
             """
@@ -339,7 +463,7 @@ class MySqlStorage(private val config: MySqlConfig) {
                 content TEXT NOT NULL,
                 related_user_ids VARCHAR(2048) NOT NULL DEFAULT '[]',
                 strength DOUBLE NOT NULL DEFAULT 1.0,
-                created_at BIGINT NOT NULL,
+                created_at DATETIME(3) NOT NULL,
                 KEY idx_user (user_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent(),
@@ -366,7 +490,7 @@ class MySqlStorage(private val config: MySqlConfig) {
             CREATE TABLE IF NOT EXISTS todos (
                 id VARCHAR(64) NOT NULL PRIMARY KEY,
                 content TEXT NOT NULL,
-                created_at BIGINT NOT NULL,
+                created_at DATETIME(3) NOT NULL,
                 done BOOLEAN NOT NULL DEFAULT FALSE,
                 conversation_id VARCHAR(64) NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

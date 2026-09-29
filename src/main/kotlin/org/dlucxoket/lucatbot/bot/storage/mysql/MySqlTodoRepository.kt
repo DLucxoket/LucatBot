@@ -16,7 +16,9 @@ class MySqlTodoRepository(
 ) : TodoRepository {
 
     override fun save(todo: TodoItem) {
-        storage.update(INSERT, todo.id, todo.content, todo.createdAt, todo.done, todo.conversationId)
+        storage.update(
+            INSERT, todo.id, todo.content, MySqlTime.of(todo.createdAt), todo.done, todo.conversationId
+        )
     }
 
     override fun findAll(): List<TodoItem> =
@@ -34,7 +36,7 @@ class MySqlTodoRepository(
     private fun mapRow(rs: ResultSet) = TodoItem(
         id = rs.getString("id"),
         content = rs.getString("content"),
-        createdAt = rs.getLong("created_at"),
+        createdAt = MySqlTime.toEpochMs(rs, "created_at"),
         done = rs.getBoolean("done"),
         conversationId = rs.getString("conversation_id")
     )
