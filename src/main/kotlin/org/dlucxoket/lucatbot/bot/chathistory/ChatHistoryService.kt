@@ -25,15 +25,21 @@ class ChatHistoryService(
 
     /**
      * 记录一条收到的消息
+     *
+     * 带 message_id 时用稳定 id（`msg:<会话>:<id>`）——同一消息重投递
+     * 直接覆盖，也与发送回执/折叠后的引用解析共享同一标识。
      */
     fun recordMessage(event: MessageEvent, content: String) {
         val record = ChatMessageRecord(
+            id = event.messageId?.let { "msg:${event.conversationId}:$it" }
+                ?: java.util.UUID.randomUUID().toString(),
             conversationId = event.conversationId,
             senderId = event.sender.qqNumber,
             senderName = event.sender.nickname,
             content = content,
             messageType = detectMessageType(content),
             timestamp = event.timestamp,
+            messageId = event.messageId,
             isFromBot = false
         )
         repository.save(record)
@@ -41,15 +47,21 @@ class ChatHistoryService(
 
     /**
      * 记录一条机器人发出的消息
+     *
+     * @param messageId 发送回执里的 message_id（可空）——有则用稳定 id，
+     *                  网友回复这条消息时引用解析才能定位到它
      */
-    fun recordBotReply(conversationId: String, content: String) {
+    fun recordBotReply(conversationId: String, content: String, messageId: Long? = null) {
         val record = ChatMessageRecord(
+            id = messageId?.let { "msg:$conversationId:$it" }
+                ?: java.util.UUID.randomUUID().toString(),
             conversationId = conversationId,
             senderId = 0L,
             senderName = "bot",
             content = content,
             messageType = detectMessageType(content),
             timestamp = System.currentTimeMillis(),
+            messageId = messageId,
             isFromBot = true
         )
         repository.save(record)
@@ -126,11 +138,18 @@ class ChatHistoryService(
             if (dupIndex < 0) {
                 kept += record
             } else {
-                // 保留更干净的版本（不含 CQ 码的对 prompt 友好），位置不变
+                // 保留更干净的版本（不含 CQ 码的对 prompt 友好），位置不变；
+                // 同时把 messageId 合并过来——被引用解析（回复 #id）靠它定位，
+                // 爬楼记录没有该字段（DTO 未映射），id 来自实时/发送记录
                 val existing = kept[dupIndex]
-                if (existing.content.contains("[CQ:") && !record.content.contains("[CQ:")) {
-                    kept[dupIndex] = record
+                val keptCleaner = if (existing.content.contains("[CQ:") && !record.content.contains("[CQ:")) {
+                    record
+                } else {
+                    existing
                 }
+                kept[dupIndex] = keptCleaner.copy(
+                    messageId = keptCleaner.messageId ?: existing.messageId ?: record.messageId
+                )
             }
         }
         return kept

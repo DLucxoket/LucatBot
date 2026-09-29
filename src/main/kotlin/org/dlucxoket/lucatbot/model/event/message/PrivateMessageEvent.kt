@@ -10,11 +10,13 @@ package org.dlucxoket.lucatbot.model.event.message
  * @param message   私聊消息内容
  * @param sender    发送者
  * @param timestamp 消息时间戳
+ * @param messageId OneBot message_id（可空）
  */
 open class PrivateMessageEvent(
     message: org.dlucxoket.lucatbot.model.message.Message,
     sender: org.dlucxoket.lucatbot.model.user.User,
-    timestamp: Long
-) : org.dlucxoket.lucatbot.model.event.message.MessageEvent(message, sender, timestamp) {
+    timestamp: Long,
+    messageId: Long? = null
+) : org.dlucxoket.lucatbot.model.event.message.MessageEvent(message, sender, timestamp, messageId) {
     override val conversationId: String = "private:${sender.qqNumber}"
 }

@@ -38,7 +38,11 @@ data class ChatHistoryResult(
 data class HistoryMessageItem(
     val sender: String,
     val content: String,
-    val timestamp: Long = 0L
+    val timestamp: Long = 0L,
+    /** 发送者 QQ 号（引用解析：@QQ → 昵称 靠它建索引） */
+    val senderId: Long = 0L,
+    /** OneBot message_id（引用解析：回复 #id → 具体消息；可空） */
+    val messageId: Long? = null
 )
 
 /** 查询消息列表的请求 */

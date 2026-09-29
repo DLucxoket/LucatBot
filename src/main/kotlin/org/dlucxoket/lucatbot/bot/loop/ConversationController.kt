@@ -10,6 +10,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.bot.chathistory.ChatReferenceResolver
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
@@ -127,10 +128,6 @@ class ConversationController(
                 // 已发出消息且本轮仍没有任何新消息 → 递进一轮（衡量连续无回应）
                 noReplyRounds++
             }
-            val newNotes = inserts.map {
-                "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]：${it.content}"
-            }
-
             // 2) 读历史（Tool → OOP）
             val historyResult = chatHistoryTool.processObject(
                 ChatHistoryRequest(
@@ -139,14 +136,35 @@ class ConversationController(
                     type = if (isGroup) "group" else "private"
                 )
             )
+
+            // 引用解析索引：把窗口内的 @QQ / 回复 #消息id 改写成
+            // 「@昵称(QQ)」「回复 @某人[时间]：被回复内容摘录」，LLM 才知道在艾特谁、回的是哪句
+            val refIndex = ChatReferenceResolver.indexOf(
+                historyResult.messages.map {
+                    ChatReferenceResolver.WindowEntry(
+                        messageId = it.messageId,
+                        senderId = it.senderId,
+                        senderName = it.sender,
+                        timestamp = it.timestamp,
+                        content = it.content
+                    )
+                }
+            )
+            fun resolveRef(content: String): String =
+                ChatReferenceResolver.resolve(content, refIndex) { ts -> formatTime(ts) }
+
             val recentLines = historyResult.messages.map {
                 ConversationChatLine(
                     sender = it.sender,
                     senderId = "",
                     isMe = it.sender == "bot" || it.sender == "我",
                     time = formatTime(it.timestamp),
-                    content = it.content
+                    content = resolveRef(it.content)
                 )
+            }
+            // 新消息注释同样解析（它们引用的多是窗口内刚出现的消息）
+            val newNotes = inserts.map {
+                "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]：${resolveRef(it.content)}"
             }
 
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）

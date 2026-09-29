@@ -52,7 +52,9 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                     HistoryMessageItem(
                         sender = it.senderName,
                         content = it.content,
-                        timestamp = it.timestamp
+                        timestamp = it.timestamp,
+                        senderId = it.senderId,
+                        messageId = it.messageId
                     )
                 },
                 success = true

@@ -150,7 +150,10 @@ internal class MainPlugin: BotPlugin() {
                 val content = decision.content.orEmpty()
                 val resp = bot.sendMsg(event, content, false)
                 if (resp?.status == "ok") {
-                    chatHistoryService.recordBotReply("private:${event.userId}", content)
+                    // 回执 message_id 入档：网友回复这条戳一戳回应时引用可解析
+                    chatHistoryService.recordBotReply(
+                        "private:${event.userId}", content, (resp.data as? Number)?.toLong()
+                    )
                     sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, content, isBot = true)
                     actionLog.append("戳一戳回应：$content")
                     log.info("戳一戳回应: $content")

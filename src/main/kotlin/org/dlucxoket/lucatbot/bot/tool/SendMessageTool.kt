@@ -51,8 +51,10 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
                 )
             }
 
-            // 发出后必须写入聊天记录（isBot=true）
-            chatHistoryService?.recordBotReply(input.conversationId, input.content)
+            // 发出后必须写入聊天记录（isBot=true）；回执里的 message_id 一并入档，
+            // 网友回复这条消息时引用解析（回复 #id）才能定位到它
+            val sentMessageId = (resp?.data as? Number)?.toLong()
+            chatHistoryService?.recordBotReply(input.conversationId, input.content, sentMessageId)
 
             SendMessageResult(success = true)
         } catch (e: Exception) {

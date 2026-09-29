@@ -43,15 +43,18 @@ object ShiroConverter {
         val message = toModelMessage(event)
         val sender = toModelUser(event)
         val timestamp = event.time * 1000L  // OneBot 秒级时间戳 → 毫秒
+        // AnyMessageEvent 继承自 GroupMessageEvent，messageId 映射 JSON 的 message_id；
+        // 被引用解析（回复 #id → 指向哪条消息）依赖它入档
+        val messageId = event.messageId?.toLong()
 
         return if (event.groupId != null && event.groupId > 0) {
             val group = Group(
                 groupNumber = event.groupId,
                 groupName = ""
             )
-            GroupMessageEvent(message, sender, group, timestamp)
+            GroupMessageEvent(message, sender, group, timestamp, messageId)
         } else {
-            FriendMessageEvent(message, sender, timestamp)
+            FriendMessageEvent(message, sender, timestamp, messageId)
         }
     }
 

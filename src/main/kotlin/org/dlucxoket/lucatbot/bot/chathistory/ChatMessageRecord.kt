@@ -43,6 +43,14 @@ data class ChatMessageRecord(
     /** 发送时间戳（毫秒） */
     val timestamp: Long = System.currentTimeMillis(),
 
+    /**
+     * OneBot message_id（被引用解析的键：`回复 #id` 靠它定位到具体消息）
+     *
+     * 来源：实时事件与发送回执（爬楼 DTO 未映射该字段）；缺失为 null，
+     * 读取折叠时会把爬楼孪生记录的 id 合并到保留记录上。旧数据无此字段。
+     */
+    val messageId: Long? = null,
+
     /** 是否是机器人发的 */
     val isFromBot: Boolean = false
 ) {
