@@ -54,7 +54,9 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                         content = it.content,
                         timestamp = it.timestamp,
                         senderId = it.senderId,
-                        messageId = it.messageId
+                        messageId = it.messageId,
+                        nickname = it.senderNickname,
+                        isFromBot = it.isFromBot
                     )
                 },
                 success = true
@@ -109,8 +111,12 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                 val senderId = msg.sender?.userId?.toLongOrNull()
                     ?: msg.userId
                     ?: 0L
-                val senderName = msg.sender?.card?.takeIf { it.isNotBlank() }
-                    ?: msg.sender?.nickname?.takeIf { it.isNotBlank() }
+                // 展示名规则与实时入档一致：群聊群名片优先、私聊只用 QQ 昵称；
+                // QQ 昵称另存（senderNickname），供 prompt 注解「名片（QQ昵称 xx）」
+                val qqNickname = msg.sender?.nickname?.takeIf { it.isNotBlank() }
+                val card = if (isGroup) msg.sender?.card?.takeIf { it.isNotBlank() } else null
+                val senderName = card
+                    ?: qqNickname
                     ?: if (senderId == selfId) "bot" else senderId.toString()
 
                 val rawTime = msg.time ?: 0L
@@ -126,7 +132,8 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                     senderName = senderName,
                     content = content,
                     timestamp = timestamp,
-                    isFromBot = senderId == selfId
+                    isFromBot = senderId == selfId,
+                    senderNickname = qqNickname
                 )
             }
         } catch (e: Exception) {

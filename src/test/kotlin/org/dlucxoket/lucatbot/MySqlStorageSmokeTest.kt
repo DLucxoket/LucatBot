@@ -75,7 +75,7 @@ class MySqlStorageSmokeTest {
         val conv = "private:999001"
         listOf(
             ChatMessageRecord(id = "m1", conversationId = conv, senderId = 1L, senderName = "甲",
-                content = "第一句", timestamp = 1000L, messageId = 11L),
+                senderNickname = "甲QQ名", content = "第一句", timestamp = 1000L, messageId = 11L),
             ChatMessageRecord(id = "m2", conversationId = conv, senderId = 2L, senderName = "乙",
                 content = "第二句", timestamp = 2123L),   // 非整秒：验证 DATETIME(3) 毫秒不丢
             ChatMessageRecord(id = "m3", conversationId = conv, senderId = 1L, senderName = "甲",
@@ -97,6 +97,8 @@ class MySqlStorageSmokeTest {
         val first = all[0]
         assertEquals(1L, first.senderId)
         assertEquals("甲", first.senderName)
+        assertEquals("甲QQ名", first.senderNickname, "sender_nickname 列往返（群名片 vs QQ昵称分辨）")
+        assertNull(all[1].senderNickname, "无名片记录 → NULL 往返仍为 null")
         assertEquals(11L, first.messageId)
         assertNull(all[1].messageId)
         assertTrue(first.isFromBot == false && all[2].isFromBot)
@@ -252,5 +254,18 @@ class MySqlStorageSmokeTest {
             )
             assertEquals("datetime(3)", type, "$table.$column 应为 DATETIME(3)")
         }
+    }
+
+    @Test
+    fun `chat history has sender nickname column for card vs qq name`() = withDbOrSkip {
+        // 老库（建表时无该列）靠启动期 ensureColumn 补列——测试库首跑即走该路径
+        val storage = initOrSkip()
+        val type = storage.queryOne(
+            "SELECT DATA_TYPE AS tp FROM information_schema.COLUMNS " +
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            testConfig.database, "chat_history", "sender_nickname",
+            map = { it.getString("tp") }
+        )
+        assertEquals("varchar", type, "chat_history.sender_nickname 列应存在（老库自动补列）")
     }
 }

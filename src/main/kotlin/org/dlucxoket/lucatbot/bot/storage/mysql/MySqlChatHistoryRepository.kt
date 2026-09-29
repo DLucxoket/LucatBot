@@ -22,8 +22,9 @@ class MySqlChatHistoryRepository(
     override fun save(record: ChatMessageRecord) {
         storage.update(
             INSERT,
-            record.id, record.conversationId, record.senderId, record.senderName, record.content,
-            record.messageType.name, MySqlTime.of(record.timestamp), record.messageId, record.isFromBot
+            record.id, record.conversationId, record.senderId, record.senderName, record.senderNickname,
+            record.content, record.messageType.name, MySqlTime.of(record.timestamp),
+            record.messageId, record.isFromBot
         )
     }
 
@@ -64,6 +65,7 @@ class MySqlChatHistoryRepository(
         conversationId = rs.getString("conversation_id"),
         senderId = rs.getLong("sender_id"),
         senderName = rs.getString("sender_name"),
+        senderNickname = rs.getString("sender_nickname"),
         content = rs.getString("content"),
         messageType = messageTypeOf(rs.getString("message_type")),
         timestamp = MySqlTime.toEpochMs(rs, "sent_at"),
@@ -78,10 +80,11 @@ class MySqlChatHistoryRepository(
     companion object {
         /** save 用 upsert（与 JSON 缓存覆盖语义一致：同 id 全字段覆盖） */
         internal const val INSERT =
-            "INSERT INTO chat_history (id, conversation_id, sender_id, sender_name, content, " +
-                "message_type, sent_at, message_id, is_from_bot) VALUES (?,?,?,?,?,?,?,?,?) " +
+            "INSERT INTO chat_history (id, conversation_id, sender_id, sender_name, sender_nickname, content, " +
+                "message_type, sent_at, message_id, is_from_bot) VALUES (?,?,?,?,?,?,?,?,?,?) " +
                 "ON DUPLICATE KEY UPDATE conversation_id=VALUES(conversation_id), " +
-                "sender_id=VALUES(sender_id), sender_name=VALUES(sender_name), content=VALUES(content), " +
+                "sender_id=VALUES(sender_id), sender_name=VALUES(sender_name), " +
+                "sender_nickname=VALUES(sender_nickname), content=VALUES(content), " +
                 "message_type=VALUES(message_type), sent_at=VALUES(sent_at), " +
                 "message_id=VALUES(message_id), is_from_bot=VALUES(is_from_bot)"
 

@@ -225,7 +225,7 @@ class LucatBot {
         enqueuePendingInsert(
             conversationId = conversationId,
             senderId = event.sender.qqNumber,
-            senderName = event.sender.nickname,
+            senderName = event.sender.displayName,
             content = extractRichContent(event),
             timestamp = event.timestamp,
             isAtMe = isAtMe,
@@ -300,7 +300,7 @@ class LucatBot {
                 conversationId = conversationId,
                 conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
                 senderId = event.sender.qqNumber,
-                senderName = event.sender.nickname,
+                senderName = event.sender.displayName,
                 content = extractRichContent(event),
                 isAtMe = isAtMe,
                 isAtAll = isAtAll,

@@ -121,6 +121,8 @@ object ShiroConverter {
      */
     private fun toModelUser(event: AnyMessageEvent): User {
         val sender = event.sender
+        // 群名片只在群聊有意义（展示名规则：群聊优先名片、私聊一律 QQ 昵称）
+        val isGroup = event.groupId != null && event.groupId > 0
         return User(
             qqNumber = event.userId ?: 0L,
             nickname = sender?.nickname ?: "",
@@ -130,7 +132,10 @@ object ShiroConverter {
                 else -> Sex.UNKNOWN
             },
             level = 0,
-            signature = ""
+            signature = "",
+            // 群名片与 QQ 昵称分开存——展示名统一走 User.displayName，
+            // 两个名字都保留在档，LLM 才能分辨「名片 vs QQ昵称」而不是当成两个人
+            card = if (isGroup) sender?.card?.takeIf { it.isNotBlank() } else null
         )
     }
 

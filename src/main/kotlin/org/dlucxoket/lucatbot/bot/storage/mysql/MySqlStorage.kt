@@ -96,6 +96,8 @@ class MySqlStorage(private val config: MySqlConfig) {
             // 旧结构 → 读出 + DROP（须在建表/建关联表之前；DROP memories 关掉 FK 检查）
             val legacy = drainLegacy(conn)
             conn.createStatement().use { st -> SCHEMA.forEach { st.executeUpdate(it) } }
+            // 加列演进：老库已有 chat_history 但缺 sender_nickname（IF NOT EXISTS 不会补列）
+            ensureColumn(conn, "chat_history", "sender_nickname", "sender_nickname VARCHAR(128) NULL")
             if (legacy != null) restoreLegacy(conn, legacy)
         }
         if (config.importFromJson) {
@@ -246,6 +248,18 @@ class MySqlStorage(private val config: MySqlConfig) {
         }
 
     /**
+     * 加列演进：老库的表已存在（`CREATE TABLE IF NOT EXISTS` 不会补列）时，
+     * 启动时把新增列 ALTER 补上（幂等：列已存在则零开销跳过）。
+     *
+     * @param definition ADD COLUMN 的完整列定义（如 `sender_nickname VARCHAR(128) NULL`）
+     */
+    private fun ensureColumn(conn: Connection, table: String, column: String, definition: String) {
+        if (columnType(conn, table, column) != null) return
+        update(conn, "ALTER TABLE `$table` ADD COLUMN $definition")
+        log.info("结构演进：{}.{} 列缺失，已补充", table, column)
+    }
+
+    /**
      * 检测旧结构：有则读出全部行并 DROP（须在建表之前；DROP memories 关 FK 检查，
      * memory_tags 的关联行在表重建后 id 不变、自动恢复有效）
      *
@@ -346,7 +360,7 @@ class MySqlStorage(private val config: MySqlConfig) {
         legacy.chat?.forEach { c ->
             update(
                 conn, MySqlChatHistoryRepository.INSERT,
-                c.id, c.conv, c.senderId, c.senderName, c.content,
+                c.id, c.conv, c.senderId, c.senderName, null, c.content,
                 c.type, MySqlTime.of(c.tsMs), c.messageId, c.isBot
             )
         }
@@ -385,7 +399,7 @@ class MySqlStorage(private val config: MySqlConfig) {
         importFile<ChatMessageRecord>("聊天记录", "data/chat-history.json",
             MySqlChatHistoryRepository.INSERT_IGNORE) { r ->
             arrayOf(
-                r.id, r.conversationId, r.senderId, r.senderName, r.content,
+                r.id, r.conversationId, r.senderId, r.senderName, r.senderNickname, r.content,
                 r.messageType.name, MySqlTime.of(r.timestamp), r.messageId, r.isFromBot
             )
         }
@@ -446,6 +460,7 @@ class MySqlStorage(private val config: MySqlConfig) {
                 conversation_id VARCHAR(64) NOT NULL,
                 sender_id BIGINT NOT NULL DEFAULT 0,
                 sender_name VARCHAR(128) NOT NULL DEFAULT '',
+                sender_nickname VARCHAR(128) NULL,
                 content TEXT NOT NULL,
                 message_type VARCHAR(16) NOT NULL DEFAULT 'TEXT',
                 sent_at DATETIME(3) NOT NULL,

@@ -84,7 +84,7 @@ internal class MainPlugin: BotPlugin() {
             chatHistoryService.recordMessage(modelEvent, content)
             val convId = modelEvent.conversationId
             sessionManager.addMessage(
-                convId, modelEvent.sender.nickname, content,
+                convId, modelEvent.sender.displayName, content,
                 senderId = modelEvent.sender.qqNumber
             )
 
@@ -139,6 +139,10 @@ internal class MainPlugin: BotPlugin() {
                 timeHint = TimeAwareness.timeHint(),
                 conversationType = "私聊",
                 conversationName = event.userId.toString(),
+                conversationIdentity = "私聊：网友 QQ ${event.userId}" + (
+                    chatHistoryService.peerDisplayName("private:${event.userId}", event.userId)
+                        ?.let { "，名字「$it」" } ?: ""
+                    ),
                 conversationId = "private:${event.userId}",
                 newMessageNotes = listOf("（戳一戳）QQ号 ${event.userId} 戳了你一下"),
                 hint = "这是戳一戳场景：想回应就 send 一句短的（如「干嘛」「戳我干嘛」），不想理就 return"

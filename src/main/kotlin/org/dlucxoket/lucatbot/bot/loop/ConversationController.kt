@@ -11,6 +11,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.chathistory.ChatReferenceResolver
+import org.dlucxoket.lucatbot.bot.chathistory.formatSenderDisplay
 import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
@@ -117,6 +118,8 @@ class ConversationController(
         var noReplyRounds = 0 // 连续无新消息的轮数（自上次发送起累计；SEND 成功不重置，有新消息清零）
         // 工具上下文（本会话内累积：状态计数/目录/执行结果，随每轮注入 prompt）
         val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 12)
+        // 会话身份：群名进会话时查一次（网络调用不每轮打）；私聊每轮现算（见 buildIdentity）
+        val cachedGroupName = if (isGroup) fetchGroupName(conversationId) else null
 
         while (true) {
             // 1) 把待插入的新消息以系统注释形式合并
@@ -155,9 +158,10 @@ class ConversationController(
 
             val recentLines = historyResult.messages.map {
                 ConversationChatLine(
-                    sender = it.sender,
-                    senderId = "",
-                    isMe = it.sender == "bot" || it.sender == "我",
+                    // 展示名 + 名片/QQ昵称注解（同号不同名时点破是同一人；改名后为新展示名）
+                    sender = formatSenderDisplay(it.sender, it.nickname),
+                    senderId = it.senderId.takeIf { id -> id != 0L }?.toString().orEmpty(),
+                    isMe = it.isFromBot || it.sender == "bot" || it.sender == "我",
                     time = formatTime(it.timestamp),
                     content = resolveRef(it.content)
                 )
@@ -175,6 +179,7 @@ class ConversationController(
                 timeHint = TimeAwareness.timeHint(),
                 conversationType = if (isGroup) "群聊" else "私聊",
                 conversationName = pickName(conversationId),
+                conversationIdentity = buildIdentity(conversationId, isGroup, cachedGroupName),
                 conversationId = conversationId,
                 shortTermMemory = memoryService.getMemorySummary(
                     MemorySubject.fromConversation(conversationId)
@@ -420,6 +425,36 @@ class ConversationController(
     private fun pickName(conversationId: String): String {
         return sessionManager.getLastMessage(conversationId)?.sender
             ?: conversationId.substringAfter(":")
+    }
+
+    /**
+     * 组装「当前会话」身份行（注入决策 prompt，让 LLM 知道在跟谁说话）：
+     * - 群聊 = `群聊：群号 123456，群名「xxx」`（群名 [fetchGroupName] 进会话时查一次）
+     * - 私聊 = `私聊：网友 QQ 123456，名字「xxx」`（名字从已读历史取最新展示名——
+     *   网友改群名片/改 QQ 名后下一轮即生效；历史里还没有对方消息则只给 QQ 号）
+     */
+    private fun buildIdentity(conversationId: String, isGroup: Boolean, groupName: String?): String {
+        val id = conversationId.substringAfter(":")
+        if (isGroup) {
+            return if (groupName.isNullOrBlank()) "群聊：群号 $id" else "群聊：群号 $id，群名「$groupName」"
+        }
+        val peerName = chatHistoryService.peerDisplayName(conversationId, id.toLongOrNull() ?: 0L)
+        return if (peerName.isNullOrBlank()) "私聊：网友 QQ $id" else "私聊：网友 QQ $id，名字「$peerName」"
+    }
+
+    /**
+     * 进会话时查一次群名（OneBot get_group_info，网络调用——不能每轮打）。
+     * 失败/未绑定/私聊一律返回 null，身份行退化为只给群号。
+     */
+    private fun fetchGroupName(conversationId: String): String? {
+        val groupId = conversationId.substringAfter(":").toLongOrNull() ?: return null
+        return try {
+            lucatBot.shiroBot?.getGroupInfo(groupId, false)?.data?.groupName
+                ?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            log.debug("查询群名失败（身份行降级为只有群号）: {}", e.message)
+            null
+        }
     }
 
     /** 今天 → HH:mm；非今天 → yyyy-MM-dd HH:mm（让 LLM 能判断消息新旧） */

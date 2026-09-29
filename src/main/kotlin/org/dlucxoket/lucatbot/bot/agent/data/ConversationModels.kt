@@ -157,6 +157,14 @@ data class ConversationRequest(
     @JsonProperty("conversationName")
     val conversationName: String = "",
 
+    /**
+     * 当前会话身份（注入 system 的「当前会话」行）：
+     * 群聊 = `群聊：群号 123456，群名「xxx」`；私聊 = `私聊：网友 QQ 123456，名字「xxx」`。
+     * 由编排层按会话类型组装（群名进会话时查一次，网友名从已读历史取）。
+     */
+    @JsonProperty("conversationIdentity")
+    val conversationIdentity: String = "",
+
     @JsonProperty("conversationId")
     val conversationId: String = "",
 

@@ -35,7 +35,10 @@ class ChatHistoryService(
                 ?: java.util.UUID.randomUUID().toString(),
             conversationId = event.conversationId,
             senderId = event.sender.qqNumber,
-            senderName = event.sender.nickname,
+            // 展示名统一走 displayName（群聊群名片、私聊 QQ 昵称）；
+            // QQ 昵称另存，供 prompt 注解「名片（QQ昵称 xx）」
+            senderName = event.sender.displayName,
+            senderNickname = event.sender.nickname,
             content = content,
             messageType = detectMessageType(content),
             timestamp = event.timestamp,
@@ -71,6 +74,9 @@ class ChatHistoryService(
      * 记录一条历史/爬楼拉到的消息（已读）
      *
      * 用稳定 id 做去重，避免反复爬楼写入重复记录。
+     *
+     * @param senderName 展示名（群聊群名片优先，与实时入档同一规则）
+     * @param senderNickname QQ 昵称（与展示名不同时供 prompt 注解）
      */
     fun recordHistoryMessage(
         conversationId: String,
@@ -78,13 +84,15 @@ class ChatHistoryService(
         senderName: String,
         content: String,
         timestamp: Long,
-        isFromBot: Boolean
+        isFromBot: Boolean,
+        senderNickname: String? = null
     ) {
         val record = ChatMessageRecord(
             id = "hist:$conversationId:$senderId:$timestamp:${content.hashCode()}",
             conversationId = conversationId,
             senderId = senderId,
             senderName = senderName,
+            senderNickname = senderNickname,
             content = content,
             messageType = detectMessageType(content),
             timestamp = timestamp,
@@ -163,10 +171,26 @@ class ChatHistoryService(
         if (records.isEmpty()) return "（新会话）"
 
         return records.joinToString("\n") { record ->
-            val role = if (record.isFromBot) "我" else "${record.senderName}(${record.senderId})"
+            // 展示名 + 名片/QQ昵称注解（同号不同名时点破是同一人）
+            val role = if (record.isFromBot) {
+                "我"
+            } else {
+                "${formatSenderDisplay(record.senderName, record.senderNickname)}(${record.senderId})"
+            }
             "$role: ${record.content}"
         }
     }
+
+    /**
+     * 会话里「对方」（指定 QQ 号、非机器人）最近一条消息的展示名
+     *
+     * 群名片/QQ昵称注解一并带上（同号不同名时点破是同一人）。
+     * 查无（新会话/对方还没说过话）→ null，由调用方回退。
+     */
+    fun peerDisplayName(conversationId: String, peerId: Long, limit: Int = 100): String? =
+        getHistory(conversationId, limit)
+            .lastOrNull { !it.isFromBot && it.senderId == peerId }
+            ?.let { formatSenderDisplay(it.senderName, it.senderNickname) }
 
     /**
      * 持久化

@@ -36,13 +36,18 @@ data class ChatHistoryResult(
 /** 聊天记录条目 */
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class HistoryMessageItem(
+    /** 展示名（群聊群名片优先 / 私聊 QQ 昵称） */
     val sender: String,
     val content: String,
     val timestamp: Long = 0L,
-    /** 发送者 QQ 号（引用解析：@QQ → 昵称 靠它建索引） */
+    /** 发送者 QQ 号（引用解析：@QQ → 昵称 靠它建索引；身份判定以它为准） */
     val senderId: Long = 0L,
     /** OneBot message_id（引用解析：回复 #id → 具体消息；可空） */
-    val messageId: Long? = null
+    val messageId: Long? = null,
+    /** QQ 昵称（与展示名不同时，prompt 注解「名片（QQ昵称 xx）」） */
+    val nickname: String? = null,
+    /** 是否机器人自己发的（prompt 里渲染成「我」，不能靠名字猜） */
+    val isFromBot: Boolean = false
 )
 
 /** 查询消息列表的请求 */
