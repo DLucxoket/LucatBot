@@ -75,7 +75,7 @@ class MemoryAgent(
             【现有记忆】
             $existing
             【本次会话内容】
-            $content$
+            $content$timeLine
         """.trimIndent()
     }
 }
