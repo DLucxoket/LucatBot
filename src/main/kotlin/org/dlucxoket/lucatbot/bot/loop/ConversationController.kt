@@ -57,6 +57,12 @@ class ConversationController(
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
 
+    /** 退出记忆整理的幂等保护：正常退出与停机收尾对同一会话只整理一次 */
+    private val reflectLock = Any()
+
+    @Volatile
+    private var lastReflectedConversation: String? = null
+
     /**
      * 跑完整的会话内循环，直到离开
      */
@@ -64,6 +70,9 @@ class ConversationController(
         val conversationId = toConversationId(pick)
         val isGroup = pick.conversationType == SessionPickType.GROUP
         val proactive = pick.conversationType == SessionPickType.PROACTIVE
+
+        // 重置幂等保护：同一会话再次进入时允许重新整理
+        lastReflectedConversation = null
 
         lucatBot.enterConversation(
             conversationId,
@@ -253,12 +262,41 @@ class ConversationController(
     }
 
     /**
+     * 停机收尾入口：程序停止时若停在某个会话里，补做一次退出记忆整理。
+     *
+     * 幂等：[reflectMemory] 内有同会话去重保护，正常退出路径已整理过则
+     * 直接跳过，不会重复写入；不在会话中时为空操作。
+     */
+    fun reflectForShutdown() {
+        val state = lucatBot.state
+        if (state is LucatBot.State.InConversation) {
+            log.info("停机收尾：会话 {} 尚未整理记忆，先补一次", state.conversationId)
+            reflectMemory(state.conversationId)
+        }
+    }
+
+    /**
      * 退出会话时的记忆整理：把会话内容交给 [MemoryAgent] 判断有没有值得长期记住的信息，
      * 按 kind 写入 [MemoryService]（fact → rememberFact / opinion → rememberOpinion / event → rememberEvent）。
      *
      * 整个过程 try/catch：失败只 log.warn，绝不影响后续 actionLog / backToConversationList。
+     *
+     * 同会话幂等（[reflectLock] 保护）：停机收尾与正常退出可能对同一会话
+     * 各触发一次，只整理第一遍，避免重复写入。
      */
     private fun reflectMemory(conversationId: String) {
+        synchronized(reflectLock) {
+            if (lastReflectedConversation == conversationId) {
+                log.debug("会话 {} 的记忆已整理过，跳过重复整理", conversationId)
+                return
+            }
+            doReflectMemory(conversationId)
+            lastReflectedConversation = conversationId
+        }
+    }
+
+    /** 记忆整理的实际执行（仅在 [reflectLock] 内调用） */
+    private fun doReflectMemory(conversationId: String) {
         try {
             val subject = MemorySubject.fromConversation(conversationId)
             val result = memoryAgent.processObject(

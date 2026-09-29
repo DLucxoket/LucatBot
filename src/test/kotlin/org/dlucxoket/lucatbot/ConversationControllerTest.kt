@@ -76,6 +76,7 @@ class FakeSendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
     }
 }
 
+/** 会话内编排循环的行为测试：决策执行、副作用、退出记忆整理与停机收尾 */
 class ConversationControllerTest {
 
     private fun buildController(
@@ -421,8 +422,52 @@ class ConversationControllerTest {
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
         assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty())
     }
+
+    @Test
+    fun `shutdown with active conversation reflects memory exactly once`() {
+        val memoryLLM = FakeLLM(
+            mutableListOf("""{"memories":[{"kind":"fact","content":"停机前记住的事"}]}""")
+        )
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
+        )
+        val (controller, lucatBot, _) = buildController(
+            FakeLLM(mutableListOf()), memoryService = memoryService, memoryLLM = memoryLLM
+        )
+
+        // 模拟：程序停在会话中（未走过正常退出路径）
+        lucatBot.enterConversation("private:123", LucatBot.ConversationType.PRIVATE)
+        controller.reflectForShutdown()
+        controller.reflectForShutdown()  // 幂等保护：第二次应跳过
+
+        assertEquals(1, memoryLLM.prompts.size, "同一会话的停机整理只应触发一次 LLM")
+        val items = memoryService.getMemoriesOf(MemorySubject.user(123L))
+        assertEquals(1, items.size, "记忆只应写入一份：$items")
+        assertEquals("停机前记住的事", items[0].content)
+    }
+
+    @Test
+    fun `shutdown outside conversation skips reflection`() {
+        val memoryLLM = FakeLLM(
+            mutableListOf("""{"memories":[{"kind":"fact","content":"不该出现"}]}""")
+        )
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
+        )
+        val (controller, lucatBot, _) = buildController(
+            FakeLLM(mutableListOf()), memoryService = memoryService, memoryLLM = memoryLLM
+        )
+        // 初始为 Idle，不在会话中：停机收尾应为空操作
+        assertTrue(lucatBot.state !is LucatBot.State.InConversation)
+
+        controller.reflectForShutdown()
+
+        assertTrue(memoryLLM.prompts.isEmpty(), "不在会话中不应触发记忆整理")
+        assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty())
+    }
 }
 
+/** 经 FakeLLM 验证 SessionPickerAgent 把 LLM 统一信封转换为 SessionPick */
 class SessionPickerAgentParseViaFakeLLMTest {
 
     @Test
@@ -501,6 +546,7 @@ class SessionPickerAgentParseViaFakeLLMTest {
     }
 }
 
+/** ConversationAgent 解析失败时的 FALLBACK→RETURN 兜底行为测试 */
 class ConversationAgentFallbackTest {
 
     @Test

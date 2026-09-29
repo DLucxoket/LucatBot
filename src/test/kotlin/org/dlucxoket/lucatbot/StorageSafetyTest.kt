@@ -69,4 +69,21 @@ class StorageSafetyTest {
         flusher.shutdown()
         assertEquals(1, flushes.get(), "shutdown 必须兜底落盘一次")
     }
+
+    @Test
+    fun `late write after shutdown flushes inline without exception`() {
+        val flushes = AtomicInteger(0)
+        val flusher = DebouncedFlusher(
+            flushAction = { flushes.incrementAndGet() },
+            delayMs = 10_000L,
+            maxWaitMs = 60_000L,
+            name = "test-late"
+        )
+        flusher.shutdown()
+        assertEquals(1, flushes.get())
+
+        // 停机后主循环线程的迟到写入：不能抛 RejectedExecutionException，也不能丢数据
+        flusher.markDirty()
+        assertEquals(2, flushes.get(), "停机后的写入必须同步落盘，不允许静默丢失")
+    }
 }

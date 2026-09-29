@@ -42,26 +42,49 @@ class DebouncedFlusher(
     /** 本轮首次 markDirty 的时间（0 = 当前无待落盘周期）；防饥饿用 */
     private var firstMarkAt = 0L
 
-    /** 标记一次写入，重置防抖计时；距首次标记超过 [maxWaitMs] 时立即落盘 */
-    fun markDirty() {
-        synchronized(stateLock) {
-            val now = System.currentTimeMillis()
-            if (firstMarkAt == 0L) firstMarkAt = now
-            val waited = now - firstMarkAt
-            val delay = if (waited >= maxWaitMs) 0L else delayMs.coerceAtMost(maxWaitMs - waited)
+    /** 是否已停机（shutdown 之后调度器拒绝新任务） */
+    @Volatile
+    private var stopped = false
 
-            pending?.cancel(false)
-            pending = scheduler.schedule({
-                // 先开新周期再 flush：flush 期间的新写入会重新 firstMarkAt，不丢下一轮
-                synchronized(stateLock) { firstMarkAt = 0L }
-                runFlush()
-            }, delay, TimeUnit.MILLISECONDS)
+    /**
+     * 标记一次写入，重置防抖计时；距首次标记超过 [maxWaitMs] 时立即落盘。
+     *
+     * 停机之后（[shutdown] 已调用、调度器已关）再收到写入时**同步落盘**：
+     * 这是「停机迟到写入」路径——主循环线程可能在仓库 shutdown 之后还在
+     * 写记忆，直接抛 RejectedExecutionException 会把这条数据丢掉。
+     */
+    fun markDirty() {
+        var inlineFlush = false
+        synchronized(stateLock) {
+            if (stopped) {
+                inlineFlush = true
+            } else {
+                val now = System.currentTimeMillis()
+                if (firstMarkAt == 0L) firstMarkAt = now
+                val waited = now - firstMarkAt
+                val delay = if (waited >= maxWaitMs) 0L else delayMs.coerceAtMost(maxWaitMs - waited)
+
+                pending?.cancel(false)
+                inlineFlush = try {
+                    pending = scheduler.schedule({
+                        // 先开新周期再 flush：flush 期间的新写入会重新 firstMarkAt，不丢下一轮
+                        synchronized(stateLock) { firstMarkAt = 0L }
+                        runFlush()
+                    }, delay, TimeUnit.MILLISECONDS)
+                    false
+                } catch (_: java.util.concurrent.RejectedExecutionException) {
+                    // 竞态：调度器在检查后瞬间被关——同样转同步落盘，不丢数据
+                    true
+                }
+            }
         }
+        if (inlineFlush) runFlush()
     }
 
     /** 兜底：取消计时并立即落盘、关闭调度器 */
     fun shutdown() {
         synchronized(stateLock) {
+            stopped = true
             pending?.cancel(false)
             pending = null
             firstMarkAt = 0L
