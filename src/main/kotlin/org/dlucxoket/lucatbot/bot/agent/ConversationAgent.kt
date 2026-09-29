@@ -47,14 +47,6 @@ class ConversationAgent(
             }
             appendLine("- 参考聊天记录里每条消息的时间与顶部当前时间，判断消息新旧与停留时机")
         }
-        val toolsSection = buildString {
-            appendLine("### 工具")
-            if (input.toolNotes.isEmpty()) {
-                appendLine("（暂无——需要查资料或执行动作时，用 list_tools 获取工具目录）")
-            } else {
-                input.toolNotes.forEach { appendLine(it); appendLine() }
-            }
-        }.trimEnd()
 
         return """
             你正在使用即时聊天工具，已经点进了一个会话。
@@ -73,7 +65,6 @@ class ConversationAgent(
             ### 你最近的操作
             ${input.actionLog}
             $crawlStatus
-            $toolsSection
             ## 你的输出格式（严格遵循）
             只输出纯JSON，结构如下：
             
@@ -99,6 +90,7 @@ class ConversationAgent(
             - 结合「爬楼状态」决定去留：看够了就 send 或 return；已翻到最早消息时不要再 read_more，也不要无休止地反复爬楼
             - 工具用于查资料或执行动作（查记忆/查群资料/发表情/戳一戳/管理群等）：调用前先 list_tools（可带关键词缩小范围），目录里没有的工具不存在
             - 拿到工具执行结果后继续正常决策（send/return/stay 都可）；普通聊天不需要工具，不要为了调用而调用，也不要连续空转反复查目录
+            - user 消息里「工具状态」显示连续工具步 ≥3 时：必须停止查工具，直接给出 send / return / stay 之一
             - 用户提出了需要你长期记住的事（不是闲聊）→ 在 JSON 顶层额外输出 "remember": "值得记住的一句话"
             - 用户托付了一件现在不做、之后要做的事 → 在 JSON 顶层额外输出 "todo_add": "待办内容"
             - 本次对话中完成了待办清单里的事 → 在 JSON 顶层额外输出 "todo_done": "待办的id或内容"
@@ -110,7 +102,12 @@ class ConversationAgent(
         """.trimIndent()
     }
 
-    /** 剧情数据（聊天记录 + 新消息注释）→ user 消息；数据性开头，不带祈使句 */
+    /**
+     * 剧情数据（工具目录/执行结果 + 聊天记录 + 新消息注释）→ user 消息
+     *
+     * 工具上下文含外来内容（查询结果可能整段是别人的聊天），与聊天记录
+     * 同放 user——system 只留指令与稳定状态，避免外来内容在指令层升权。
+     */
     private fun buildUserContent(input: ConversationRequest): String {
         val historyText = input.recentMessages.joinToString("\n") { line ->
             val who = if (line.isMe) "我" else "${line.sender}(${line.senderId})"
@@ -121,7 +118,17 @@ class ConversationAgent(
         } else {
             "\n" + input.newMessageNotes.joinToString("\n")
         }
+        val toolsText = buildString {
+            appendLine("### 工具")
+            if (input.toolNotes.isEmpty()) {
+                appendLine("（暂无——需要查资料或执行动作时，用 list_tools 获取工具目录）")
+            } else {
+                input.toolNotes.forEach { appendLine(it); appendLine() }
+            }
+        }.trimEnd()
         return """
+            $toolsText
+
             以下是当前会话的聊天记录：
             ### 最近聊天记录
             ${historyText.ifBlank { "（新会话）" }}$newMsgText

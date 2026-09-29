@@ -20,6 +20,7 @@ import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
 import org.dlucxoket.lucatbot.bot.tool.Tool
 import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
+import org.dlucxoket.lucatbot.bot.tool.ToolNotes
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
 import org.dlucxoket.lucatbot.model.session.SessionManager
@@ -108,8 +109,8 @@ class ConversationController(
         var mustIcebreak = proactive
         var justSent: String? = null // 本轮刚发出的消息（有新回应即清空，用于组装 hint）
         var noReplyRounds = 0 // 连续无新消息的轮数（自上次发送起累计；SEND 成功不重置，有新消息清零）
-        // 工具上下文（本会话内累积：目录/搜索结果/执行结果，随每轮注入 prompt）
-        val toolNotes = mutableListOf<String>()
+        // 工具上下文（本会话内累积：状态计数/目录/执行结果，随每轮注入 prompt）
+        val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 12)
 
         while (true) {
             // 1) 把待插入的新消息以系统注释形式合并
@@ -164,7 +165,7 @@ class ConversationController(
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
                 hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes),
-                toolNotes = toolNotes.toList()
+                toolNotes = toolNotes.snapshot()
             )
 
             var decision = conversationAgent.processObject(request)
@@ -185,6 +186,19 @@ class ConversationController(
                 decision.action == ConversationAction.READ_MORE
             ) {
                 decision = ConversationDecision.forceReturn("连续爬楼期间一直有新消息，强制回应或离开")
+            }
+
+            // 防病态值资源护栏：连续工具步达硬上限 → 强制收尾（与 stay 钳制同性质，
+            // 不限制正常工具使用，只兜底「无限烧 token」的病态路径）
+            if (isToolStep && toolNotes.exceeded()) {
+                actionLog.append("连续工具步超限，返回消息列表")
+                decision = ConversationDecision.forceReturn("连续工具步已达上限，先结束本轮工具使用")
+            }
+            // 非工具决策（含被强制的 return/send）→ 重置连续工具步计数
+            if (decision.action != ConversationAction.LIST_TOOLS &&
+                decision.action != ConversationAction.CALL_TOOL
+            ) {
+                toolNotes.resetStreak()
             }
 
             val hadInserts = newNotes.isNotEmpty()
@@ -268,10 +282,7 @@ class ConversationController(
 
                 ConversationAction.LIST_TOOLS -> {
                     val query = decision.toolQuery
-                    // 同时只保留一份目录：重复获取（含不同关键词）覆盖旧条目，防 prompt 膨胀
-                    toolNotes.removeAll { it.startsWith("（工具目录") }
-                    toolNotes += "（工具目录${query?.let { "搜索「$it」" } ?: "全部"}）\n" +
-                        toolCatalog.catalog(query)
+                    toolNotes.recordCatalog(query, toolCatalog.catalog(query))
                     actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）")
                     log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
                 }
@@ -279,7 +290,7 @@ class ConversationController(
                 ConversationAction.CALL_TOOL -> {
                     val toolName = decision.toolName.orEmpty()
                     val result = toolCatalog.invoke(toolName, decision.toolInput)
-                    toolNotes += "（工具 $toolName 执行结果）\n$result"
+                    toolNotes.recordResult(toolName, result)
                     actionLog.append("调用工具 $toolName")
                     log.info("tool {} → {} 字符", toolName, result.length)
                 }

@@ -31,10 +31,17 @@ class LoopConfig {
 
     /**
      * 工具目录与调用网关——两个主智能体 list_tools / tool 动作的执行层。
-     * 默认从 AgentDiscovery 单例索引取工具（与发现/绑定共享同一批实例）。
+     *
+     * 默认从 ToolDiscovery 单例列表取工具（与发现/绑定共享同一批实例）。
+     *
+     * [ToolCatalog.orchestrationOnly] 排除策略：SendMessageTool 的调用
+     * 必须走 send 动作（编排层负责写短期记忆、破冰状态、连发提示与失败
+     * 离场），经 tool 直调会绕过全部记账——故不进目录、不可被调用。
      */
     @Bean
-    fun toolCatalog(): ToolCatalog = ToolCatalog()
+    fun toolCatalog(): ToolCatalog = ToolCatalog(
+        orchestrationOnly = setOf("SendMessageTool")
+    )
 
     @Bean
     fun messageListController(

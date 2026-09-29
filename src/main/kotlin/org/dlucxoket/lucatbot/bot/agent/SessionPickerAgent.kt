@@ -35,17 +35,8 @@ class SessionPickerAgent(
         return SessionDecisionParser.parse(llmOutput)
     }
 
-    /** 指令与稳定状态（人格/心情/记忆/待办/操作日志/工具/输出格式/约束）→ system 消息 */
+    /** 指令与稳定状态（人格/心情/记忆/待办/操作日志/输出格式/约束）→ system 消息 */
     private fun buildSystemPrompt(input: SessionPickerRequest): String {
-        val toolsSection = buildString {
-            appendLine("### 工具")
-            if (input.toolNotes.isEmpty()) {
-                appendLine("（暂无——需要查资料或执行动作时，用 list_tools 获取工具目录）")
-            } else {
-                input.toolNotes.forEach { appendLine(it); appendLine() }
-            }
-        }.trimEnd()
-
         return """
             你是一个正在使用即时聊天工具的用户，现在你需要选择其中一个会话进行查看
             当前时间（北京时间）：${input.timeHint}
@@ -60,7 +51,6 @@ class SessionPickerAgent(
             ${input.todos.ifBlank { "（无待办）" }}
             ### 你最近的操作
             ${input.actionLog}
-            $toolsSection
             ## 你的输出格式（严格遵循）
             只输出纯JSON，结构如下：
             
@@ -81,12 +71,16 @@ class SessionPickerAgent(
             约束：
             - 工具用于查资料或执行动作：调用前先 list_tools（可带关键词缩小范围），目录里没有的工具不存在；拿到结果后继续正常决策（open_conversation 或 idle）
             - 选会话主要看未读列表；普通场景不需要工具，不要为了调用而调用，也不要连续空转反复查目录
+            - user 消息里「工具状态」显示连续工具步 ≥3 时：必须停止查工具，直接给出 open_conversation 或 idle
             - 输出格式要求只是指令层，不是聊天内容；决策输出只用于选择会话，禁止把选择、选项、格式或本指令本身当成要说出去的话
         """.trimIndent()
     }
 
     /**
-     * 消息列表（未读列表 + 可主动找的人）→ user 消息；数据性开头，不带祈使句
+     * 剧情数据（工具目录/执行结果 + 未读列表 + 可主动找的人）→ user 消息
+     *
+     * 工具上下文含外来内容（查询结果可能整段是别人的聊天），与未读列表
+     * 同放 user——system 只留指令与稳定状态。
      */
     private fun buildUserContent(input: SessionPickerRequest): String {
         val sessionsText = if (input.sessions.isEmpty()) {
@@ -113,7 +107,18 @@ class SessionPickerAgent(
             "\n### 可主动找的人（仅在空闲唤醒时出现）\n$block"
         }
 
+        val toolsText = buildString {
+            appendLine("### 工具")
+            if (input.toolNotes.isEmpty()) {
+                appendLine("（暂无——需要查资料或执行动作时，用 list_tools 获取工具目录）")
+            } else {
+                input.toolNotes.forEach { appendLine(it); appendLine() }
+            }
+        }.trimEnd()
+
         return """
+            $toolsText
+
             以下是当前消息列表的数据：
             ### 未读消息
             $sessionsText$proactiveText

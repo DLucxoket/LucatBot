@@ -14,6 +14,7 @@ import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
+import org.dlucxoket.lucatbot.bot.tool.ToolNotes
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 
@@ -50,8 +51,8 @@ class MessageListController(
         actionLog.append("查看消息列表（${sessions.sumOf { it.unreadCount }}条未读）")
 
         val candidates = if (fromIdleWake) collectProactiveCandidates() else emptyList()
-        // 工具上下文（本轮内累积：目录/搜索结果/执行结果）
-        val toolNotes = mutableListOf<String>()
+        // 工具上下文（本轮内累积：状态计数/目录/执行结果；选会话侧硬上限更紧）
+        val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 6)
 
         while (true) {
             val request = SessionPickerRequest(
@@ -63,10 +64,22 @@ class MessageListController(
                 actionLog = actionLog.dump(),
                 sessions = sessions,
                 proactiveCandidates = candidates,
-                toolNotes = toolNotes.toList()
+                toolNotes = toolNotes.snapshot()
             )
 
             val decision = sessionPickerAgent.processObject(request)
+
+            // 防病态值资源护栏：连续工具步达硬上限 → 兜底去空闲（正常场景
+            // 一两步工具就该出结论，6 步仍不决策属病态路径）
+            val isToolStep = decision.action == SessionAction.LIST_TOOLS ||
+                decision.action == SessionAction.CALL_TOOL
+            if (isToolStep && toolNotes.exceeded()) {
+                actionLog.append("连续工具步超限，去空闲")
+                log.warn("选会话连续工具步超限（{} 步），兜底 idle", toolNotes.steps)
+                return null
+            }
+            if (!isToolStep) toolNotes.resetStreak()
+
             when (decision.action) {
                 SessionAction.OPEN_CONVERSATION -> {
                     val pick = decision.pick ?: return null  // parse 已保证非空，此处仅防御
@@ -81,10 +94,7 @@ class MessageListController(
 
                 SessionAction.LIST_TOOLS -> {
                     val query = decision.query
-                    // 同时只保留一份目录：重复获取（含不同关键词）覆盖旧条目，防 prompt 膨胀
-                    toolNotes.removeAll { it.startsWith("（工具目录") }
-                    toolNotes += "（工具目录${query?.let { "搜索「$it」" } ?: "全部"}）\n" +
-                        toolCatalog.catalog(query)
+                    toolNotes.recordCatalog(query, toolCatalog.catalog(query))
                     actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）")
                     log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
                 }
@@ -92,7 +102,7 @@ class MessageListController(
                 SessionAction.CALL_TOOL -> {
                     val toolName = decision.toolName.orEmpty()
                     val result = toolCatalog.invoke(toolName, decision.toolInput)
-                    toolNotes += "（工具 $toolName 执行结果）\n$result"
+                    toolNotes.recordResult(toolName, result)
                     actionLog.append("调用工具 $toolName")
                     log.info("tool {} → {} 字符", toolName, result.length)
                 }
