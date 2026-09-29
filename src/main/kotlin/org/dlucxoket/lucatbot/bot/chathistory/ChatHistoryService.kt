@@ -9,12 +9,13 @@ import org.springframework.stereotype.Component
  *
  * **模拟真人的聊天记忆**：
  * - 记住每条消息（谁、什么时候、说了什么）
- * - 标记已读/未读（像 QQ 未读红点）
  * - 支持查历史（"上次他说了啥来着？"）
+ *
+ * 未读状态不在这里：由 `LucatBot.unreadQueue` 统一维护（进会话即消费）。
  *
  * **OOP 设计**：
  * - 依赖 [ChatHistoryRepository] 接口（DIP）
- * - 单一职责：聊天记录的存取、查询、已读管理
+ * - 单一职责：聊天记录的存取与查询
  */
 @Component
 class ChatHistoryService(
@@ -33,7 +34,6 @@ class ChatHistoryService(
             content = content,
             messageType = detectMessageType(content),
             timestamp = event.timestamp,
-            isRead = false,
             isFromBot = false
         )
         repository.save(record)
@@ -50,7 +50,6 @@ class ChatHistoryService(
             content = content,
             messageType = detectMessageType(content),
             timestamp = System.currentTimeMillis(),
-            isRead = true,
             isFromBot = true
         )
         repository.save(record)
@@ -77,7 +76,6 @@ class ChatHistoryService(
             content = content,
             messageType = detectMessageType(content),
             timestamp = timestamp,
-            isRead = true,
             isFromBot = isFromBot
         )
         repository.save(record)
@@ -149,43 +147,6 @@ class ChatHistoryService(
             val role = if (record.isFromBot) "我" else "${record.senderName}(${record.senderId})"
             "$role: ${record.content}"
         }
-    }
-
-    /**
-     * 获取未读消息
-     */
-    fun getUnread(conversationId: String): List<ChatMessageRecord> {
-        return repository.findUnread(conversationId)
-    }
-
-    /**
-     * 获取所有未读会话
-     */
-    fun getUnreadConversations(): List<String> {
-        return repository.findUnreadConversations()
-    }
-
-    /**
-     * 获取未读概况（会话 → 条数）
-     */
-    fun getUnreadSummary(): Map<String, Int> {
-        return repository.findAllUnread()
-            .groupBy { it.conversationId }
-            .mapValues { it.value.size }
-    }
-
-    /**
-     * 标记会话已读
-     */
-    fun markAsRead(conversationId: String) {
-        repository.markAsRead(conversationId)
-    }
-
-    /**
-     * 根据发送者查消息
-     */
-    fun getBySender(senderId: Long): List<ChatMessageRecord> {
-        return repository.findBySender(senderId)
     }
 
     /**

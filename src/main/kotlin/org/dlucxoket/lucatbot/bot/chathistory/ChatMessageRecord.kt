@@ -1,13 +1,16 @@
 package org.dlucxoket.lucatbot.bot.chathistory
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+
 /**
  * 聊天记录条目
  *
  * **模拟真人的聊天记忆**：
  * - 记住每条消息的内容、发送者、时间
- * - 标记已读/未读（像 QQ 的未读红点）
  * - 按会话组织（群聊/私聊）
  * - 支持查询历史记录
+ *
+ * 未读/已读不在持久化模型里：由 `LucatBot.unreadQueue` 维护。
  *
  * @param id 记录 ID
  * @param conversationId 会话 ID（如 "group:123" 或 "private:456"）
@@ -16,9 +19,9 @@ package org.dlucxoket.lucatbot.bot.chathistory
  * @param content 消息内容（含 [图片] 等标记）
  * @param messageType 消息类型（text/image/face 等）
  * @param timestamp 发送时间戳（毫秒）
- * @param isRead 是否已读
  * @param isFromBot 是否是机器人自己发的
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ChatMessageRecord(
     val id: String = java.util.UUID.randomUUID().toString(),
 
@@ -39,9 +42,6 @@ data class ChatMessageRecord(
 
     /** 发送时间戳（毫秒） */
     val timestamp: Long = System.currentTimeMillis(),
-
-    /** 是否已读 */
-    val isRead: Boolean = false,
 
     /** 是否是机器人发的 */
     val isFromBot: Boolean = false

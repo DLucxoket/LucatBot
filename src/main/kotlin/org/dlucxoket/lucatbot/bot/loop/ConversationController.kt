@@ -7,7 +7,6 @@ import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationChatLine
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
-import org.dlucxoket.lucatbot.bot.agent.data.MemoryReflectRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
@@ -61,11 +60,18 @@ class ConversationController(
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
 
-    /** 退出记忆整理的幂等保护：正常退出与停机收尾对同一会话只整理一次 */
-    private val reflectLock = Any()
-
-    @Volatile
-    private var lastReflectedConversation: String? = null
+    /**
+     * 退出记忆整理（幂等、失败不影响退出）——单一职责组件，见 [MemoryReflector]
+     *
+     * 正常退出、停机收尾都经它；同会话去重保护在组件内部。
+     */
+    private val reflector = MemoryReflector(
+        memoryAgent = memoryAgent,
+        memoryService = memoryService,
+        chatHistoryService = chatHistoryService,
+        actionLog = actionLog,
+        reflectHistoryCount = reflectHistoryCount
+    )
 
     /**
      * 跑完整的会话内循环，直到离开
@@ -76,7 +82,7 @@ class ConversationController(
         val proactive = pick.conversationType == SessionPickType.PROACTIVE
 
         // 重置幂等保护：同一会话再次进入时允许重新整理
-        lastReflectedConversation = null
+        reflector.beginConversation()
 
         lucatBot.enterConversation(
             conversationId,
@@ -89,13 +95,12 @@ class ConversationController(
 
         // 进入会话即消费未读并标已读
         lucatBot.consumeUnread(conversationId)
-        chatHistoryService.markAsRead(conversationId)
 
         try {
             loop(conversationId, isGroup, proactive)
             // loop() 正常返回（含内部 return）→ 退出前整理一次记忆；
             // loop() 抛异常则跳过整理，直接走 finally
-            reflectMemory(conversationId)
+            reflector.reflect(conversationId)
         } finally {
             actionLog.append("返回消息列表")
             lucatBot.backToConversationList()
@@ -301,78 +306,14 @@ class ConversationController(
     /**
      * 停机收尾入口：程序停止时若停在某个会话里，补做一次退出记忆整理。
      *
-     * 幂等：[reflectMemory] 内有同会话去重保护，正常退出路径已整理过则
-     * 直接跳过，不会重复写入；不在会话中时为空操作。
+     * 幂等由 [MemoryReflector] 内部保证（正常退出已整理过则直接跳过）；
+     * 不在会话中时为空操作。
      */
     fun reflectForShutdown() {
         val state = lucatBot.state
         if (state is LucatBot.State.InConversation) {
             log.info("停机收尾：会话 {} 尚未整理记忆，先补一次", state.conversationId)
-            reflectMemory(state.conversationId)
-        }
-    }
-
-    /**
-     * 退出会话时的记忆整理：把会话内容交给 [MemoryAgent] 判断有没有值得长期记住的信息，
-     * 按 kind 写入 [MemoryService]（fact → rememberFact / opinion → rememberOpinion / event → rememberEvent）。
-     *
-     * 整个过程 try/catch：失败只 log.warn，绝不影响后续 actionLog / backToConversationList。
-     *
-     * 同会话幂等（[reflectLock] 保护）：停机收尾与正常退出可能对同一会话
-     * 各触发一次，只整理第一遍，避免重复写入。
-     */
-    private fun reflectMemory(conversationId: String) {
-        synchronized(reflectLock) {
-            if (lastReflectedConversation == conversationId) {
-                log.debug("会话 {} 的记忆已整理过，跳过重复整理", conversationId)
-                return
-            }
-            doReflectMemory(conversationId)
-            lastReflectedConversation = conversationId
-        }
-    }
-
-    /** 记忆整理的实际执行（仅在 [reflectLock] 内调用） */
-    private fun doReflectMemory(conversationId: String) {
-        try {
-            val subject = MemorySubject.fromConversation(conversationId)
-            val result = memoryAgent.processObject(
-                MemoryReflectRequest(
-                    conversationContent = chatHistoryService.getHistorySummary(
-                        conversationId, reflectHistoryCount
-                    ),
-                    existingMemory = memoryService.getMemorySummary(subject),
-                    timeHint = TimeAwareness.timeHint()
-                )
-            )
-            if (result.memories.isEmpty()) {
-                log.debug("退出时记忆整理：无值得记录的内容")
-                return
-            }
-            var written = 0
-            for (item in result.memories) {
-                when (item.kind.lowercase()) {
-                    "fact" -> {
-                        memoryService.rememberFact(subject, item.content, item.tags)
-                        written++
-                    }
-                    "opinion" -> {
-                        memoryService.rememberOpinion(subject, item.content)
-                        written++
-                    }
-                    "event" -> {
-                        memoryService.rememberEvent(subject, item.content)
-                        written++
-                    }
-                    else -> log.debug("退出时记忆整理：跳过未知 kind={}（content={}）", item.kind, item.content)
-                }
-            }
-            log.info("退出时记忆整理：写入 {} 条", written)
-            if (written > 0) {
-                actionLog.append("整理记忆 $written 条")
-            }
-        } catch (e: Exception) {
-            log.warn("退出时记忆整理失败（忽略，不影响返回消息列表）: {}", e.message)
+            reflector.reflect(state.conversationId)
         }
     }
 

@@ -44,84 +44,12 @@ class JsonFileChatHistoryRepository(
         flusher.markDirty()
     }
 
-    override fun saveAll(records: List<ChatMessageRecord>) {
-        records.forEach { cache[it.id] = it }
-        dirty = true
-        flusher.markDirty()
-    }
-
     override fun findByConversation(conversationId: String, limit: Int, before: Long): List<ChatMessageRecord> {
         return cache.values
             .filter { it.conversationId == conversationId }
             .filter { before == 0L || it.timestamp < before }
             .sortedBy { it.timestamp }
             .let { if (limit > 0) it.takeLast(limit) else it }
-    }
-
-    override fun findUnread(conversationId: String): List<ChatMessageRecord> {
-        return cache.values
-            .filter { it.conversationId == conversationId && !it.isRead }
-            .sortedBy { it.timestamp }
-    }
-
-    override fun findAllUnread(): List<ChatMessageRecord> {
-        return cache.values
-            .filter { !it.isRead }
-            .sortedBy { it.timestamp }
-    }
-
-    override fun findUnreadConversations(): List<String> {
-        return cache.values
-            .filter { !it.isRead }
-            .map { it.conversationId }
-            .distinct()
-    }
-
-    override fun findBySender(senderId: Long): List<ChatMessageRecord> {
-        return cache.values
-            .filter { it.senderId == senderId }
-            .sortedBy { it.timestamp }
-    }
-
-    override fun findById(id: String): ChatMessageRecord? {
-        return cache[id]
-    }
-
-    override fun markAsRead(conversationId: String) {
-        cache.values
-            .filter { it.conversationId == conversationId && !it.isRead }
-            .forEach { cache[it.id] = it.copy(isRead = true) }
-        dirty = true
-        flusher.markDirty()
-    }
-
-    override fun markOneAsRead(id: String) {
-        cache[id]?.let {
-            if (!it.isRead) {
-                cache[id] = it.copy(isRead = true)
-                dirty = true
-                flusher.markDirty()
-            }
-        }
-    }
-
-    override fun delete(id: String) {
-        cache.remove(id)
-        dirty = true
-        flusher.markDirty()
-    }
-
-    override fun cleanup(keepPerConversation: Int) {
-        val byConv = cache.values.groupBy { it.conversationId }
-        byConv.forEach { (_, records) ->
-            if (records.size > keepPerConversation) {
-                records.sortedByDescending { it.timestamp }
-                    .drop(keepPerConversation)
-                    .forEach { cache.remove(it.id) }
-            }
-        }
-        dirty = true
-        flusher.markDirty()
     }
 
     override fun flush() {

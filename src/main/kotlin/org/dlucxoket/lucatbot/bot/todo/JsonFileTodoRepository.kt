@@ -50,20 +50,8 @@ class JsonFileTodoRepository(
         flusher.markDirty()
     }
 
-    override fun saveAll(todos: List<TodoItem>) {
-        todos.forEach { cache[it.id] = it }
-        dirty = true
-        flusher.markDirty()
-    }
-
     override fun findAll(): List<TodoItem> {
         return cache.values.toList()
-    }
-
-    override fun delete(id: String) {
-        cache.remove(id)
-        dirty = true
-        flusher.markDirty()
     }
 
     override fun flush() {
