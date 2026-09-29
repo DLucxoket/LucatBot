@@ -84,21 +84,13 @@ abstract class Agent<I, O>(
     /**
      * OOP 边界入口（Agent/Tool 链内部调用）
      *
-     * 流程：Kotlin 对象 → 适配为 [I] → 调用 [handle] → 返回 [O] 对象
-     * 不经过 JSON 序列化。
+     * 流程：Kotlin 对象 → 调用 [handle] → 返回 [O] 对象，不经过 JSON 序列化。
+     * 类型由签名 [I] 保证——调用方传的本就是输入类型，无需运行时适配。
      *
-     * @param input 输入对象（通常是 Map 或已是 [I] 类型）
+     * @param input 输入对象（类型即 [I]）
      * @return 输出对象
      */
-    @Suppress("UNCHECKED_CAST")
-    fun processObject(input: Any): O {
-        val typed: I = if (inputClass.isInstance(input)) {
-            input as I
-        } else {
-            mapper.convertValue(input, inputClass)
-        }
-        return handle(typed)
-    }
+    fun processObject(input: I): O = handle(input)
 
     /**
      * JSON → OOP（反序列化）

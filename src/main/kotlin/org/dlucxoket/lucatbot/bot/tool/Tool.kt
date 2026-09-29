@@ -103,17 +103,10 @@ abstract class Tool<I, O> {
     /**
      * OOP 边界入口（Agent/Tool 链内部调用）
      *
-     * 流程：Kotlin 对象 → 适配为 [I] → [handle] → 返回 [O] 对象
+     * 流程：Kotlin 对象 → [handle] → 返回 [O] 对象，不经过 JSON 序列化。
+     * 类型由签名 [I] 保证——调用方传的本就是输入类型，无需运行时适配。
      */
-    @Suppress("UNCHECKED_CAST")
-    fun processObject(input: Any): O {
-        val typed: I = if (inputClass.isInstance(input)) {
-            input as I
-        } else {
-            mapper.convertValue(input, inputClass)
-        }
-        return handle(typed)
-    }
+    fun processObject(input: I): O = handle(input)
 
     protected open fun fromJson(json: String): I {
         return mapper.readValue(json, inputClass)
