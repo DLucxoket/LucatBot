@@ -60,7 +60,12 @@ abstract class Tool<I, O> {
      * 两阶段初始化：Tool 由 ClassGraph 自动发现（object 单例），
      * Bot 实例在消息到达时通过 [bindBot] 绑定。
      * 这里用 var 是运行时注入的必要设计，不是滥用可变状态。
+     *
+     * `@Volatile` 必不可少：写发生在 Shiro WS 消息线程（MainPlugin → ToolDependencyBinder），
+     * 读发生在主循环线程（lucatbot-main-loop），无 happens-before 边界时
+     * 主循环可能长期读到 null「Bot 未绑定」。
      */
+    @Volatile
     protected var bot: Bot? = null
 
     /**

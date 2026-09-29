@@ -43,14 +43,23 @@ class ToolDependencyBinder(
     }
 
     companion object {
+        /** 上次绑定的 Bot 实例——同实例重复绑定直接短路（每条消息都会调到这里） */
+        @Volatile
+        private var lastBoundBot: com.mikuac.shiro.core.Bot? = null
+
         /**
          * 把 Bot 实例绑到所有已发现的 Tool（含未来新增）。
+         *
+         * 引用相同（单账号正常路径）时直接返回，避免每条消息遍历全部
+         * Tool 类重复写同一引用；换 Bot（重连/切账号）时才重新绑定。
          */
         fun bindBotToAll(bot: com.mikuac.shiro.core.Bot) {
+            if (lastBoundBot === bot) return
             org.dlucxoket.lucatbot.bot.agent.AgentDiscovery.getToolClasses().forEach { kClass ->
                 val tool = kClass.objectInstance ?: kClass.createInstance()
                 tool.bindBot(bot)
             }
+            lastBoundBot = bot
         }
     }
 }
