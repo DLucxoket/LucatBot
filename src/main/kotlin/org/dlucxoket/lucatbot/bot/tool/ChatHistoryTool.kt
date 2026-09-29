@@ -22,6 +22,8 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
 
     override val inputClass: Class<ChatHistoryRequest> = ChatHistoryRequest::class.java
 
+    private val log = org.slf4j.LoggerFactory.getLogger(ChatHistoryTool::class.java)
+
     /** 聊天记录服务引用（启动时经 [bindServices] 注入，不对外暴露） */
     @Volatile
     private var chatHistoryService: ChatHistoryService? = null
@@ -77,7 +79,17 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
             } else {
                 b.getFriendMsgHistory(targetId, null, input.count, true)
             }
-            val messages = actionData?.data?.messages ?: return
+            // 失败响应（data=null）不能静默：Shiro 的 DTO 拿不到 wording，
+            // 但 status/retcode 足够定位（如 NapCat 端 uin→uid 解析失败）
+            val data = actionData?.data
+            if (data == null) {
+                log.warn(
+                    "远端历史拉取失败（本地记录不受影响）status={} retcode={} target={} type={}",
+                    actionData?.status, actionData?.retCode, targetId, input.type
+                )
+                return
+            }
+            val messages = data.messages ?: return
             val selfId = b.selfId
 
             messages.forEach { msg ->
@@ -116,8 +128,7 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
             }
         } catch (e: Exception) {
             // 远端失败不影响本地读取
-            org.slf4j.LoggerFactory.getLogger(ChatHistoryTool::class.java)
-                .warn("爬楼拉取远端历史失败: {}", e.message)
+            log.warn("爬楼拉取远端历史失败: {}", e.message)
         }
     }
 }

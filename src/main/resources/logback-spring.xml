@@ -11,6 +11,9 @@
     <!-- 只显示 LucatBot 包和关键框架的日志 -->
     <logger name="org.dlucxoket.lucatbot" level="DEBUG"/>
     <logger name="com.mikuac.shiro" level="INFO"/>
+    <!-- OneBot API 调用失败（如远端爬楼）的 ERROR 逐轮刷屏，应用侧
+         ChatHistoryTool 已打带 status/retcode 的 WARN，这里关闭该类日志降噪 -->
+    <logger name="com.mikuac.shiro.adapter.WebSocketServerHandler" level="OFF"/>
     <logger name="org.springframework" level="WARN"/>
     <logger name="org.apache" level="WARN"/>
     <logger name="io.github.classgraph" level="ERROR"/>
