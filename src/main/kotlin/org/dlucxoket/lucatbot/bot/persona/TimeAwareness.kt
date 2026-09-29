@@ -14,10 +14,16 @@ import java.time.LocalTime
  */
 object TimeAwareness {
 
-    /** 当前是否是深夜（23:00~07:00）——深夜不主动检查未读，模拟真人睡觉 */
+    /**
+     * 当前是否是深夜（23:00~07:00）——深夜不主动检查未读，模拟真人睡觉
+     *
+     * 当前为测试期间，永为false
+     */
     fun isLateNight(): Boolean {
-        val hour = LocalTime.now().hour
-        return hour >= 23 || hour < 7
+        //测试期间永远返回false
+//        val hour = LocalTime.now().hour
+//        return hour >= 23 || hour < 7
+        return false
     }
 
     /** 决策 prompt 用时间提示（北京时间 yyyyMMdd-HHmmss） */
