@@ -60,7 +60,7 @@ class MessageListController(
                 persona = lucatBot.persona,
                 mood = lucatBot.mood,
                 timeHint = TimeAwareness.timeHint(),
-                shortTermMemory = buildShortTermMemory(sessions),
+                shortTermMemory = buildShortTermMemory(),
                 todos = todoService.pendingSummary(),
                 actionLog = actionLog.dump(),
                 sessions = sessions,
@@ -143,9 +143,11 @@ class MessageListController(
         }
     }
 
-    /** 汇总未读/最近会话（含已读与未读） */    private fun collectSessions(): List<SessionSummaryLine> {
+    /** 汇总未读/最近会话（含已读与未读） */
+    private fun collectSessions(): List<SessionSummaryLine> {
         val unread = lucatBot.getUnreadSummary()
         val lines = mutableListOf<SessionSummaryLine>()
+        val now = System.currentTimeMillis()
 
         for ((convId, count) in unread) {
             val msgs = lucatBot.peekUnread(convId)
@@ -161,7 +163,8 @@ class MessageListController(
                 unreadCount = count,
                 lastMessage = last?.content.orEmpty(),
                 isAtMe = lucatBot.hasUnreadAtMe(convId),
-                isAtAll = lucatBot.hasUnreadAtAll(convId)
+                isAtAll = lucatBot.hasUnreadAtAll(convId),
+                botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) }
             )
         }
 
@@ -177,10 +180,19 @@ class MessageListController(
                 id = convId.substringAfter(":"),
                 time = formatTime(entry.timestamp),
                 unreadCount = 0,
-                lastMessage = entry.content
+                lastMessage = entry.content,
+                botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) }
             )
         }
         return lines
+    }
+
+    /** 相对时长（「我上次发言 X 前」用）：刚刚 / X 分钟前 / X 小时前 / X 天前 */
+    private fun formatDuration(ms: Long): String = when {
+        ms < 60_000L -> "刚刚"
+        ms < 3_600_000L -> "${ms / 60_000L} 分钟前"
+        ms < 86_400_000L -> "${ms / 3_600_000L} 小时前"
+        else -> "${ms / 86_400_000L} 天前"
     }
 
     /** 可主动找的人：最近 24h 聊过的私聊对象，最多 3 个；心情很差/很困时少拼或不拼 */
@@ -198,7 +210,10 @@ class MessageListController(
             .take(cap)
             .map { convId ->
                 val subject = MemorySubject.fromConversation(convId)
-                val memory = memoryService.getMemorySummary(subject).lineSequence().firstOrNull().orEmpty()
+                // 取第一条真实记忆行（跳过「关于此人的记忆：」「事实：」等标题行——
+                // 旧行为 firstOrNull() 拿到的永远是标题，hint 恒为废话）
+                val memory = memoryService.getMemorySummary(subject).lineSequence()
+                    .firstOrNull { it.startsWith("- ") }?.removePrefix("- ").orEmpty()
                 val hint = when {
                     memory.isNotBlank() -> memory
                     sessionManager.isActive(convId, withinMinutes = 60) -> "刚才还在聊"
@@ -212,21 +227,14 @@ class MessageListController(
             }
     }
 
-    private fun buildShortTermMemory(sessions: List<SessionSummaryLine>): String {
-        val parts = mutableListOf<String>()
-        for (s in sessions.take(3)) {
-            val userId = s.id.toLongOrNull() ?: continue
-            // 记忆按主体隔离：群聊会话取群记忆，私聊取个人记忆
-            val subject = if (s.conversationType == "群聊") {
-                MemorySubject.group(userId)
-            } else {
-                MemorySubject.user(userId)
-            }
-            val m = memoryService.getMemorySummary(subject)
-            if (m.isNotBlank()) parts += m
-        }
-        return parts.joinToString("\n")
-    }
+    /**
+     * 消息列表的短期记忆——**一次全量概览**（所有主体、最近优先）
+     *
+     * 选会话要看得广：不再逐个会话拼小窗口（前 3 会话 × 16 条上限），
+     * 改成跨主体概览；具体某个人的细节由 LLM 经 MemoryQueryTool 关键词搜。
+     */
+    private fun buildShortTermMemory(): String =
+        memoryService.getMemoryOverview(primary = null, otherLimit = 12)
 
     private fun formatTime(ts: Long): String {
         if (ts <= 0L) return ""

@@ -34,6 +34,14 @@ interface ChatHistoryRepository {
     fun findAll(): List<ChatMessageRecord>
 
     /**
+     * 机器人在该会话**最后一次发言**的时间（epoch ms；从没发过 → null）
+     *
+     * 消息列表用它渲染「我上次发言 X 前」，供选会话优先级判断
+     * （刚发过言且有未读的会话优先）。
+     */
+    fun lastBotSpeakTime(conversationId: String): Long?
+
+    /**
      * 删除一条记录（启动清理时移除被并掉的孪生行；不存在则为无操作）
      */
     fun delete(id: String)

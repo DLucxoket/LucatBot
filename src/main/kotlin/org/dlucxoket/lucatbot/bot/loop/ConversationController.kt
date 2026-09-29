@@ -205,8 +205,10 @@ class ConversationController(
                 conversationIdentity = buildIdentity(conversationId, isGroup, cachedGroupName),
                 conversationId = conversationId,
                 selfQq = selfQq,
-                shortTermMemory = memoryService.getMemorySummary(
-                    MemorySubject.fromConversation(conversationId)
+                // 全量概览：当前对象主体记忆 + 其他会话记忆少量（带主体标签）——
+                // 不再只注入当前会话；缺的细节由 LLM 经 MemoryQueryTool 关键词搜
+                shortTermMemory = memoryService.getMemoryOverview(
+                    primary = MemorySubject.fromConversation(conversationId)
                 ) + sessionManager.getFatigueHint(conversationId),
                 todos = todoService.pendingSummary(),
                 actionLog = actionLog.dump(),
@@ -556,7 +558,8 @@ class ConversationController(
         return parts.joinToString("\n")
     }
 
-    private fun toConversationId(pick: SessionPick): String {        return when (pick.conversationType) {
+    private fun toConversationId(pick: SessionPick): String {
+        return when (pick.conversationType) {
             SessionPickType.GROUP -> "group:${pick.targetId}"
             SessionPickType.PRIVATE, SessionPickType.PROACTIVE -> "private:${pick.targetId}"
         }

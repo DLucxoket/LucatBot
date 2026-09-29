@@ -115,15 +115,19 @@ class MemoryService(
         content.filter { !it.isWhitespace() }.lowercase()
 
     /**
-     * 获取某个主体的全部记忆（按强度排序）
+     * 获取某个主体的全部记忆（**按写入时间倒序**——最近写的优先注入）
      *
      * 仓库按数值 ID 粗查后，这里按 [MemorySubject.Type] 精确过滤——
      * 群号与个人 QQ 号即使相同也不会互相泄漏。
+     *
+     * 排序依据是 createdAt 而非 strength：strength 恒为 1.0（衰减已 YAGNI 删除），
+     * 按它排序等于按存储序（MySQL=UUID 主键字典序、JSON=哈希序 ≈ 随机）——
+     * 「哪几条被注入」曾接近随机挑，改为最近优先后与「记于MM-DD」语义自洽。
      */
     fun getMemoriesOf(subject: MemorySubject): List<MemoryItem> {
         return repository.findByUserId(subject.id)
             .filter { it.subjectType == subject.type }
-            .sortedByDescending { it.strength }
+            .sortedByDescending { it.createdAt }
     }
 
     /**
@@ -144,10 +148,63 @@ class MemoryService(
         opinionLimit: Int = 3,
         eventLimit: Int = 5,
         relationLimit: Int = 3
-    ): String {
-        val memories = getMemoriesOf(subject)
-        if (memories.isEmpty()) return ""
+    ): String = renderBuckets(
+        getMemoriesOf(subject), factLimit, opinionLimit, eventLimit, relationLimit
+    ) ?: ""
 
+    /**
+     * 全量记忆概览（**不限当前会话**——注入会话/消息列表 prompt）
+     *
+     * - **主体记忆**（当前会话的人/群）：分组窗口，条数上限可调
+     * - **其他会话/对象的记忆**：全部主体里按写入时间取最近 [otherLimit] 条，
+     *   每行带主体标签（`【群x】`/`【QQ x】`）——跨会话感知（本群聊天也能想起
+     *   这个人在私聊里的事），放少量做背景，细节靠 MemoryQueryTool 关键词搜
+     *
+     * @param primary 当前主体（null = 只注入其他会话背景）
+     * @return 空串 = 一条记忆都没有
+     */
+    fun getMemoryOverview(
+        primary: MemorySubject? = null,
+        factLimit: Int = 8,
+        opinionLimit: Int = 5,
+        eventLimit: Int = 8,
+        relationLimit: Int = 5,
+        otherLimit: Int = 10
+    ): String {
+        val primaryBlock = primary
+            ?.let { getMemoriesOf(it) }
+            ?.let { renderBuckets(it, factLimit, opinionLimit, eventLimit, relationLimit) }
+        val others = repository.findAll()
+            .filter { m -> primary == null || m.subjectType != primary.type || m.userId != primary.id }
+            .sortedByDescending { it.createdAt }
+            .take(otherLimit)
+
+        if (primaryBlock.isNullOrBlank() && others.isEmpty()) return ""
+        return buildString {
+            if (!primaryBlock.isNullOrBlank()) {
+                appendLine(primaryBlock)
+            }
+            if (others.isNotEmpty()) {
+                if (isNotEmpty()) appendLine()
+                appendLine("其他会话/对象的记忆（少量背景，缺细节用 MemoryQueryTool 按关键词搜）：")
+                others.forEach { appendLine("- 【${subjectTag(it)}】${it.content}（记于${datedOn(it.createdAt)}）") }
+            }
+        }.trim()
+    }
+
+    /** 记忆主体标签（全量概览里标注这条记忆是关于谁的）：群号 / 个人 QQ */
+    private fun subjectTag(item: MemoryItem): String =
+        if (item.subjectType == MemorySubject.Type.GROUP) "群${item.userId}" else "QQ${item.userId}"
+
+    /** 分类型分桶渲染（各类型 top-N；行尾带写入日期）；空则返回 null */
+    private fun renderBuckets(
+        memories: List<MemoryItem>,
+        factLimit: Int,
+        opinionLimit: Int,
+        eventLimit: Int,
+        relationLimit: Int
+    ): String? {
+        if (memories.isEmpty()) return null
         val facts = memories.filter { it.type == MemoryItem.MemoryType.FACT }
         val opinions = memories.filter { it.type == MemoryItem.MemoryType.OPINION }
         val events = memories.filter { it.type == MemoryItem.MemoryType.EVENT }
@@ -155,7 +212,6 @@ class MemoryService(
 
         val sb = StringBuilder()
         sb.appendLine("关于此人的记忆：")
-
         if (facts.isNotEmpty()) {
             sb.appendLine("事实：")
             facts.take(factLimit).forEach { sb.appendLine("- ${it.content}（记于${datedOn(it.createdAt)}）") }
@@ -172,7 +228,6 @@ class MemoryService(
             sb.appendLine("人际关系：")
             relations.take(relationLimit).forEach { sb.appendLine("- ${it.content}（记于${datedOn(it.createdAt)}）") }
         }
-
         return sb.toString().trim()
     }
 
@@ -200,7 +255,7 @@ class MemoryService(
                 item.content.contains(keyword, ignoreCase = true) ||
                     item.tags.any { it.contains(keyword, ignoreCase = true) }
             }
-        }.sortedByDescending { it.strength }
+        }.sortedByDescending { it.createdAt }
     }
 
     /**

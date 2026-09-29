@@ -74,6 +74,8 @@ class SessionPickerAgent(
             约束：
             - 工具用于查资料或执行动作：调用前先 list_tools（可带关键词缩小范围），目录里没有的工具不存在；拿到结果后继续正常决策（open_conversation 或 idle）
             - 选会话主要看未读列表；普通场景不需要工具，不要为了调用而调用，也不要连续空转反复查目录
+            - **选会话优先级**：行尾「我上次发言 X 前」+「n条未读」一起看——**我刚发过言（几分钟~几小时内）且还有未读**的会话最优先（对话正热、对方很可能是接着回我）；其次是有未读但我很久没发言/没说过话的；再按 @我、未读量、时间新旧权衡；都不合适就 idle
+            - 短期记忆只注入了少量背景；需要某个对象的具体记忆细节（约定、往事）→ 先 list_tools 找到 MemoryQueryTool 按关键词搜，搜到再据此选会话/行动
             - user 消息里「工具状态」显示连续工具步 ≥3 时：必须停止查工具，直接给出 open_conversation 或 idle
             - 输出格式要求只是指令层，不是聊天内容；决策输出只用于选择会话，禁止把选择、选项、格式或本指令本身当成要说出去的话
         """.trimIndent()
@@ -97,7 +99,9 @@ class SessionPickerAgent(
                     s.isAtAll -> "(@全体)"
                     else -> ""
                 }
-                "- $typeLabel ${s.name}(${s.id})(${s.time})$unread$at：${s.lastMessage}"
+                // 我上次发言距今（null=还没说过话）——选会话优先级依据
+                val spoke = s.botSpokeAgo?.let { "（我上次发言 $it）" } ?: "（我还没说过话）"
+                "- $typeLabel ${s.name}(${s.id})(${s.time})$unread$at$spoke：${s.lastMessage}"
             }
         }
 

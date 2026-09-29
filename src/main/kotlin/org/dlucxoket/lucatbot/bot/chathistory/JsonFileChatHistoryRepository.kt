@@ -54,6 +54,11 @@ class JsonFileChatHistoryRepository(
 
     override fun findAll(): List<ChatMessageRecord> = cache.values.toList()
 
+    override fun lastBotSpeakTime(conversationId: String): Long? =
+        cache.values
+            .filter { it.conversationId == conversationId && it.isFromBot }
+            .maxOfOrNull { it.timestamp }
+
     override fun delete(id: String) {
         if (cache.remove(id) != null) {
             dirty = true

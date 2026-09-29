@@ -57,6 +57,16 @@ class MySqlChatHistoryRepository(
     override fun findAll(): List<ChatMessageRecord> =
         storage.query("SELECT * FROM chat_history", map = ::mapRow)
 
+    override fun lastBotSpeakTime(conversationId: String): Long? =
+        storage.queryOne(
+            "SELECT MAX(sent_at) AS t FROM chat_history " +
+                "WHERE conversation_id = ? AND is_from_bot = 1",
+            conversationId
+        ) { rs ->
+            val t = rs.getTimestamp("t")
+            if (t == null) null else t.time
+        }
+
     override fun delete(id: String) {
         storage.update("DELETE FROM chat_history WHERE id = ?", id)
     }

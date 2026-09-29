@@ -231,6 +231,14 @@ class ChatHistoryService(
             ?.let { formatSenderDisplay(it.senderName, it.senderNickname) }
 
     /**
+     * 机器人在该会话最后一次发言距今的时间戳（epoch ms；从没发过 → null）
+     *
+     * 消息列表渲染「我上次发言 X 前」，供选会话优先级判断。
+     */
+    fun lastBotSpeakTime(conversationId: String): Long? =
+        repository.lastBotSpeakTime(conversationId)
+
+    /**
      * 持久化
      */
     fun flush() {

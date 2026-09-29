@@ -335,6 +335,29 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `conversation prompt injects global memory overview with subject labels`() {
+        // 不再只注入当前会话：主体记忆 + 其他会话记忆（带主体标签）+ 搜索引导
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-ov-inj", ".json").absolutePath)
+        )
+        memoryService.rememberFact(MemorySubject.user(123L), "他在上海工作")
+        memoryService.rememberFact(MemorySubject.user(9999L), "狐狐群的老朋友")
+        memoryService.rememberFact(MemorySubject.group(55L), "55群的周末约定")
+
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("他在上海工作"), "主体记忆注入：$prompt")
+        assertTrue(prompt.contains("【QQ9999】狐狐群的老朋友"), "其他会话记忆带主体标签：$prompt")
+        assertTrue(prompt.contains("【群55】"), "群记忆也注入：$prompt")
+        assertTrue(prompt.contains("MemoryQueryTool"), "缺细节时引导关键词搜索：$prompt")
+        assertTrue(prompt.contains("记于"), "记忆带写入日期：$prompt")
+    }
+
+    @Test
     fun `extractor marks source line memorized after writing`() {
         // 提取器从对方消息写出记忆后给该行打标——退出整理时不再改写复读
         val chatHistoryService = ChatHistoryService(
