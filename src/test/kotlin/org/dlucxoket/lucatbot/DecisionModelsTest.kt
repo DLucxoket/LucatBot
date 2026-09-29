@@ -242,6 +242,31 @@ class SessionDecisionParserTest {
         assertEquals(SessionAction.IDLE, d.action)
         assertNull(d.pick)
     }
+
+    @Test
+    fun `todo side effect fields survive any action including fallbacks`() {
+        // 顶层 todo_add/todo_done 与 action 无关：任何动作（含兜底 idle）都携带
+        val open = SessionDecisionParser.parse(
+            """{"action":"open_conversation","params":{"type":"private","target":"1"},"todo_add":"买票","todo_done":"取快递"}"""
+        )
+        assertEquals("买票", open.todoAdd)
+        assertEquals("取快递", open.todoDone)
+
+        val idle = SessionDecisionParser.parse("""{"action":"idle","todo_add":"买票"}""")
+        assertEquals("买票", idle.todoAdd)
+        assertNull(idle.todoDone)
+
+        // 参数无效兜底 → 待办字段照样保留（LLM 已说要记的事不能丢）
+        val fallback = SessionDecisionParser.parse(
+            """{"action":"open_conversation","params":{},"todo_add":"买票"}"""
+        )
+        assertEquals(SessionAction.IDLE, fallback.action)
+        assertEquals("买票", fallback.todoAdd, "兜底不丢副作用字段")
+
+        // 缺字段 → null；空白 → null
+        assertNull(SessionDecisionParser.parse("""{"action":"idle"}""").todoAdd)
+        assertNull(SessionDecisionParser.parse("""{"action":"idle","todo_add":"  "}""").todoAdd)
+    }
 }
 
 /** LlmJson 剥离 markdown 代码块、提取 JSON 的边界测试 */

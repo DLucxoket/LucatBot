@@ -28,7 +28,11 @@ class MessageListControllerTest {
 
     private fun buildController(
         llm: FakeLLM,
-        toolCatalog: ToolCatalog = ToolCatalog(toolsProvider = { listOf(FakeEchoTool()) })
+        toolCatalog: ToolCatalog = ToolCatalog(toolsProvider = { listOf(FakeEchoTool()) }),
+        /** 传入即可在外部断言 todo_add / todo_done 副作用 */
+        todoService: TodoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos", ".json").absolutePath)
+        )
     ): Pair<MessageListController, ActionLog> {
         val controller = MessageListController(
             lucatBot = LucatBot(),
@@ -39,9 +43,7 @@ class MessageListControllerTest {
             chatHistoryService = ChatHistoryService(
                 JsonFileChatHistoryRepository(File.createTempFile("hist", ".json").absolutePath)
             ),
-            todoService = TodoService(
-                JsonFileTodoRepository(File.createTempFile("todos", ".json").absolutePath)
-            ),
+            todoService = todoService,
             actionLog = ActionLog(),
             sessionPickerAgent = SessionPickerAgent(llm),
             toolCatalog = toolCatalog
@@ -104,5 +106,52 @@ class MessageListControllerTest {
         val (controller, _) = buildController(llm)
         assertNull(controller.pickSession(fromIdleWake = false))
         assertEquals(1, llm.prompts.size)
+    }
+
+    @Test
+    fun `todo side effects are applied before action and feed next prompt`() {
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos-todo", ".json").absolutePath)
+        )
+        val llm = FakeLLM(mutableListOf(
+            // 第 1 轮：记待办 + 顺手标一条完成（完成匹配不上 → 不打断循环），随后去看会话
+            """{"action":"open_conversation","params":{"type":"private","target":"42"},"todo_add":"帮他取快递","todo_done":"不存在的待办","reason":"顺手记一下"}""",
+        ))
+        val (controller, _) = buildController(llm, todoService = todoService)
+
+        val pick = controller.pickSession(fromIdleWake = false)
+
+        assertEquals(SessionPick(SessionPickType.PRIVATE, "42"), pick, "副作用不打断 action 执行")
+        assertEquals(listOf("帮他取快递"), todoService.pending().map { it.content }, "todo_add 已落库")
+        // 同轮 prompt 里的待办段是决策前的快照；下一轮（若有）才会看到新条目——
+        // 这里断言规则文案与常驻的待办段存在
+        assertTrue(llm.prompts[0].contains("### 待办"), "待办段固定注入：${llm.prompts[0]}")
+        assertTrue(llm.prompts[0].contains("\"todo_add\""), "prompt 应含 todo_add 输出规则")
+    }
+
+    @Test
+    fun `todo_done marks pending todo complete across rounds`() {
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos-done", ".json").absolutePath)
+        )
+        todoService.add("帮群友修电脑")
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"idle","todo_done":"修电脑","reason":"搞定了"}"""
+        ))
+        val (controller, _) = buildController(llm, todoService = todoService)
+
+        assertNull(controller.pickSession(fromIdleWake = false))
+        assertTrue(todoService.pending().isEmpty(), "todo_done 应按内容匹配并标完成")
+        // 下一轮（本次为最后一轮）无待办时摘要保底文案
+        assertTrue(llm.prompts[0].contains("帮群友修电脑"), "完成前的清单应注入 prompt：${llm.prompts[0]}")
+    }
+
+    @Test
+    fun `todos section is always present even when empty`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val (controller, _) = buildController(llm)
+        controller.pickSession(fromIdleWake = false)
+        assertTrue(llm.prompts[0].contains("### 待办"), "待办段固定出现")
+        assertTrue(llm.prompts[0].contains("（无待办）"), "空清单保底文案")
     }
 }

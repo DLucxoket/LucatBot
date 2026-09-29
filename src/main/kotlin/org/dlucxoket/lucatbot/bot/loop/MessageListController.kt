@@ -4,6 +4,7 @@ import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ProactiveCandidate
 import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
+import org.dlucxoket.lucatbot.bot.agent.data.SessionDecision
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionSummaryLine
@@ -68,6 +69,7 @@ class MessageListController(
             )
 
             val decision = sessionPickerAgent.processObject(request)
+            applyTodoSideEffects(decision)
 
             // 防病态值资源护栏：连续工具步达硬上限 → 兜底去空闲（正常场景
             // 一两步工具就该出结论，6 步仍不决策属病态路径）
@@ -110,8 +112,38 @@ class MessageListController(
         }
     }
 
-    /** 汇总未读/最近会话（含已读与未读） */
-    private fun collectSessions(): List<SessionSummaryLine> {
+    /**
+     * 处理决策信封的待办副作用（在执行 action 之前，与 ConversationController 同语义）
+     *
+     * todo_add → [TodoService.add]；todo_done → [TodoService.complete]。
+     * 每项单独 try/catch：失败只 log + 操作日志，不打断选会话循环。
+     */
+    private fun applyTodoSideEffects(decision: SessionDecision) {
+        decision.todoAdd?.let { content ->
+            try {
+                todoService.add(content)
+                actionLog.append("待办+：$content")
+            } catch (e: Exception) {
+                log.warn("todo_add 写入失败: {}", e.message)
+                actionLog.append("待办写入失败")
+            }
+        }
+        decision.todoDone?.let { ref ->
+            try {
+                if (todoService.complete(ref)) {
+                    actionLog.append("待办完成：$ref")
+                } else {
+                    log.warn("todo_done 未匹配到待办: {}", ref)
+                    actionLog.append("待办未匹配：$ref")
+                }
+            } catch (e: Exception) {
+                log.warn("todo_done 处理失败: {}", e.message)
+                actionLog.append("待办完成失败")
+            }
+        }
+    }
+
+    /** 汇总未读/最近会话（含已读与未读） */    private fun collectSessions(): List<SessionSummaryLine> {
         val unread = lucatBot.getUnreadSummary()
         val lines = mutableListOf<SessionSummaryLine>()
 

@@ -65,6 +65,9 @@ class SessionPickerAgent(
             - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）
             - tool：调用一个工具。params：{"name": "工具名", "input": { ...参数，格式见目录里的「参数」... }}
             - reason 是内心动机（不会发给用户）
+            - 用户托付了一件现在不做、之后要做的事 → 在 JSON 顶层额外输出 "todo_add": "待办内容"
+            - 想起了清单里的事已经做完 → 在 JSON 顶层额外输出 "todo_done": "待办的id或内容"
+            - todo_add / todo_done 是可选的，可以省略；普通扫列表不要往里写，与其他 action 可同时出现
             
             proactive 仅限「可主动找的人」里列出的；没有合适对象请 idle
             

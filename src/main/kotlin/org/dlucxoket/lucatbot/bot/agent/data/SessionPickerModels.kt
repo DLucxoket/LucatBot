@@ -124,6 +124,8 @@ enum class SessionAction {
  * @param query LIST_TOOLS 的搜索关键词（null = 全部）
  * @param toolName CALL_TOOL 的目标工具名
  * @param toolInput CALL_TOOL 的入参对象
+ * @param todoAdd 新增待办内容（可选，与 action 无关的副作用字段，任何决策都可携带）
+ * @param todoDone 完成待办的 id 或内容片段（可选，同上）
  * @param reason 内心动机（不发出）
  */
 data class SessionDecision(
@@ -132,6 +134,8 @@ data class SessionDecision(
     val query: String? = null,
     val toolName: String? = null,
     val toolInput: Map<String, Any?> = emptyMap(),
+    val todoAdd: String? = null,
+    val todoDone: String? = null,
     val reason: String? = null
 )
 
@@ -140,6 +144,9 @@ data class SessionDecision(
  *
  * 语义与旧 [SessionPickParser] 兼容：`open_conversation`（参数有效）→ 打开会话；
  * `idle`、参数无效、**无法解析的垃圾输出** → 空闲兜底，绝不卡死主循环。
+ *
+ * `todo_add` / `todo_done` 是与 action 无关的顶层副作用字段——
+ * 任何动作（含兜底 idle）都携带，由编排层在执行 action 前落地。
  */
 object SessionDecisionParser {
     fun parse(llmOutput: String): SessionDecision {
@@ -148,38 +155,51 @@ object SessionDecisionParser {
         val actionText = node.get("action")?.asText()?.trim()?.lowercase()
             ?: return idle("缺 action 字段，兜底空闲")
         val reason = node.get("reason")?.takeIf { !it.isNull }?.asText()
+        val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
+        val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
 
         return when (actionText) {
             "open_conversation" -> {
                 val pick = SessionPickParser.parse(llmOutput)
-                    ?: return idle("open_conversation 参数无效，兜底空闲")
-                SessionDecision(SessionAction.OPEN_CONVERSATION, pick = pick, reason = reason)
+                    ?: return idle("open_conversation 参数无效，兜底空闲", todoAdd, todoDone)
+                SessionDecision(
+                    SessionAction.OPEN_CONVERSATION, pick = pick,
+                    todoAdd = todoAdd, todoDone = todoDone, reason = reason
+                )
             }
 
-            "idle" -> SessionDecision(SessionAction.IDLE, reason = reason)
+            "idle" -> SessionDecision(SessionAction.IDLE, todoAdd = todoAdd, todoDone = todoDone, reason = reason)
 
             "list_tools", "tools" -> {
                 val params = LlmJson.paramsOf(node)
                 val query = params["query"]?.toString()?.trim()
                     ?.takeIf { it.isNotEmpty() && it != "null" }
-                SessionDecision(SessionAction.LIST_TOOLS, query = query, reason = reason)
+                SessionDecision(
+                    SessionAction.LIST_TOOLS, query = query,
+                    todoAdd = todoAdd, todoDone = todoDone, reason = reason
+                )
             }
 
             "tool", "call_tool" -> {
                 val params = LlmJson.paramsOf(node)
                 val name = params["name"]?.toString()?.trim()
                     ?.takeIf { it.isNotEmpty() && it != "null" }
-                    ?: return idle("工具名缺失，兜底空闲")
+                    ?: return idle("工具名缺失，兜底空闲", todoAdd, todoDone)
                 @Suppress("UNCHECKED_CAST")
                 val input = params["input"] as? Map<String, Any?> ?: emptyMap()
-                SessionDecision(SessionAction.CALL_TOOL, toolName = name, toolInput = input, reason = reason)
+                SessionDecision(
+                    SessionAction.CALL_TOOL, toolName = name, toolInput = input,
+                    todoAdd = todoAdd, todoDone = todoDone, reason = reason
+                )
             }
 
-            else -> idle("未知 action=$actionText，兜底空闲")
+            else -> idle("未知 action=$actionText，兜底空闲", todoAdd, todoDone)
         }
     }
 
-    private fun idle(reason: String) = SessionDecision(SessionAction.IDLE, reason = reason)
+    /** 兜底空闲（副作用字段照样保留——LLM 已经说要记的待办不能因 action 无效丢掉） */
+    private fun idle(reason: String, todoAdd: String? = null, todoDone: String? = null) =
+        SessionDecision(SessionAction.IDLE, todoAdd = todoAdd, todoDone = todoDone, reason = reason)
 }
 
 /**
