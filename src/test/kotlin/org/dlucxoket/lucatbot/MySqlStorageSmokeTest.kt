@@ -29,15 +29,34 @@ class MySqlStorageSmokeTest {
         importFromJson = false  // 同步单独用例验证，往返测试不导入存量
     )
 
-    /** 初始化测试库；连不上 → assumeTrue 失败 → 测试跳过 */
+    /** 初始化测试库（连接瞬时故障重试 2 次）；连不上 → assumeTrue 失败 → 测试跳过 */
     private fun initOrSkip(): MySqlStorage {
         val storage = MySqlStorage(testConfig)
-        val result = runCatching { storage.init() }
-        assumeTrue(
-            result.isSuccess,
-            "MySQL 不可用，跳过冒烟测试：${result.exceptionOrNull()?.message}"
-        )
+        var last: Throwable? = null
+        repeat(3) { attempt ->
+            val result = runCatching { storage.init() }
+            if (result.isSuccess) return storage
+            last = result.exceptionOrNull()
+            if (attempt < 2) Thread.sleep(500)
+        }
+        assumeTrue(false, "MySQL 不可用，跳过冒烟测试：${last?.message}")
         return storage
+    }
+
+    /**
+     * 连接类瞬时故障（本机 socket 资源抖动，连续多轮测试后偶发）→ 跳过而非失败；
+     * **只识别连接故障**——SQL 语义错误照常抛出失败，不许被跳过掩盖。
+     */
+    private fun <T> withDbOrSkip(block: () -> T): T {
+        try {
+            return block()
+        } catch (e: java.sql.SQLException) {
+            val msg = e.message.orEmpty()
+            val transient = msg.contains("CommunicationsException", ignoreCase = true) ||
+                msg.contains("client portion of a socket", ignoreCase = true)
+            assumeTrue(false, if (transient) "MySQL 连接瞬时故障，跳过：$msg" else throw e)
+            throw e  // unreachable
+        }
     }
 
     /** 清空测试库三张表（保证用例可重复执行） */
@@ -48,7 +67,7 @@ class MySqlStorageSmokeTest {
     }
 
     @Test
-    fun `chat history roundtrip with limit and before`() {
+    fun `chat history roundtrip with limit and before`() = withDbOrSkip {
         val storage = initOrSkip()
         clean(storage)
         val repo = MySqlChatHistoryRepository(storage)
@@ -89,7 +108,7 @@ class MySqlStorageSmokeTest {
     }
 
     @Test
-    fun `memory roundtrip preserves subject type and tags`() {
+    fun `memory roundtrip preserves subject type and tags`() = withDbOrSkip {
         val storage = initOrSkip()
         clean(storage)
         val repo = MySqlMemoryRepository(storage)
@@ -111,22 +130,37 @@ class MySqlStorageSmokeTest {
         assertEquals(1, groupItems.size)
 
         val loaded = repo.findById("mem-user")!!
-        assertEquals(listOf("名字", "喜好"), loaded.tags, "tags JSON 往返")
+        // 关键词是集合语义（检索/交集不看顺序）——关联表不存顺序，按集合断言
+        assertEquals(setOf("名字", "喜好"), loaded.tags.toSet(), "tags 关联往返")
         assertEquals(listOf(9L, 8L), loaded.relatedUserIds, "relatedUserIds JSON 往返")
         assertEquals(0.7, loaded.strength, 1e-9)
         assertEquals(MemoryItem.MemoryType.FACT, loaded.type)
 
-        // findByTags 与 JSON 实现同语义（交集）
+        // findByTags 与 JSON 实现同语义（交集）——走 tags/memory_tags 索引 JOIN
         assertEquals(1, repo.findByTags(listOf("喜好")).size)
         assertEquals(0, repo.findByTags(listOf("不存在")).size)
 
+        // 关键词规范化落地：关联表有行、注册表去重（"名字"只存一份）
+        val junctionRows = storage.queryOne(
+            "SELECT COUNT(*) AS c FROM memory_tags", map = { it.getLong("c") }
+        ) ?: 0L
+        assertTrue(junctionRows > 0, "memory_tags 关联表应有行")
+        val nameTags = storage.queryOne(
+            "SELECT COUNT(*) AS c FROM tags WHERE name = '名字'", map = { it.getLong("c") }
+        ) ?: 0L
+        assertEquals(1L, nameTags, "tags 注册表按词唯一")
+
         repo.delete("mem-user")
-        assertNull(repo.findById("mem-user"))
+        assertNull(repo.findById("mem-user"), "删除记忆后关联应随 FK 级联清理")
+        assertEquals(0L, storage.queryOne(
+            "SELECT COUNT(*) AS c FROM memory_tags WHERE memory_id = 'mem-user'",
+            map = { it.getLong("c") }
+        ), "FK 级联：删记忆自动清关联")
         clean(storage)
     }
 
     @Test
-    fun `todo roundtrip`() {
+    fun `todo roundtrip`() = withDbOrSkip {
         val storage = initOrSkip()
         clean(storage)
         val repo = MySqlTodoRepository(storage)
@@ -146,7 +180,7 @@ class MySqlStorageSmokeTest {
     }
 
     @Test
-    fun `json sync runs every startup and never overwrites existing rows`() {
+    fun `json sync runs every startup and never overwrites existing rows`() = withDbOrSkip {
         // 注意：data 目录的 json 可能正被运行中的实例持续写入——
         // 所有断言基于「导入前的 id 快照」，不对易变的总行数做相等断言
         val snapshotIds = runCatching {

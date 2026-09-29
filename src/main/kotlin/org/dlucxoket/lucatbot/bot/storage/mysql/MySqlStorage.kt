@@ -41,31 +41,37 @@ data class MySqlConfig(
 /**
  * MySQL 连接与建库建表（存储后端的引导与公共 JDBC 助手）
  *
- * **职责边界**：本类只管「连得上、表在、JSON 存量迁入、通用 SQL 执行」；
+ * **职责边界**：本类只管「连得上、表在、结构演进、json 同步、通用 SQL 执行」；
  * 每张表的 CRUD 归各 MySQL*Repository（实现既有 Repository 接口，
  * 业务层无感知——DIP：Service 依赖接口，StorageConfig 按 storage.type 绑定实现）。
  *
  * 连接模型：**每次操作短连接**（`use` 自动关闭）。写入即落库（无防抖），
  * 机器人存储量级（本地 MySQL、低频写）完全够用，不引入连接池的复杂度。
  *
+ * **记忆关键词规范化**（m:n 两表）：
+ * - `tags`：关键词注册表（name 唯一）——按词查询走索引，词条可统计、无重复存储
+ * - `memory_tags`：记忆 ↔ 关键词 关联表（FK 级联：删记忆自动清关联）
+ *
  * 引导流程（[init]，StorageConfig 启动时调用一次，幂等）：
  * 1. 服务级连接 `CREATE DATABASE IF NOT EXISTS`
- * 2. 库级连接建三张表（`IF NOT EXISTS`）
- * 3. [MySqlConfig.importFromJson] 开启时，**每次启动**把 data 目录 json
- *    中缺失的行导入（`INSERT IGNORE`——已存在的行不覆盖，MySQL 为权威源）
+ * 2. **旧结构检测**：memories 若还带旧 `tags` 列 → 读出数据 → DROP（结构演进
+ *    模式：读出 → 重建 → 回填，数据无损）
+ * 3. 库级连接建五张表（`IF NOT EXISTS`）→ 回填旧结构数据（tags 列 → 关联表）
+ * 4. [MySqlConfig.importFromJson] 开启时，**每次启动**把 json 中缺失的行导入
+ *    （`INSERT IGNORE`——已存在的行不覆盖，MySQL 为权威源）
  */
 class MySqlStorage(private val config: MySqlConfig) {
 
     private val log = LoggerFactory.getLogger(MySqlStorage::class.java)
 
-    /** 共享 ObjectMapper（仓库序列化 tags 等列表字段用） */
+    /** 共享 ObjectMapper（json 同步与 related_user_ids 等列表字段序列化用） */
     val mapper = jacksonObjectMapper()
 
     @Volatile
     private var initialized = false
 
     /**
-     * 引导：建库 → 建表 → 从 json 同步缺失行（幂等，可重复调用）
+     * 引导：建库 → 结构演进 → 建表 → 回填 → json 同步（幂等，可重复调用）
      */
     @Synchronized
     fun init() {
@@ -80,9 +86,10 @@ class MySqlStorage(private val config: MySqlConfig) {
             }
         }
         connection().use { conn ->
-            conn.createStatement().use { st ->
-                SCHEMA.forEach { st.executeUpdate(it) }
-            }
+            // 旧结构（memories.tags 列）→ 读出、DROP（必须在建关联表之前，否则 FK 依赖挡住）
+            val legacy = drainLegacyMemories(conn)
+            conn.createStatement().use { st -> SCHEMA.forEach { st.executeUpdate(it) } }
+            if (legacy.isNotEmpty()) restoreLegacyMemories(conn, legacy)
         }
         if (config.importFromJson) {
             importFromJson()
@@ -97,48 +104,149 @@ class MySqlStorage(private val config: MySqlConfig) {
 
     /** 执行更新/DDL，返回受影响行数 */
     fun update(sql: String, vararg params: Any?): Int = connection().use { conn ->
+        update(conn, sql, *params)
+    }
+
+    /** 同连接上执行更新（多语句事务内用） */
+    fun update(conn: Connection, sql: String, vararg params: Any?): Int =
         conn.prepareStatement(sql).use { ps ->
             params.forEachIndexed { i, p -> ps.setObject(i + 1, p) }
             ps.executeUpdate()
         }
-    }
 
     /** 批量执行同一 SQL（单连接 + 事务 + addBatch；要么全成要么全回滚）。
      *  返回每行受影响行数（INSERT IGNORE 下 1=新插入、0=已存在跳过） */
     fun batchUpdate(sql: String, rows: List<Array<Any?>>): IntArray = connection().use { conn ->
         conn.autoCommit = false
         try {
-            conn.prepareStatement(sql).use { ps ->
-                rows.forEach { row ->
-                    row.forEachIndexed { i, p -> ps.setObject(i + 1, p) }
-                    ps.addBatch()
-                }
-                val counts = ps.executeBatch()
-                conn.commit()
-                counts
-            }
+            val counts = executeBatch(conn, sql, rows)
+            conn.commit()
+            counts
         } catch (e: Exception) {
             conn.rollback()
             throw e
         }
     }
 
+    /** 同连接上批量执行（事务内用，不提交） */
+    fun executeBatch(conn: Connection, sql: String, rows: List<Array<Any?>>): IntArray =
+        conn.prepareStatement(sql).use { ps ->
+            rows.forEach { row ->
+                row.forEachIndexed { i, p -> ps.setObject(i + 1, p) }
+                ps.addBatch()
+            }
+            ps.executeBatch()
+        }
+
     /** 查询并逐行映射（连接随 use 关闭） */
     fun <T> query(sql: String, vararg params: Any?, map: (ResultSet) -> T): List<T> =
-        connection().use { conn ->
-            conn.prepareStatement(sql).use { ps ->
-                params.forEachIndexed { i, p -> ps.setObject(i + 1, p) }
-                ps.executeQuery().use { rs ->
-                    val out = mutableListOf<T>()
-                    while (rs.next()) out += map(rs)
-                    out
-                }
+        connection().use { conn -> query(conn, sql, *params, map = map) }
+
+    /** 同连接上查询（多语句读取保持同一快照，如记忆 + 关键词两步组装） */
+    fun <T> query(conn: Connection, sql: String, vararg params: Any?, map: (ResultSet) -> T): List<T> =
+        conn.prepareStatement(sql).use { ps ->
+            params.forEachIndexed { i, p -> ps.setObject(i + 1, p) }
+            ps.executeQuery().use { rs ->
+                val out = mutableListOf<T>()
+                while (rs.next()) out += map(rs)
+                out
             }
         }
 
     /** 单值查询（COUNT 等） */
     fun <T> queryOne(sql: String, vararg params: Any?, map: (ResultSet) -> T): T? =
         query(sql, *params, map = map).firstOrNull()
+
+    // ------------------------------------------------------------------
+    // 关键词规范化：tags 注册表 + memory_tags 关联表
+    // ------------------------------------------------------------------
+
+    /**
+     * 确保关键词存在并返回其 id（注册表幂等插入：INSERT IGNORE + 查 id）
+     *
+     * 同连接执行，供记忆写入/导入的事务复用。
+     */
+    fun ensureTagId(conn: Connection, name: String): Int {
+        update(conn, "INSERT IGNORE INTO tags (name) VALUES (?)", name)
+        return conn.prepareStatement("SELECT id FROM tags WHERE name = ?").use { ps ->
+            ps.setString(1, name)
+            ps.executeQuery().use { rs ->
+                if (rs.next()) rs.getInt(1)
+                else error("关键词注册失败（name=$name）")
+            }
+        }
+    }
+
+    /**
+     * 重建某条记忆的关键词关联（先清后写，幂等）
+     *
+     * 同连接执行，供仓库的写入事务复用；FK ON DELETE CASCADE 保证
+     * 删记忆时关联自动清理。
+     */
+    fun syncMemoryTags(conn: Connection, memoryId: String, tags: List<String>) {
+        update(conn, "DELETE FROM memory_tags WHERE memory_id = ?", memoryId)
+        val distinct = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (distinct.isEmpty()) return
+        conn.prepareStatement("INSERT INTO memory_tags (memory_id, tag_id) VALUES (?, ?)").use { ps ->
+            distinct.forEach { tag ->
+                ps.setString(1, memoryId)
+                ps.setInt(2, ensureTagId(conn, tag))
+                ps.addBatch()
+            }
+            ps.executeBatch()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 旧结构演进：memories.tags 列 → tags/memory_tags 关联表（数据无损）
+    // ------------------------------------------------------------------
+
+    private data class LegacyMemory(val values: Array<Any?>, val tags: List<String>)
+
+    /** 检测旧 tags 列：有则读出全部行并 DROP（须在建 FK 关联表之前） */
+    private fun drainLegacyMemories(conn: Connection): List<LegacyMemory> {
+        val hasLegacy = conn.prepareStatement(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS " +
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'tags'"
+        ).use { ps ->
+            ps.setString(1, config.database)
+            ps.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
+        }
+        if (!hasLegacy) return emptyList()
+
+        val legacy = conn.prepareStatement(
+            "SELECT id, user_id, subject_type, type, content, related_user_ids, tags, strength, created_at FROM memories"
+        ).use { ps ->
+            ps.executeQuery().use { rs ->
+                val out = mutableListOf<LegacyMemory>()
+                while (rs.next()) {
+                    // 列序：id, user_id, subject_type, type, content, related_user_ids, tags, strength, created_at
+                    val tags = runCatching { mapper.readValue<List<String>>(rs.getString("tags") ?: "[]") }
+                        .getOrDefault(emptyList())
+                    out += LegacyMemory(
+                        values = arrayOf(
+                            rs.getString(1), rs.getLong(2), rs.getString(3), rs.getString(4),
+                            rs.getString(5), rs.getString(6), rs.getDouble(8), rs.getLong(9)
+                        ),
+                        tags = tags
+                    )
+                }
+                out
+            }
+        }
+        conn.createStatement().use { it.executeUpdate("DROP TABLE memories") }
+        log.info("检测到旧版 memories.tags 列：读出 {} 条，重建为 tags/memory_tags 规范化结构", legacy.size)
+        return legacy
+    }
+
+    /** 回填旧结构数据（行 + 关键词关联），全部在建好的新表上执行 */
+    private fun restoreLegacyMemories(conn: Connection, legacy: List<LegacyMemory>) {
+        legacy.forEach { row ->
+            update(conn, MySqlMemoryRepository.INSERT, *row.values)
+            syncMemoryTags(conn, row.values[0] as String, row.tags)
+        }
+        log.info("旧结构回填完成：{} 条记忆及其关键词", legacy.size)
+    }
 
     // ------------------------------------------------------------------
     // json → 本库同步（每次启动；只补缺失行，已存在不覆盖）
@@ -159,19 +267,32 @@ class MySqlStorage(private val config: MySqlConfig) {
                 r.messageType.name, r.timestamp, r.messageId, r.isFromBot
             )
         }
-        importFile<MemoryItem>("记忆", "data/memories.json",
-            MySqlMemoryRepository.INSERT_IGNORE) { m ->
-            arrayOf(
-                m.id, m.userId, m.subjectType.name, m.type.name, m.content,
-                mapper.writeValueAsString(m.relatedUserIds),
-                mapper.writeValueAsString(m.tags),
-                m.strength, m.createdAt
-            )
-        }
+        // 记忆走仓库（行 + 关键词关联同事务）
+        readJson<MemoryItem>("data/memories.json", "记忆")
+            ?.let { rows ->
+                val (inserted, skipped) = MySqlMemoryRepository(this).importMissing(rows)
+                log.info(
+                    "从 data/memories.json 同步记忆：新插入 {} 条、已存在跳过 {} 条（共 {}，关键词经 tags/memory_tags）",
+                    inserted, skipped, rows.size
+                )
+            }
         importFile<TodoItem>("待办", "data/todos.json",
             MySqlTodoRepository.INSERT_IGNORE) { t ->
             arrayOf(t.id, t.content, t.createdAt, t.done, t.conversationId)
         }
+    }
+
+    /** 读 json 列表（文件不存在/解析失败 → null 并记日志） */
+    internal inline fun <reified T> readJson(jsonPath: String, label: String): List<T>? {
+        val file = java.io.File(jsonPath)
+        if (!file.exists()) return null
+        val rows = runCatching { mapper.readValue<List<T>>(file) }
+            .getOrElse { e ->
+                log.error("{}同步：解析 {} 失败，跳过（{}）", label, jsonPath, e.message)
+                null
+            }
+        if (rows != null && rows.isEmpty()) return null
+        return rows
     }
 
     private inline fun <reified T> importFile(
@@ -180,14 +301,7 @@ class MySqlStorage(private val config: MySqlConfig) {
         sql: String,
         rowOf: (T) -> Array<Any?>
     ) {
-        val file = java.io.File(jsonPath)
-        if (!file.exists()) return
-        val rows = runCatching { mapper.readValue<List<T>>(file) }
-            .getOrElse { e ->
-                log.error("{}同步：解析 {} 失败，跳过（{}）", label, jsonPath, e.message)
-                return
-            }
-        if (rows.isEmpty()) return
+        val rows = readJson<T>(jsonPath, label) ?: return
         val counts = batchUpdate(sql, rows.map(rowOf))
         val inserted = counts.count { it > 0 }
         log.info(
@@ -197,7 +311,10 @@ class MySqlStorage(private val config: MySqlConfig) {
     }
 
     private companion object {
-        /** 建表 DDL（幂等）：三张表对应三个 Repository */
+        /**
+         * 建表 DDL（幂等）：五张表——三个 Repository 各一张 +
+         * 关键词规范化两张（tags 注册表、memory_tags 关联表）
+         */
         val SCHEMA = listOf(
             """
             CREATE TABLE IF NOT EXISTS chat_history (
@@ -221,10 +338,28 @@ class MySqlStorage(private val config: MySqlConfig) {
                 type VARCHAR(16) NOT NULL,
                 content TEXT NOT NULL,
                 related_user_ids VARCHAR(2048) NOT NULL DEFAULT '[]',
-                tags VARCHAR(1024) NOT NULL DEFAULT '[]',
                 strength DOUBLE NOT NULL DEFAULT 1.0,
                 created_at BIGINT NOT NULL,
                 KEY idx_user (user_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS tags (
+                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(64) NOT NULL,
+                UNIQUE KEY uk_name (name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS memory_tags (
+                memory_id VARCHAR(64) NOT NULL,
+                tag_id INT NOT NULL,
+                PRIMARY KEY (memory_id, tag_id),
+                KEY idx_tag (tag_id),
+                CONSTRAINT fk_memory_tags_memory FOREIGN KEY (memory_id)
+                    REFERENCES memories (id) ON DELETE CASCADE,
+                CONSTRAINT fk_memory_tags_tag FOREIGN KEY (tag_id)
+                    REFERENCES tags (id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent(),
             """
