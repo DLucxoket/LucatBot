@@ -24,8 +24,7 @@ import org.dlucxoket.lucatbot.model.user.User
  * 将 OneBot/Shiro 的事件和消息结构映射为业务层自定义 model，
  * 使核心逻辑不依赖 Shiro 框架类。
  *
- * 入档 / 未读 / 注入 LLM 请优先用 [richContent]（或 ChatMessage.describe()），
- * [extractPlainText] 仅保留兼容，会丢掉 @/图片/表情/reply。
+ * 入档 / 未读 / 注入 LLM 请用 [richContent]（或 ChatMessage.describe()）。
  */
 object ShiroConverter {
 
@@ -146,117 +145,11 @@ object ShiroConverter {
         if (chat.messageMembers.isNotEmpty()) {
             return chat.describe()
         }
-        return describeRawMessage(event.message ?: "")
+        // CQ 码解析在 model 层（core 的爬楼入档也要用，不能反向依赖 adapter）
+        return org.dlucxoket.lucatbot.model.message.CqParser.describe(event.message ?: "")
     }
 
-    /**
-     * 提取消息的纯文本内容（拼接所有文本片段）
-     *
-     * **兼容保留**：会丢掉 @/图片/表情/reply，入档与 LLM 注入请改用 [richContent]。
-     *
-     * @param event Shiro 消息事件
-     * @return 拼接后的纯文本
-     */
-    fun extractPlainText(event: AnyMessageEvent): String {
-        val segments = event.arrayMsg ?: return event.message ?: ""
-        return segments
-            .filter { it.type == MsgTypeEnum.text }
-            .joinToString("") { it.getStringData("text") ?: "" }
-            .trim()
-    }
-
-    /**
-     * 把 OneBot CQ 码字符串（爬楼远端 message 字段）转为与 describe 同风格的富文本
-     *
-     * 解析失败或纯文本时尽量保留原文；禁止把大段 base64 写入。
-     */
-    fun describeRawMessage(raw: String): String {
-        if (raw.isBlank()) return ""
-        if (!raw.contains("[CQ:")) {
-            return raw
-        }
-        return try {
-            val described = ChatMessage(cqToModelMembers(raw)).describe()
-            if (described.isNotBlank()) described else raw
-        } catch (_: Exception) {
-            raw
-        }
-    }
-
-    /**
-     * CQ 码字符串 → model MessageMember 列表（保持段顺序）
-     */
-    fun cqToModelMembers(raw: String): List<MessageMember> {
-        val members = mutableListOf<MessageMember>()
-        if (raw.isEmpty()) return members
-        var last = 0
-        for (match in cqCodeRegex.findAll(raw)) {
-            val before = raw.substring(last, match.range.first)
-            if (before.isNotEmpty()) {
-                members += TextMessageMember(before)
-            }
-            val type = match.groupValues[1].lowercase()
-            val params = parseCqParams(match.groupValues[2])
-            when (type) {
-                "text" -> params["text"]?.let { if (it.isNotEmpty()) members += TextMessageMember(it) }
-                "at" -> {
-                    val qq = params["qq"]?.toLongOrNull() ?: 0L
-                    val name = firstNotBlank(params["card"], params["nickname"], params["name"])
-                    members += AtMessageMember(qq, name)
-                }
-                "image" -> {
-                    val file = firstNotBlank(params["file"])
-                    val url = firstNotBlank(params["url"], file).orEmpty()
-                    val subType = params["sub_type"] ?: ""
-                    val summary = params["summary"] ?: ""
-                    val isMemeLike = subType == "1" || summary.contains("表情")
-                    if (isMemeLike) {
-                        members += MemeMessageMember(url, file)
-                    } else {
-                        members += ImageMessageMember(url, file)
-                    }
-                }
-                "mface", "marketface" -> {
-                    val file = firstNotBlank(params["file"])
-                    val url = firstNotBlank(params["url"], file).orEmpty()
-                    members += MemeMessageMember(url, file)
-                }
-                "face" -> members += FaceMessageMember(params["id"]?.toIntOrNull() ?: 0)
-                "reply" -> {
-                    val id = params["id"]?.toLongOrNull() ?: 0L
-                    members += ReplyMessageMember(id, firstNotBlank(params["text"]))
-                }
-                // 其余段（forward/poke 等）不进 describe 正文，避免污染
-                else -> Unit
-            }
-            last = match.range.last + 1
-        }
-        val tail = raw.substring(last)
-        if (tail.isNotEmpty()) {
-            members += TextMessageMember(tail)
-        }
-        return members
-    }
-
-    /** 解析 CQ 段参数；处理 &#44; 等转义 */
-    private fun parseCqParams(paramStr: String): Map<String, String> {
-        if (paramStr.isBlank()) return emptyMap()
-        return paramStr.split(',')
-            .mapNotNull { part ->
-                val idx = part.indexOf('=')
-                if (idx <= 0) return@mapNotNull null
-                val key = part.substring(0, idx).trim()
-                val value = part.substring(idx + 1)
-                    .replace("&amp;", "&")
-                    .replace("&#44;", ",")
-                    .replace("&quot;", "\"")
-                    .replace("&#91;", "[")
-                    .replace("&#93;", "]")
-                key to value
-            }
-            .toMap()
-    }
-
+    /** 取第一个非空白值（DTO 字段解析用；CQ 侧在 CqParser 有各自私有副本） */
     private fun firstNotBlank(vararg values: String?): String? {
         return values
             .mapNotNull { v ->

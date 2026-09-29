@@ -17,10 +17,7 @@ data class BotMood(
     val type: MoodType = MoodType.NORMAL,
 
     /** 心情强度 0.0-1.0 */
-    val intensity: Double = 0.5,
-
-    /** 心情持续到的时间戳 */
-    val expiresAt: Long = 0L
+    val intensity: Double = 0.5
 ) {
     /** 心情类型 */
     enum class MoodType {
@@ -49,21 +46,6 @@ data class BotMood(
             MoodType.SLEEPY -> "困了"
         }
         return "$text（强度 ${String.format(java.util.Locale.ROOT, "%.2f", intensity)}）"
-    }
-
-    /**
-     * 心情对回复意愿的影响（0.0-1.0）
-     */
-    fun replyWillingness(): Double {
-        val base = when (type) {
-            MoodType.HAPPY -> 1.0
-            MoodType.NORMAL -> 0.8
-            MoodType.BORED -> 0.6
-            MoodType.TIRED -> 0.4
-            MoodType.ANNOYED -> 0.3
-            MoodType.SLEEPY -> 0.2
-        }
-        return (base * (0.5 + intensity * 0.5)).coerceIn(0.0, 1.0)
     }
 
     companion object {

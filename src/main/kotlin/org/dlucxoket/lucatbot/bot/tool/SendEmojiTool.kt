@@ -1,7 +1,5 @@
 package org.dlucxoket.lucatbot.bot.tool
 
-import com.mikuac.shiro.common.utils.MsgUtils
-
 /**
  * 发送表情工具
  *
@@ -27,8 +25,8 @@ object SendEmojiTool : Tool<SendEmojiRequest, SendEmojiResult>() {
             val type = parts[0]
             val id = parts[1].toLongOrNull() ?: return SendEmojiResult(success = false, error = "无效ID")
 
-            val faceId = resolveFaceId(input.emojiName)
-            val msg = MsgUtils.builder().face(faceId).build()
+            // OneBot 标准 CQ 码表情段——core 层直连字符串，不引 Shiro 工具类
+            val msg = "[CQ:face,id=${resolveFaceId(input.emojiName)}]"
 
             when (type) {
                 "group" -> b.sendGroupMsg(id, msg, false)

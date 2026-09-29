@@ -4,6 +4,7 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
 import org.dlucxoket.lucatbot.bot.tool.data.HistoryMessageItem
+import org.dlucxoket.lucatbot.model.message.CqParser
 
 /**
  * 聊天记录查询工具
@@ -96,7 +97,7 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                 val raw = msg.message ?: return@forEach
                 if (raw.isBlank()) return@forEach
                 // 远端爬楼：CQ 码转成与 ChatMessage.describe 同风格的富文本（禁止 base64 全量）
-                var content = org.dlucxoket.lucatbot.adapter.onebot.ShiroConverter.describeRawMessage(raw)
+                var content = CqParser.describe(raw)
                 if (content.isBlank()) return@forEach
                 // 过长内容（如合并转发 JSON）截断，避免污染 prompt / 存储
                 if (content.length > 800) {

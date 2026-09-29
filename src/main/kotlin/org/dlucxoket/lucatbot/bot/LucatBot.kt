@@ -242,11 +242,6 @@ class LucatBot {
         return messages
     }
 
-    /** 当前会话是否有待插入的新消息（不清除） */
-    fun hasPendingInserts(conversationId: String): Boolean {
-        return pendingInsertQueue.any { it.conversationId == conversationId }
-    }
-
     /**
      * 等待当前会话的新消息或超时（供会话内 STAY 计时使用）
      *

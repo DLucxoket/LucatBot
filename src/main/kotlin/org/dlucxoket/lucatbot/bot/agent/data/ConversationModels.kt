@@ -6,24 +6,6 @@ import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.BotPersona
 
 /**
- * 统一决策信封（消息列表 / 会话内共用）
- *
- * LLM 只输出 `{action, params, reason}`；params 内是工具入参；
- * reason 是内心动机（不进 params、不进工具、不进操作日志）。
- */
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class Decision(
-    @JsonProperty("action")
-    val action: String = "",
-
-    @JsonProperty("params")
-    val params: Map<String, Any?> = emptyMap(),
-
-    @JsonProperty("reason")
-    val reason: String? = null
-)
-
-/**
  * 会话内动作
  */
 enum class ConversationAction {

@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot.bot.memory
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+
 /**
  * 记忆条目
  *
@@ -12,8 +14,13 @@ package org.dlucxoket.lucatbot.bot.memory
  * - FACT：客观事实（"他叫张三"）
  * - OPINION：主观印象（"这个人很有趣"）
  * - EVENT：事件记忆（"上次他帮了我"）
- * - RELATION：人际关系（"他和李四是朋友"）
+ * - RELATION：人际关系（"他和李四是朋友"）——写入口（rememberRelation）
+ *   已删，保留枚举仅为兼容旧数据里的存量关系记忆
+ *
+ * `ignoreUnknown`：持久化类的字段演进保护——旧文件里的已删字段
+ * （如 lastRecalledAt）反序列化时忽略而不是炸掉加载。
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class MemoryItem(
     /** 记忆 ID（唯一标识） */
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -50,10 +57,7 @@ data class MemoryItem(
     val strength: Double = 1.0,
 
     /** 创建时间 */
-    val createdAt: Long = System.currentTimeMillis(),
-
-    /** 最后一次被回忆的时间 */
-    val lastRecalledAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis()
 ) {
     /** 记忆类型：事实 / 看法 / 事件 / 人际关系 */
     enum class MemoryType {

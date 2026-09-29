@@ -6,64 +6,23 @@ import java.time.LocalTime
 /**
  * 时间感知
  *
- * **模拟真人的时间感**：
- * - 深夜不回消息 / 回得很慢
- * - 工作时间可能不回 / 回得简短
- * - 周末更爱聊天
- * - 不会秒回（有打字延迟）
+ * **模拟真人的时间感**：深夜不主动查消息（[ProactiveScheduler] 深夜跳过）。
+ * 决策 prompt 的当前时间由 [timeHint] 提供。
+ *
+ * 曾有打字延迟/工作时间等规划方法，长期零调用已删（YAGNI，git 可找回）；
+ * 真需要时再按需添加，不预留死分支。
  */
 object TimeAwareness {
 
-    /** 当前是否是深夜（调试模式：暂时禁用） */
+    /** 当前是否是深夜（23:00~07:00）——深夜不主动检查未读，模拟真人睡觉 */
     fun isLateNight(): Boolean {
-        return false  // TODO: 调试用，正式版恢复时间判断
-        // val hour = LocalTime.now().hour
-        // return hour >= 23 || hour < 7
-    }
-
-    /** 当前是否是工作时间（周一到周五 9:00-18:00） */
-    fun isWorkTime(): Boolean {
-        val now = LocalDateTime.now()
-        val dayOfWeek = now.dayOfWeek.value // 1=Monday, 7=Sunday
-        val hour = now.hour
-        return dayOfWeek in 1..5 && hour in 9..18
-    }
-
-    /** 当前是否是周末 */
-    fun isWeekend(): Boolean {
-        val dayOfWeek = LocalDateTime.now().dayOfWeek.value
-        return dayOfWeek in 6..7
+        val hour = LocalTime.now().hour
+        return hour >= 23 || hour < 7
     }
 
     /** 决策 prompt 用时间提示（北京时间 yyyyMMdd-HHmmss） */
     fun timeHint(): String {
         return LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"))
             .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
-    }
-
-    /**
-     * 计算打字延迟（毫秒）
-     *
-     * 模拟真人打字速度：不会秒回，打字需要时间。
-     *
-     * @param replyLength 回复内容长度
-     * @return 建议延迟毫秒数
-     */
-    fun typingDelay(replyLength: Int): Long {
-        // 每个字约 100-300ms 打字时间
-        val baseDelay = replyLength * 150L
-        // 加上思考时间 1-5 秒
-        val thinkingTime = (1000..5000).random()
-        // 深夜更慢
-        val nightPenalty = if (isLateNight()) 2.0 else 1.0
-        return ((baseDelay + thinkingTime) * nightPenalty).toLong().coerceIn(1000, 15000)
-    }
-
-    /**
-     * 是否应该延迟回复（模拟真人不秒回）
-     */
-    fun shouldDelay(): Boolean {
-        // 30% 概率故意延迟
-        return Math.random() < 0.3
     }
 }

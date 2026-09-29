@@ -9,9 +9,11 @@ import org.springframework.stereotype.Component
  * **模拟真人的记忆能力**：
  * - 记住每个人的特点、喜好、说过的话
  * - 对人有主观看法（"这人很有趣"）
- * - 跨会话记住（群聊→私聊都记得）
- * - 联系不同的人（"他和XX是朋友"）
- * - 记忆会衰减（越久越模糊）
+ * - 跨会话记住（群聊→私聊都记得，键空间按 [MemorySubject] 隔离）
+ *
+ * 曾规划的衰减（decayAll）、人际关系写入（rememberRelation）等
+ * 长期零调用已删（YAGNI，git 可找回）；[MemoryItem.strength] 仅作
+ * 排序权重保留。
  *
  * **OOP 设计**：
  * - 依赖 [MemoryRepository] 接口（DIP）
@@ -83,26 +85,6 @@ class MemoryService(
     }
 
     /**
-     * 记住人际关系
-     *
-     * @param subject 主主体
-     * @param relatedUserId 关联用户
-     * @param relation 关系描述
-     */
-    fun rememberRelation(subject: MemorySubject, relatedUserId: Long, relation: String) {
-        repository.save(
-            MemoryItem(
-                userId = subject.id,
-                subjectType = subject.type,
-                type = MemoryItem.MemoryType.RELATION,
-                content = relation,
-                relatedUserIds = listOf(relatedUserId)
-            )
-        )
-        log.info("记住关系: $subject ↔ $relatedUserId, $relation")
-    }
-
-    /**
      * 获取某个主体的全部记忆（按强度排序）
      *
      * 仓库按数值 ID 粗查后，这里按 [MemorySubject.Type] 精确过滤——
@@ -168,29 +150,6 @@ class MemoryService(
                     item.tags.any { it.contains(keyword, ignoreCase = true) }
             }
         }.sortedByDescending { it.strength }
-    }
-
-    /**
-     * 获取与某主体相关的其他人（人际关系网络）
-     */
-    fun getRelatedUsers(subject: MemorySubject): Map<Long, String> {
-        return getMemoriesOf(subject)
-            .filter { it.type == MemoryItem.MemoryType.RELATION }
-            .flatMap { item ->
-                item.relatedUserIds.map { it to item.content }
-            }
-            .toMap()
-    }
-
-    /**
-     * 记忆衰减（定期调用）
-     *
-     * 模拟真人记忆随时间模糊。
-     */
-    fun decayAll() {
-        val all = repository.findAll()
-        val decayed = all.map { it.copy(strength = (it.strength * 0.99).coerceAtLeast(0.1)) }
-        repository.saveAll(decayed)
     }
 
     /**

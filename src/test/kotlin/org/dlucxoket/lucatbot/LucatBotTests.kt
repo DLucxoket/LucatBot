@@ -1,7 +1,6 @@
 package org.dlucxoket.lucatbot
 
-import org.dlucxoket.lucatbot.adapter.onebot.ReplySplitter
-import org.dlucxoket.lucatbot.adapter.onebot.ShiroConverter
+import org.dlucxoket.lucatbot.model.message.CqParser
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
@@ -17,30 +16,6 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import java.io.File
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
-
-/** 回复拆条器：按句切分、长度合并与条数上限 */
-class ReplySplitterTest {
-
-    @Test
-    fun `short reply not split`() {
-        val result = ReplySplitter.split("哈哈")
-        assertEquals(1, result.size)
-    }
-
-    @Test
-    fun `long reply split into multiple`() {
-        val reply = "这句话很长很长很长很长很长很长很长很长。这句话也很长很长很长很长很长很长很长很长。这句话同样很长很长很长很长很长很长很长很长。"
-        val result = ReplySplitter.split(reply)
-        assertTrue(result.size > 1, "Expected split but got ${result.size}: $result")
-        assertTrue(result.size <= 3)
-    }
-
-    @Test
-    fun `empty reply returns empty list`() {
-        val result = ReplySplitter.split("")
-        assertTrue(result.isNotEmpty())  // short threshold returns [""]
-    }
-}
 
 /** ChatMessage.describe() 富内容描述：@/reply/图片/表情的占位、顺序与 base64 禁令 */
 class ChatMessageTest {
@@ -163,14 +138,14 @@ class ShiroConverterCqTest {
     @Test
     fun `cq reply at text converts to describe style`() {
         val raw = "[CQ:reply,id=1683970346][CQ:at,qq=1923043992] 感觉玩街霸的太罕见了"
-        val described = ShiroConverter.describeRawMessage(raw)
+        val described = CqParser.describe(raw)
         assertEquals("回复 #1683970346：@1923043992 感觉玩街霸的太罕见了", described)
     }
 
     @Test
     fun `cq image keeps file name without base64`() {
         val raw = "看这个[CQ:image,file=BB83C7DE.jpg,url=https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=xxx]"
-        val described = ShiroConverter.describeRawMessage(raw)
+        val described = CqParser.describe(raw)
         assertTrue(described.contains("看这个"), described)
         assertTrue(described.contains("[图片"), described)
         assertTrue(described.contains("BB83C7DE.jpg"), described)
@@ -179,18 +154,18 @@ class ShiroConverterCqTest {
 
     @Test
     fun `cq face becomes face placeholder`() {
-        val described = ShiroConverter.describeRawMessage("好耶[CQ:face,id=354,raw={...}]")
+        val described = CqParser.describe("好耶[CQ:face,id=354,raw={...}]")
         assertEquals("好耶[表情:354]", described)
     }
 
     @Test
     fun `plain text without cq is kept as-is`() {
-        assertEquals("你好啊", ShiroConverter.describeRawMessage("你好啊"))
+        assertEquals("你好啊", CqParser.describe("你好啊"))
     }
 
     @Test
     fun `cq at with card name`() {
-        val members = ShiroConverter.cqToModelMembers("[CQ:at,qq=123,card=小明] hi")
+        val members = CqParser.toMembers("[CQ:at,qq=123,card=小明] hi")
         val at = members.filterIsInstance<AtMessageMember>().single()
         assertEquals(123L, at.targetQqNumber)
         assertEquals("小明", at.targetName)
@@ -198,7 +173,7 @@ class ShiroConverterCqTest {
 
     @Test
     fun `cq image sub_type 1 is meme`() {
-        val members = ShiroConverter.cqToModelMembers("[CQ:image,file=a.jpg,sub_type=1,url=http://x/a.jpg]")
+        val members = CqParser.toMembers("[CQ:image,file=a.jpg,sub_type=1,url=http://x/a.jpg]")
         assertTrue(members.single() is MemeMessageMember)
     }
 }
@@ -225,15 +200,6 @@ class BotMoodTest {
         val mood = BotMood(BotMood.MoodType.NORMAL, 0.8)
         val decayed = mood.decay()
         assertTrue(decayed.intensity < mood.intensity)
-    }
-
-    @Test
-    fun `replyWillingness between 0 and 1`() {
-        BotMood.MoodType.values().forEach { type ->
-            val mood = BotMood(type, 0.5)
-            val w = mood.replyWillingness()
-            assertTrue(w in 0.0..1.0, "Mood $type willingness $w out of range")
-        }
     }
 
     @Test
