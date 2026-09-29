@@ -100,6 +100,46 @@ class ImageChannelTest {
     }
 
     // ------------------------------------------------------------------
+    // HTTP 路径（注入式 fetcher——不打真实网络）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `http 4xx is negative cached and never retried`() {
+        // 实盘教训：QQ CDN 必败地址每轮重试刷日志——4xx 必须只请求一次
+        var calls = 0
+        val resolver = ImageResolver(fetchHttp = { _ ->
+            calls++
+            throw ImageResolver.HttpStatusException(400)
+        })
+        assertNull(resolver.resolve("https://x/a.png", "a.png"))
+        assertNull(resolver.resolve("https://x/a.png", "a.png"))
+        assertEquals(1, calls, "4xx 确定性拒绝只请求一次（负缓存生效）")
+    }
+
+    @Test
+    fun `transient http failure is retried next time`() {
+        var calls = 0
+        val resolver = ImageResolver(fetchHttp = { _ ->
+            calls++
+            throw RuntimeException("timeout")
+        })
+        assertNull(resolver.resolve("https://x/b.png", "b.png"))
+        assertNull(resolver.resolve("https://x/b.png", "b.png"))
+        assertEquals(2, calls, "瞬时故障不进负缓存，下轮照常重试")
+    }
+
+    @Test
+    fun `http success resolves into data uri and caches`() {
+        var calls = 0
+        val resolver = ImageResolver(fetchHttp = { _ -> calls++; pngBytes })
+        val img = resolver.resolve("https://x/c.png", "c.png")
+        assertNotNull(img)
+        assertTrue(img!!.dataUri.startsWith("data:image/png;base64,"), "magic 嗅探为 png")
+        resolver.resolve("https://x/c.png", "c.png")
+        assertEquals(1, calls, "成功结果缓存，同址只下载一次")
+    }
+
+    // ------------------------------------------------------------------
     // LLM 边界：content 数组组装
     // ------------------------------------------------------------------
 
