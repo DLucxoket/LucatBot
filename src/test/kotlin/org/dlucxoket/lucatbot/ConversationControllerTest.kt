@@ -40,9 +40,21 @@ import java.nio.file.Path
 /** 依次吐出预设 LLM 响应；同时记录 system 与 user 两段（以分隔符拼接，供子串断言） */
 class FakeLLM(private val responses: MutableList<String>) : LLM {
     val prompts = mutableListOf<String>()
+    /** 每轮请求携带的图片附件（图片通道断言用；最后一轮为准） */
+    var images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage> = emptyList()
+
     override fun ask(systemPrompt: String, question: String): String {
         prompts += systemPrompt + "\n=====USER=====\n" + question
         return if (responses.isEmpty()) """{"action":"return"}""" else responses.removeAt(0)
+    }
+
+    override fun ask(
+        systemPrompt: String,
+        question: String,
+        images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage>
+    ): String {
+        this.images = images
+        return ask(systemPrompt, question)
     }
 }
 
@@ -112,13 +124,15 @@ class ConversationControllerTest {
          */
         memoryLLM: FakeLLM = FakeLLM(mutableListOf()),
         /** 工具目录网关（list_tools / tool 集成测试用假工具目录） */
-        toolCatalog: ToolCatalog = ToolCatalog()
+        toolCatalog: ToolCatalog = ToolCatalog(),
+        /** 假聊天记录行（默认造 historyCount 条；图片附件等场景传自定义行） */
+        historyLines: List<HistoryMessageItem>? = null
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
         val actionLog = ActionLog()
         val historyTool = FakeChatHistoryTool(
-            (1..historyCount).map { HistoryMessageItem("用户A", "消息$it", it * 1000L) }
+            historyLines ?: (1..historyCount).map { HistoryMessageItem("用户A", "消息$it", it * 1000L) }
         )
         val controller = ConversationController(
             lucatBot = lucatBot,
@@ -245,6 +259,51 @@ class ConversationControllerTest {
             "actionLog 应记录新消息提前唤醒：${llm.prompts.getOrNull(1)}"
         )
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+    }
+
+    @Test
+    fun `image attachments gathered from history and new messages`() {
+        // 图片通道：窗口记录 + 本轮新消息的图片地址 → data URI 附件随请求走
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
+        val histImg = File.createTempFile("hist-img", ".tmp").apply { writeBytes(png) }
+        val liveImg = File.createTempFile("live-img", ".tmp").apply { writeBytes(png) }
+
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, lucatBot, _) = buildController(
+            llm,
+            historyLines = listOf(
+                HistoryMessageItem(
+                    sender = "用户A", content = "看这个[图片 file=hist.png]", timestamp = 1_000L,
+                    imageUrls = listOf(histImg.absolutePath)
+                )
+            )
+        )
+        lucatBot.enqueuePendingInsert(
+            "private:123", 456L, "用户B", "再来一张[图片 file=live.png]",
+            imageUrls = listOf(liveImg.absolutePath)
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(2, llm.images.size, "窗口记录与新消息的图片都应成为附件：${llm.images}")
+        assertEquals(listOf("hist.png", "live.png"), llm.images.map { it.ref }, "附件与占位符标签对应")
+        assertTrue(llm.images.all { it.dataUri.startsWith("data:image/png;base64,") })
+    }
+
+    @Test
+    fun `image gathering never breaks the loop when unresolvable`() {
+        // 地址拿不到（文件不存在）→ 附件为空，会话照常走（图片通道绝不影响链路）
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, lucatBot, _) = buildController(llm)
+        lucatBot.enqueuePendingInsert(
+            "private:123", 456L, "用户B", "看这个[图片 file=gone.png]",
+            imageUrls = listOf(File("definitely-not-exist-xyz.png").absolutePath)
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(llm.images.isEmpty(), "拿不到的图跳过附件")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
     }
 
     @Test

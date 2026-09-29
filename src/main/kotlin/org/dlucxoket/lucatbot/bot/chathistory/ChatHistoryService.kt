@@ -41,6 +41,9 @@ class ChatHistoryService(
             senderNickname = event.sender.nickname,
             content = content,
             messageType = detectMessageType(content),
+            // 图片地址随消息捕获（图片通道）：与 describe 占位符同序
+            imageUrls = (event.message as? org.dlucxoket.lucatbot.model.message.ChatMessage)?.assetUrls()
+                ?.takeIf { it.isNotEmpty() },
             timestamp = event.timestamp,
             messageId = event.messageId,
             isFromBot = false
@@ -80,6 +83,7 @@ class ChatHistoryService(
      * @param senderName 展示名（群聊群名片优先，与实时入档同一规则）
      * @param senderNickname QQ 昵称（与展示名不同时供 prompt 注解）
      * @param messageId 爬楼响应里的 message_id（可空）
+     * @param imageUrls 图片/表情包原始地址（与 content 占位符同序，图片通道）
      */
     fun recordHistoryMessage(
         conversationId: String,
@@ -89,7 +93,8 @@ class ChatHistoryService(
         timestamp: Long,
         isFromBot: Boolean,
         senderNickname: String? = null,
-        messageId: Long? = null
+        messageId: Long? = null,
+        imageUrls: List<String>? = null
     ) {
         val record = ChatMessageRecord(
             id = messageId?.let { "msg:$conversationId:$it" }
@@ -100,6 +105,7 @@ class ChatHistoryService(
             senderNickname = senderNickname,
             content = content,
             messageType = detectMessageType(content),
+            imageUrls = imageUrls?.takeIf { it.isNotEmpty() },
             timestamp = timestamp,
             messageId = messageId,
             isFromBot = isFromBot

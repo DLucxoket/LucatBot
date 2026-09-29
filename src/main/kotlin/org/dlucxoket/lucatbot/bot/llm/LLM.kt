@@ -65,6 +65,18 @@ interface LLM {
     fun ask(systemPrompt:String, question: String): String
 
     /**
+     * 向 LLM 发起提问（可携带图片附件——图片通道）
+     *
+     * 默认实现**忽略图片**退回纯文本（测试替身等实现无需改动即可兼容）；
+     * 真正发送多模态内容由 [OpenAIAPI] override——它在 JSON 边界把
+     * text + image_url 组装成 OpenAI content 数组。
+     *
+     * @param images 图片附件（data URI 形式，见 [PromptImage]）；空列表等价于两参 [ask]
+     */
+    fun ask(systemPrompt: String, question: String, images: List<PromptImage>): String =
+        ask(systemPrompt, question)
+
+    /**
      * 向 LLM 发起提问（便捷重载）
      *
      * 不提供系统提示词，直接将 [question] 作为用户消息发送。

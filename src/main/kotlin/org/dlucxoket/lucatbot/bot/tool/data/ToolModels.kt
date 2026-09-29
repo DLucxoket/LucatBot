@@ -47,7 +47,9 @@ data class HistoryMessageItem(
     /** QQ 昵称（与展示名不同时，prompt 注解「名片（QQ昵称 xx）」） */
     val nickname: String? = null,
     /** 是否机器人自己发的（prompt 里渲染成「我」，不能靠名字猜） */
-    val isFromBot: Boolean = false
+    val isFromBot: Boolean = false,
+    /** 图片/表情包原始地址（与 content 占位符同序，图片通道附件下载用） */
+    val imageUrls: List<String>? = null
 )
 
 /** 查询消息列表的请求 */

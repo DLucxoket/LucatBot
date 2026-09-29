@@ -1,9 +1,13 @@
 package org.dlucxoket.lucatbot.bot.llm
 
+import dev.langchain4j.data.message.Content
+import dev.langchain4j.data.message.ImageContent
 import dev.langchain4j.data.message.SystemMessage
+import dev.langchain4j.data.message.TextContent
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.openai.OpenAiChatModel
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 
@@ -30,6 +34,8 @@ import org.springframework.stereotype.Component
  */
 @Component
 class OpenAIAPI: LLM {
+    private val log = LoggerFactory.getLogger(OpenAIAPI::class.java)
+
     companion object {
         /**
          * 默认实例（手动创建，刻意非 Spring Bean）——仅作非 Spring 环境的兜底。
@@ -121,5 +127,44 @@ class OpenAIAPI: LLM {
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         val response = model.chat(chatRequest)
         return response.aiMessage().text()
+    }
+
+    /**
+     * 多模态调用——**图片通道的 LLM 边界**（JSON 只在这里拼）
+     *
+     * content 数组按顺序组装：正文（text）→ 每张图先一段标签文本
+     * `[图片 <ref>]`（与聊天记录占位符同名，供模型对应是哪条消息的图）→ 图片
+     * （`image_url`，data URI）。空图片列表等价于两参 [ask]。
+     *
+     * **降级保护**：端点不支持图片（4xx/内容类型拒绝等）时退回纯文本重试一次
+     * ——图片通道绝不让整条会话链路失败（warn 一次，行为等同接入前）。
+     */
+    override fun ask(systemPrompt: String, question: String, images: List<PromptImage>): String {
+        if (images.isEmpty()) return ask(systemPrompt, question)
+        return try {
+            val contents = userContents(question, images)
+            val messages = if (systemPrompt.isNotBlank()) {
+                listOf(SystemMessage.systemMessage(systemPrompt), UserMessage(contents))
+            } else {
+                listOf(UserMessage(contents))
+            }
+            val chatRequest = ChatRequest.builder().messages(messages).build()
+            createModel().chat(chatRequest).aiMessage().text()
+        } catch (e: Exception) {
+            log.warn("带图片请求失败（{}），降级为纯文本重试", e.message)
+            ask(systemPrompt, question)
+        }
+    }
+
+    /**
+     * content 数组组装（抽出来便于测试）：正文 → 每张图先一段标签文本
+     * `[图片 <ref>]`（与聊天记录占位符同名，供模型对应是哪条消息的图）→ 图片段。
+     */
+    internal fun userContents(question: String, images: List<PromptImage>): List<Content> = buildList {
+        add(TextContent(question))
+        images.forEach { img ->
+            add(TextContent("\n[图片 ${img.ref}]"))
+            add(ImageContent(img.dataUri))
+        }
     }
 }

@@ -96,8 +96,9 @@ class MySqlStorage(private val config: MySqlConfig) {
             // 旧结构 → 读出 + DROP（须在建表/建关联表之前；DROP memories 关掉 FK 检查）
             val legacy = drainLegacy(conn)
             conn.createStatement().use { st -> SCHEMA.forEach { st.executeUpdate(it) } }
-            // 加列演进：老库已有 chat_history 但缺 sender_nickname（IF NOT EXISTS 不会补列）
+            // 加列演进：老库已有 chat_history 但缺新列（IF NOT EXISTS 不会补列）
             ensureColumn(conn, "chat_history", "sender_nickname", "sender_nickname VARCHAR(128) NULL")
+            ensureColumn(conn, "chat_history", "image_urls", "image_urls TEXT NULL")
             if (legacy != null) restoreLegacy(conn, legacy)
         }
         if (config.importFromJson) {
@@ -360,7 +361,7 @@ class MySqlStorage(private val config: MySqlConfig) {
         legacy.chat?.forEach { c ->
             update(
                 conn, MySqlChatHistoryRepository.INSERT,
-                c.id, c.conv, c.senderId, c.senderName, null, c.content,
+                c.id, c.conv, c.senderId, c.senderName, null, null, c.content,
                 c.type, MySqlTime.of(c.tsMs), c.messageId, c.isBot
             )
         }
@@ -399,7 +400,9 @@ class MySqlStorage(private val config: MySqlConfig) {
         importFile<ChatMessageRecord>("聊天记录", "data/chat-history.json",
             MySqlChatHistoryRepository.INSERT_IGNORE) { r ->
             arrayOf(
-                r.id, r.conversationId, r.senderId, r.senderName, r.senderNickname, r.content,
+                r.id, r.conversationId, r.senderId, r.senderName, r.senderNickname,
+                r.imageUrls?.let { mapper.writeValueAsString(it) },
+                r.content,
                 r.messageType.name, MySqlTime.of(r.timestamp), r.messageId, r.isFromBot
             )
         }
@@ -461,6 +464,7 @@ class MySqlStorage(private val config: MySqlConfig) {
                 sender_id BIGINT NOT NULL DEFAULT 0,
                 sender_name VARCHAR(128) NOT NULL DEFAULT '',
                 sender_nickname VARCHAR(128) NULL,
+                image_urls TEXT NULL,
                 content TEXT NOT NULL,
                 message_type VARCHAR(16) NOT NULL DEFAULT 'TEXT',
                 sent_at DATETIME(3) NOT NULL,

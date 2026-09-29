@@ -112,6 +112,22 @@ open class ChatMessage(
     }
 
     /**
+     * 图片/表情包的原始地址（**图片通道的成员侧**）
+     *
+     * 按成员顺序收集（与 [describe] 的占位符顺序天然对齐），供入档存进
+     * `ChatMessageRecord.imageUrls`——prompt 时按下标与占位符对应、下载成
+     * data URI 附件。过滤 base64/空白（describe 同样拒绝展示它们）。
+     */
+    fun assetUrls(): List<String> = messageMembers.mapNotNull { member ->
+        val url = when (member) {
+            is ImageMessageMember -> member.url
+            is MemeMessageMember -> member.url
+            else -> null
+        }
+        url?.trim()?.takeIf { it.isNotEmpty() && !it.startsWith("base64") }
+    }
+
+    /**
      * 图片/表情包的可辨识短标识：优先文件名；其次 URL 文件名；禁止 base64 全量
      */
     private fun shortAssetRef(fileName: String?, url: String?): String {

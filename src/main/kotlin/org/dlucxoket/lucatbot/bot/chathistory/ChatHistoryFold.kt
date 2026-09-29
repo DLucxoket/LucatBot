@@ -92,7 +92,8 @@ object ChatHistoryFold {
             val idSource = if (idRank(record.id) >= idRank(survivor.id)) record else survivor
             val merged = contentSource.copy(
                 id = idSource.id,
-                messageId = contentSource.messageId ?: survivor.messageId ?: record.messageId
+                messageId = contentSource.messageId ?: survivor.messageId ?: record.messageId,
+                imageUrls = contentSource.imageUrls ?: survivor.imageUrls ?: record.imageUrls
             )
             listOf(survivor.id, record.id)
                 .filter { it != merged.id && it !in dropped }

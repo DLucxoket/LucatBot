@@ -71,7 +71,9 @@ class LucatBot {
         val isAtAll: Boolean = false,
         val timestamp: Long = 0L,
         /** OneBot message_id（待插入注释渲染成「（#id）」，供 LLM 直接回复新消息） */
-        val messageId: Long? = null
+        val messageId: Long? = null,
+        /** 图片/表情包原始地址（与 content 占位符同序，图片通道附件下载用） */
+        val imageUrls: List<String>? = null
     )
 
     /** 当前状态 */
@@ -232,7 +234,9 @@ class LucatBot {
             timestamp = event.timestamp,
             isAtMe = isAtMe,
             isAtAll = isAtAll,
-            messageId = event.messageId
+            messageId = event.messageId,
+            imageUrls = (event.message as? org.dlucxoket.lucatbot.model.message.ChatMessage)?.assetUrls()
+                ?.takeIf { it.isNotEmpty() }
         )
     }
 
@@ -276,7 +280,8 @@ class LucatBot {
         timestamp: Long = System.currentTimeMillis(),
         isAtMe: Boolean = false,
         isAtAll: Boolean = false,
-        messageId: Long? = null
+        messageId: Long? = null,
+        imageUrls: List<String>? = null
     ) {
         synchronized(pendingInsertLock) {
             pendingInsertQueue.add(
@@ -289,7 +294,8 @@ class LucatBot {
                     isAtMe = isAtMe,
                     isAtAll = isAtAll,
                     timestamp = timestamp,
-                    messageId = messageId
+                    messageId = messageId,
+                    imageUrls = imageUrls
                 )
             )
             pendingInsertLock.notifyAll()

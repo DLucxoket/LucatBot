@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.bot.storage.mysql
 
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryRepository
 import org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord
 import java.sql.ResultSet
@@ -23,6 +24,7 @@ class MySqlChatHistoryRepository(
         storage.update(
             INSERT,
             record.id, record.conversationId, record.senderId, record.senderName, record.senderNickname,
+            record.imageUrls?.let { storage.mapper.writeValueAsString(it) },
             record.content, record.messageType.name, MySqlTime.of(record.timestamp),
             record.messageId, record.isFromBot
         )
@@ -73,6 +75,9 @@ class MySqlChatHistoryRepository(
         senderId = rs.getLong("sender_id"),
         senderName = rs.getString("sender_name"),
         senderNickname = rs.getString("sender_nickname"),
+        imageUrls = rs.getString("image_urls")?.let { json ->
+            runCatching { storage.mapper.readValue<List<String>>(json) }.getOrNull()
+        },
         content = rs.getString("content"),
         messageType = messageTypeOf(rs.getString("message_type")),
         timestamp = MySqlTime.toEpochMs(rs, "sent_at"),
@@ -87,11 +92,11 @@ class MySqlChatHistoryRepository(
     companion object {
         /** save 用 upsert（与 JSON 缓存覆盖语义一致：同 id 全字段覆盖） */
         internal const val INSERT =
-            "INSERT INTO chat_history (id, conversation_id, sender_id, sender_name, sender_nickname, content, " +
-                "message_type, sent_at, message_id, is_from_bot) VALUES (?,?,?,?,?,?,?,?,?,?) " +
+            "INSERT INTO chat_history (id, conversation_id, sender_id, sender_name, sender_nickname, image_urls, content, " +
+                "message_type, sent_at, message_id, is_from_bot) VALUES (?,?,?,?,?,?,?,?,?,?,?) " +
                 "ON DUPLICATE KEY UPDATE conversation_id=VALUES(conversation_id), " +
                 "sender_id=VALUES(sender_id), sender_name=VALUES(sender_name), " +
-                "sender_nickname=VALUES(sender_nickname), content=VALUES(content), " +
+                "sender_nickname=VALUES(sender_nickname), image_urls=VALUES(image_urls), content=VALUES(content), " +
                 "message_type=VALUES(message_type), sent_at=VALUES(sent_at), " +
                 "message_id=VALUES(message_id), is_from_bot=VALUES(is_from_bot)"
 

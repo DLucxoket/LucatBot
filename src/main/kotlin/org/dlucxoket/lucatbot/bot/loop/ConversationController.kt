@@ -53,6 +53,8 @@ class ConversationController(
     private val sendMessageTool: Tool<SendMessageRequest, SendMessageResult>,
     /** 工具目录与调用网关（list_tools / tool 动作的执行层） */
     private val toolCatalog: ToolCatalog = ToolCatalog(),
+    /** 图片附件取材（图片通道）：地址 → data URI，带缓存 */
+    private val imageResolver: org.dlucxoket.lucatbot.bot.llm.ImageResolver = org.dlucxoket.lucatbot.bot.llm.ImageResolver(),
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
     /** 退出会话时记忆整理读取的聊天记录条数 */
@@ -60,7 +62,9 @@ class ConversationController(
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
     private val maxReadMoreWithInserts: Int = 3,
     /** 连续发送失败上限（病态护栏：如被禁言还反复试发，达上限强制收尾） */
-    private val maxSendFailures: Int = 3
+    private val maxSendFailures: Int = 3,
+    /** 每轮 prompt 的图片附件上限（请求体体积闸；取最近的几张） */
+    private val maxPromptImages: Int = 6
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
 
@@ -181,6 +185,13 @@ class ConversationController(
                 "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]$idTag：${resolveRef(it.content)}"
             }
 
+            // 图片通道：窗口记录 + 本轮新消息里的图片地址 → data URI 附件
+            // （上限内取最近的；同一地址缓存复用、失败跳过——附件绝不影响会话链路）
+            val promptImages = gatherPromptImages(
+                historyResult.messages.mapNotNull { m -> m.imageUrls?.let { m.content to it } } +
+                    inserts.mapNotNull { m -> m.imageUrls?.let { m.content to it } }
+            )
+
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）
             val reachedHistoryStart = historyResult.messages.size < historyCount
             val request = ConversationRequest(
@@ -204,7 +215,8 @@ class ConversationController(
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
                 hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote),
-                toolNotes = toolNotes.snapshot()
+                toolNotes = toolNotes.snapshot(),
+                images = promptImages
             )
 
             var decision = conversationAgent.processObject(request)
@@ -421,6 +433,28 @@ class ConversationController(
             log.warn("remember 写入失败: {}", e.message)
             actionLog.append("记忆写入失败")
         }
+    }
+
+    /**
+     * 收集本轮 prompt 的图片附件（图片通道）
+     *
+     * @param sources 每条消息的（正文, 图片地址列表）——地址与正文里
+     *   `[图片 file=x]` 占位符按下标对应（入档时同序收集）
+     *
+     * 规则：逐条解析（同地址缓存复用、拿不到就跳过），整体去重后
+     * **只取最近的 [maxPromptImages] 张**（附件多了请求体爆炸，且旧图价值低）。
+     */
+    private fun gatherPromptImages(sources: List<Pair<String, List<String>>>): List<org.dlucxoket.lucatbot.bot.llm.PromptImage> {
+        val out = mutableListOf<org.dlucxoket.lucatbot.bot.llm.PromptImage>()
+        for ((content, urls) in sources) {
+            val refs = org.dlucxoket.lucatbot.model.message.AssetMarkers.refs(content)
+            urls.forEachIndexed { i, url ->
+                val ref = refs.getOrNull(i)?.takeIf { it.isNotBlank() }
+                    ?: url.substringAfterLast('/').substringBefore('?')
+                imageResolver.resolve(url, ref)?.let { out += it }
+            }
+        }
+        return out.distinct().takeLast(maxPromptImages)
     }
 
     /**

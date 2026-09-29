@@ -225,5 +225,14 @@ data class ConversationRequest(
      * 注入下一轮 prompt 的「### 工具」段。
      */
     @JsonProperty("toolNotes")
-    val toolNotes: List<String> = emptyList()
+    val toolNotes: List<String> = emptyList(),
+
+    /**
+     * 图片附件（**图片通道**）——编排层从聊天记录/新消息的 imageUrls
+     * 下载加工（[org.dlucxoket.lucatbot.bot.llm.ImageResolver]），
+     * 由 [org.dlucxoket.lucatbot.bot.llm.OpenAIAPI] 在边界组装进 content 数组。
+     * 与 recentMessages/newMessageNotes 里的 `[图片 file=x]` 占位符对应。
+     */
+    @JsonProperty("images")
+    val images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage> = emptyList()
 )

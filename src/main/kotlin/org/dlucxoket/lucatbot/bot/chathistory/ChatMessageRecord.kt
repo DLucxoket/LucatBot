@@ -49,6 +49,15 @@ data class ChatMessageRecord(
     /** 消息类型 */
     val messageType: MessageType = MessageType.TEXT,
 
+    /**
+     * 消息里图片/表情包的原始地址（**图片通道**）——按成员顺序收集，
+     * 与 content 里 `[图片 file=x]` 占位符序列按下标对应。
+     *
+     * prompt 时由 ImageResolver 下载成 data URI 附件给 LLM 看图；
+     * 旧数据无此字段（占位符文本仍在，只是没有附件）。base64/空白地址不收。
+     */
+    val imageUrls: List<String>? = null,
+
     /** 发送时间戳（毫秒） */
     val timestamp: Long = System.currentTimeMillis(),
 

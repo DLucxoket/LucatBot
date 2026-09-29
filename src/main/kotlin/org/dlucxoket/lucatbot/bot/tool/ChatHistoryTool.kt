@@ -4,6 +4,7 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
 import org.dlucxoket.lucatbot.bot.tool.data.HistoryMessageItem
+import org.dlucxoket.lucatbot.model.message.ChatMessage
 import org.dlucxoket.lucatbot.model.message.CqParser
 
 /**
@@ -56,7 +57,8 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                         senderId = it.senderId,
                         messageId = it.messageId,
                         nickname = it.senderNickname,
-                        isFromBot = it.isFromBot
+                        isFromBot = it.isFromBot,
+                        imageUrls = it.imageUrls
                     )
                 },
                 success = true
@@ -108,13 +110,15 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
             messages.forEach { msg ->
                 val raw = msg.raw ?: return@forEach
                 if (raw.isBlank()) return@forEach
-                // 远端爬楼：CQ 码转成与 ChatMessage.describe 同风格的富文本（禁止 base64 全量）
-                var content = CqParser.describe(raw)
+                // 统一解析成消息段：describe 渲染正文、assetUrls 收集图片地址（图片通道）
+                val parsed = ChatMessage(CqParser.toMembers(raw))
+                var content = parsed.describe()
                 if (content.isBlank()) return@forEach
                 // 过长内容（如合并转发 JSON）截断，避免污染 prompt / 存储
                 if (content.length > 800) {
                     content = content.take(800) + "…"
                 }
+                val imageUrls = parsed.assetUrls().takeIf { it.isNotEmpty() }
 
                 val senderId = msg.senderUserId ?: msg.userId ?: 0L
                 // 展示名规则与实时入档一致：群聊群名片优先、私聊只用 QQ 昵称；
@@ -140,7 +144,8 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                     timestamp = timestamp,
                     isFromBot = senderId == selfId,
                     senderNickname = qqNickname,
-                    messageId = msg.messageId
+                    messageId = msg.messageId,
+                    imageUrls = imageUrls
                 )
             }
         } catch (e: Exception) {
