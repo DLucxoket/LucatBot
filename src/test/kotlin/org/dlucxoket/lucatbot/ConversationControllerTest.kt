@@ -767,4 +767,40 @@ class ConversationAgentFallbackTest {
         assertFalse(userPart.contains("## 你的输出格式"), "输出格式指令不应出现在 user：$userPart")
         assertTrue(systemPart.contains("输出格式要求只是指令层"), "隔离句应在 system 消息")
     }
+
+    @Test
+    fun `history top notice appears when not at start and disappears at start`() {
+        val lines = listOf(
+            ConversationChatLine(sender = "小明", senderId = "7", time = "14:02", content = "消息1")
+        )
+        // 还没翻到最早消息 → 记录顶部提示「上方还有更早的聊天记录」
+        val llm1 = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm1).processObject(
+            ConversationRequest(recentMessages = lines, reachedHistoryStart = false)
+        )
+        assertTrue(
+            llm1.prompts.single().contains("上方还有更早的聊天记录"),
+            "未翻到头时应有顶部提示：${llm1.prompts.single()}"
+        )
+
+        // 已翻到最早消息 → 不提示
+        val llm2 = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm2).processObject(
+            ConversationRequest(recentMessages = lines, reachedHistoryStart = true)
+        )
+        assertFalse(
+            llm2.prompts.single().contains("上方还有更早的聊天记录"),
+            "翻到头后不应再提示：${llm2.prompts.single()}"
+        )
+
+        // 空记录（新会话）→ 不提示
+        val llm3 = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm3).processObject(
+            ConversationRequest(recentMessages = emptyList(), reachedHistoryStart = false)
+        )
+        assertFalse(
+            llm3.prompts.single().contains("上方还有更早的聊天记录"),
+            "空记录不提示：${llm3.prompts.single()}"
+        )
+    }
 }

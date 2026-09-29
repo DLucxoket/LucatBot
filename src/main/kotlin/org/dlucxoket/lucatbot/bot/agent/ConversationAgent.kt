@@ -133,12 +133,19 @@ class ConversationAgent(
                 input.toolNotes.forEach { appendLine(it); appendLine() }
             }
         }.trimEnd()
+        // 视窗顶部提示：记录不是全量（还没翻到最早消息）时点明「上方还有」，
+        // LLM 才知道当前看到的只是最近一段，避免误以为已是会话开头
+        val topNotice = if (input.reachedHistoryStart || input.recentMessages.isEmpty()) {
+            ""
+        } else {
+            "（以下是最近的记录，上方还有更早的聊天记录——需要时用 read_more 往前翻）\n"
+        }
         return """
             $toolsText
 
             以下是当前会话的聊天记录：
             ### 最近聊天记录
-            ${historyText.ifBlank { "（新会话）" }}$newMsgText
+            $topNotice${historyText.ifBlank { "（新会话）" }}$newMsgText
         """.trimIndent()
     }
 }
