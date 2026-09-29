@@ -803,4 +803,33 @@ class ConversationAgentFallbackTest {
             "空记录不提示：${llm3.prompts.single()}"
         )
     }
+
+    @Test
+    fun `prompt carries self qq and rules for whether message is addressed to me`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest(selfQq = 3046673325L))
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("你的 QQ 号：3046673325"), "自身 QQ 号注入：$prompt")
+        assertTrue(prompt.contains("不是每句话都在对你说"), "应有『不是每句都对你说』提示")
+        assertTrue(prompt.contains("@其他QQ号"), "应有 @别人 ≠ @我 的判定规则")
+        assertTrue(prompt.contains("宁可少接话也不要乱接"), "应有拿不准就不接的兜底规则")
+        assertTrue(prompt.contains("私聊里对方的消息默认是对你说的"), "私聊规则")
+    }
+
+    @Test
+    fun `prompt explains unresolved reply marker and bare at digits`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("回复 #989342600"), "应解释未解析的『回复 #id』形态：$prompt")
+        assertTrue(prompt.contains("消息编号"), "点明 #数字 是消息编号而非人：$prompt")
+        assertTrue(prompt.contains("@2427686041"), "应解释裸 @数字 的语义：$prompt")
+    }
+
+    @Test
+    fun `unknown self qq renders as unknown not zero`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest(selfQq = 0L))
+        assertTrue(llm.prompts.single().contains("你的 QQ 号：未知"), "selfQq=0 → 未知")
+    }
 }

@@ -144,6 +144,7 @@ internal class MainPlugin: BotPlugin() {
                         ?.let { "，名字「$it」" } ?: ""
                     ),
                 conversationId = "private:${event.userId}",
+                selfQq = bot.selfId,
                 newMessageNotes = listOf("（戳一戳）QQ号 ${event.userId} 戳了你一下"),
                 hint = "这是戳一戳场景：想回应就 send 一句短的（如「干嘛」「戳我干嘛」），不想理就 return"
             )

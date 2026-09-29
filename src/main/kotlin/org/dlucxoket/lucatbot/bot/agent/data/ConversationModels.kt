@@ -168,6 +168,13 @@ data class ConversationRequest(
     @JsonProperty("conversationId")
     val conversationId: String = "",
 
+    /**
+     * 机器人自己的 QQ 号（0 = 未知）——LLM 判断「这条消息是不是对我说的」的依据：
+     * 聊天记录里 `@QQ` / `@名字(QQ)` 的号等于它才是艾特机器人。
+     */
+    @JsonProperty("selfQq")
+    val selfQq: Long = 0L,
+
     @JsonProperty("shortTermMemory")
     val shortTermMemory: String = "",
 

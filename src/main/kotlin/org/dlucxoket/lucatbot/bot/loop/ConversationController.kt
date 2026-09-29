@@ -125,6 +125,8 @@ class ConversationController(
         val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 12)
         // 会话身份：群名进会话时查一次（网络调用不每轮打）；私聊每轮现算（见 buildIdentity）
         val cachedGroupName = if (isGroup) fetchGroupName(conversationId) else null
+        // 机器人自己的 QQ 号（LLM 判断「@的是不是我」的依据；未连接 → 0）
+        val selfQq = lucatBot.shiroBot?.selfId ?: 0L
 
         while (true) {
             // 1) 把待插入的新消息以系统注释形式合并
@@ -186,6 +188,7 @@ class ConversationController(
                 conversationName = pickName(conversationId),
                 conversationIdentity = buildIdentity(conversationId, isGroup, cachedGroupName),
                 conversationId = conversationId,
+                selfQq = selfQq,
                 shortTermMemory = memoryService.getMemorySummary(
                     MemorySubject.fromConversation(conversationId)
                 ) + sessionManager.getFatigueHint(conversationId),
