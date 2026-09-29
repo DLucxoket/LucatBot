@@ -35,6 +35,10 @@ dependencies {
     implementation("dev.langchain4j:langchain4j:0.35.0")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
 
+    /** MySQL 驱动（storage.type=mysql 时使用；版本由 Spring Boot BOM 管理）——
+     * 代码只用 java.sql 标准接口，驱动仅运行期需要 */
+    runtimeOnly("com.mysql:mysql-connector-j")
+
     /** Spring Boot 测试框架：提供 Spring Boot 应用测试支持 */
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     

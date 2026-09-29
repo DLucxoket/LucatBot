@@ -150,6 +150,7 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 | `dev.langchain4j:langchain4j-open-ai-spring-boot-starter` | OpenAI 兼容 LLM 客户端 |
 | `io.github.classgraph:classgraph` | 运行时 Agent/Tool 类自动发现 |
 | `com.fasterxml.jackson` | JSON↔OOP 边界序列化（Shiro 传递依赖） |
+| `com.mysql:mysql-connector-j` | MySQL 驱动（`storage.type=mysql` 默认后端；代码只用 java.sql 标准接口） |
 
 ## Shiro 框架参考
 

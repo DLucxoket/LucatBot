@@ -16,3 +16,13 @@ llm:
     base-url: "https://token-plan-cn.xiaomimimo.com/v1"
     api-key: ${LLM_API_KEY:mimo}
     model-name: "mimo-v2.6-flash"
+
+# 存储后端：json（data 目录下的 json 文件）| mysql（写入即落库，首次启动自动建库建表并迁移 JSON 存量）
+storage:
+  type: mysql
+  mysql:
+    host: localhost
+    port: 3306
+    database: LucatBot
+    username: root
+    password: "123456"
