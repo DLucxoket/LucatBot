@@ -45,9 +45,9 @@ abstract class Agent<I, O>(
      */
     val systemPromptHead: String by lazy {
         """
-        你的信息：
-        $description
-        ===================================
+            你的信息：
+            $description
+            ===================================
         """.trimIndent()
     }
 

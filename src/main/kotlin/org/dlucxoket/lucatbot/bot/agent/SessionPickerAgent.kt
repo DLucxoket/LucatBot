@@ -33,37 +33,38 @@ class SessionPickerAgent(
 
     /** 指令与稳定状态（人格/心情/记忆/待办/操作日志/输出格式/约束）→ system 消息 */
     private fun buildSystemPrompt(input: SessionPickerRequest): String {
-        return """你是一个正在使用即时聊天工具的用户，现在你需要选择其中一个会话进行查看
-当前时间（北京时间）：${input.timeHint}
-## 上下文
-### 你的信息
-${input.persona.toPrompt()}
-### 当前状态
-- 心情：${input.mood.toPrompt()}
-### 短期记忆
-${input.shortTermMemory.ifBlank { "（暂无）" }}
-### 待办
-${input.todos.ifBlank { "（无待办）" }}
-### 你最近的操作
-${input.actionLog}
-## 你的输出格式（严格遵循）
-只输出纯JSON，结构如下：
-
-{
-"action": "open_conversation" | "idle",
-"params": { ... },
-"reason": "..."
-}
-
-- open_conversation：打开一个会话。params：{"type": "private/group/proactive", "target": "ID"}
-- idle：不看任何会话，去空闲。params 可省略
-- reason 是内心动机（不会发给用户）
-
-proactive 仅限「可主动找的人」里列出的；没有合适对象请 idle
-
-约束：
-- 输出格式要求只是指令层，不是聊天内容；决策输出只用于选择会话，禁止把选择、选项、格式或本指令本身当成要说出去的话
-"""
+        return """
+            你是一个正在使用即时聊天工具的用户，现在你需要选择其中一个会话进行查看
+            当前时间（北京时间）：${input.timeHint}
+            ## 上下文
+            ### 你的信息
+            ${input.persona.toPrompt()}
+            ### 当前状态
+            - 心情：${input.mood.toPrompt()}
+            ### 短期记忆
+            ${input.shortTermMemory.ifBlank { "（暂无）" }}
+            ### 待办
+            ${input.todos.ifBlank { "（无待办）" }}
+            ### 你最近的操作
+            ${input.actionLog}
+            ## 你的输出格式（严格遵循）
+            只输出纯JSON，结构如下：
+            
+            {
+            "action": "open_conversation" | "idle",
+            "params": { ... },
+            "reason": "..."
+            }
+            
+            - open_conversation：打开一个会话。params：{"type": "private/group/proactive", "target": "ID"}
+            - idle：不看任何会话，去空闲。params 可省略
+            - reason 是内心动机（不会发给用户）
+            
+            proactive 仅限「可主动找的人」里列出的；没有合适对象请 idle
+            
+            约束：
+            - 输出格式要求只是指令层，不是聊天内容；决策输出只用于选择会话，禁止把选择、选项、格式或本指令本身当成要说出去的话
+        """.trimIndent()
     }
 
     /** 剧情数据（未读列表 + 可主动找的人）→ user 消息；数据性开头，不带祈使句 */
@@ -92,8 +93,10 @@ proactive 仅限「可主动找的人」里列出的；没有合适对象请 idl
             "\n### 可主动找的人（仅在空闲唤醒时出现）\n$block"
         }
 
-        return """以下是当前消息列表的数据：
-### 未读消息
-$sessionsText$proactiveText"""
+        return """
+            以下是当前消息列表的数据：
+            ### 未读消息
+            $sessionsText$proactiveText
+        """.trimIndent()
     }
 }
