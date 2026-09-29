@@ -2,6 +2,8 @@ package org.dlucxoket.lucatbot.bot.agent.data
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import org.dlucxoket.lucatbot.bot.persona.BotMood
+import org.dlucxoket.lucatbot.bot.persona.BotPersona
 
 /**
  * 统一决策信封（消息列表 / 会话内共用）
@@ -134,12 +136,10 @@ data class ConversationChatLine(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class ConversationRequest(
     @JsonProperty("persona")
-    val persona: org.dlucxoket.lucatbot.bot.persona.BotPersona =
-        org.dlucxoket.lucatbot.bot.persona.BotPersona(),
+    val persona: BotPersona = BotPersona(),
 
     @JsonProperty("mood")
-    val mood: org.dlucxoket.lucatbot.bot.persona.BotMood =
-        org.dlucxoket.lucatbot.bot.persona.BotMood(),
+    val mood: BotMood = BotMood(),
 
     @JsonProperty("timeHint")
     val timeHint: String = "",

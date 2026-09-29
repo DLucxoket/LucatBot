@@ -67,7 +67,9 @@ class SessionPickerAgent(
         """.trimIndent()
     }
 
-    /** 剧情数据（未读列表 + 可主动找的人）→ user 消息；数据性开头，不带祈使句 */
+    /**
+     * 消息列表（未读列表 + 可主动找的人）→ user 消息；数据性开头，不带祈使句
+     */
     private fun buildUserContent(input: SessionPickerRequest): String {
         val sessionsText = if (input.sessions.isEmpty()) {
             "（没有未读）"

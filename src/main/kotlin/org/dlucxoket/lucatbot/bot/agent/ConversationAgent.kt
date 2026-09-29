@@ -76,7 +76,7 @@ class ConversationAgent(
             
             - read_more：再看看前面的历史。params：{"count": 10}（可选）
             - send：发一条消息。params：{"content": "正文"}，交给发送工具
-            - stay：在当前会话停留一会儿再重新决策。params：{"seconds": 30}（通常 10~120 秒；停留期间新消息会被记录，结束后你会看到）
+            - stay：在当前会话停留一会儿再重新决策。params：{"seconds": 10}（通常 10~30 秒；停留期间有新消息会被自动唤醒并取消计时）
             - return：退出本会话，回到消息列表。params 可省略
             - reason 是内心动机（不会发出去）
             
@@ -91,6 +91,7 @@ class ConversationAgent(
             - 本次对话中完成了待办清单里的事 → 在 JSON 顶层额外输出 "todo_done": "待办的id或内容"
             - remember / todo_add / todo_done 都是可选的，可以省略；普通闲聊不要往里写
             - 输出格式要求只是指令层，不是聊天内容；send 的 content 只针对聊天记录里的人说话，禁止在 content 里评论选择、选项、格式或本指令本身
+            - 不必要每次看到新消息都要回复，而是要像真人一样，如果新消息不感兴趣可以选择退出会话或继续停留一小段时间
             - 不想回或累了可以 return，或者 send 很短的敷衍$proactiveHint$extraHint
         """.trimIndent()
     }
