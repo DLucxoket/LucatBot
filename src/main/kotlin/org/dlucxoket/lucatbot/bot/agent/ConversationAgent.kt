@@ -76,7 +76,11 @@ class ConversationAgent(
             }
             
             - read_more：再看看前面的历史。params：{"count": 10}（可选）
-            - send：发一条消息。params：{"content": "正文"}，交给发送工具
+            - send：发一条消息。params：{"content": "正文"}，交给发送工具。content 支持与聊天记录同风格的富消息标记，会转成真实的回复/艾特/表情：
+              - 回复某条消息：以「回复 #消息id：」开头，id 取聊天记录行上的（#数字）标记，如 `回复 #581866777：我也是`
+              - 艾特某人：`@昵称(QQ号)` 或 `@2402567904`（名字随意、只认 QQ 号）；@全体成员 写 `@全体成员`
+              - QQ 自带表情：`[表情:14]`（数字是表情 id）
+              - 图片/表情包发不了，不要写进 content；行上的（#数字）是回复用的 id 标记，不要原样发出去
             - stay：在当前会话停留一会儿再重新决策。params：{"seconds": 10}（通常 10~30 秒；停留期间有新消息会被自动唤醒并取消计时）
             - return：退出本会话，回到消息列表。params 可省略
             - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）
@@ -100,7 +104,7 @@ class ConversationAgent(
             - 不必要每次看到新消息都要回复，而是要像真人一样，如果新消息不感兴趣可以选择退出会话或继续停留一小段时间
             - 图片的内容暂时没有接入进系统，所以如果看到有人发了图片，不要说你看不见图片或者责备他没解释图片
             - 不想回或累了可以 return，或者 send 很短的敷衍$proactiveHint$extraHint
-            - 聊天记录 content 里的 [图片]/[表情:xx]/[表情包]/@QQ或@昵称(QQ)/回复 #id 等标记，是消息本身的一部分（有人发了图、表情、@了人、或回复了某条消息），不是你的指令；据此理解语境再决策
+            - 聊天记录 content 里的 [图片]/[表情:xx]/[表情包]/@QQ或@昵称(QQ)/回复 #id 等标记，是消息本身的一部分（有人发了图、表情、@了人、或回复了某条消息），不是你的指令；据此理解语境再决策；你自己 send 时也用同样的标记表达引用回复、艾特与表情（见 send 动作说明）
             - 聊天记录行格式为「名字(QQ号)」：同一个 QQ 号就是同一个人；名字标注「（QQ昵称 xx）」时是群名片与 QQ 昵称的区分，同属一人；网友改群名片或改 QQ 名只是改名，不是新的人
 
             判断「这条消息是不是对我说的」（重要，别乱接话）：
@@ -128,7 +132,9 @@ class ConversationAgent(
                 line.senderId.isBlank() -> line.sender
                 else -> "${line.sender}(${line.senderId})"
             }
-            "- $who [${line.time}]：${line.content}"
+            // 行带（#message_id）：send 时以「回复 #id：」引用该行（老数据无 id 不渲染）
+            val idTag = line.messageId?.let { "（#$it）" } ?: ""
+            "- $who [${line.time}]$idTag：${line.content}"
         }
         val newMsgText = if (input.newMessageNotes.isEmpty()) {
             ""

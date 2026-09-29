@@ -1,19 +1,31 @@
 package org.dlucxoket.lucatbot.bot.tool
 
+import com.mikuac.shiro.enums.MsgTypeEnum
+import com.mikuac.shiro.model.ArrayMsg
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
+import org.dlucxoket.lucatbot.model.message.SendContentParser
+import org.dlucxoket.lucatbot.model.message.member.AtMessageMember
+import org.dlucxoket.lucatbot.model.message.member.FaceMessageMember
+import org.dlucxoket.lucatbot.model.message.member.MessageMember
+import org.dlucxoket.lucatbot.model.message.member.ReplyMessageMember
+import org.dlucxoket.lucatbot.model.message.member.TextMessageMember
 
 /**
- * 发送消息工具
+ * 发送消息工具——**支持富消息**（回复 / @某人 / @全体 / QQ 表情）
  *
- * 模拟真人在会话里打字发送消息的动作。
- * 发送成功后**必须写入聊天记录**（isBot=true），避免 LLM 看到失忆上下文。
+ * content 用与聊天记录完全相同的 describe 风格标记（LLM 照抄历史即可），
+ * 经 [SendContentParser] 解析成消息段，再转 OneBot 数组消息发送——
+ * 数组模式文本原样入段（不像 CQ 字符串要转义，`[CQ:` 字样也不会被二次解析）。
+ *
+ * 发送成功后**必须写入聊天记录**（isBot=true，content 存标记原文，供后续
+ * 回复引用与 prompt 圆环一致），避免 LLM 看到失忆上下文；失败不写档。
  */
 object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
     override val name: String = "SendMessageTool"
 
-    override val description: String = "功能：向指定会话发送文本消息，发送成功后自动写入聊天记录（isBot=true），发送失败（如被禁言）不写档并返回错误详情。\n何时使用：会话内的 send 动作由编排层自动调用本工具发送，并同步写短期记忆、记操作日志，常规回复无需手动调用；仅当在编排层未覆盖的场景需要补发消息时才调用，避免与 send 动作重复发送。"
+    override val description: String = "功能：向指定会话发送消息（content 支持富标记：回复 #消息id：/ @昵称(QQ号) / @全体成员 / [表情:数字]，会转成真实的引用回复、艾特与 QQ 表情），发送成功后自动写入聊天记录（isBot=true），发送失败（如被禁言）不写档并返回错误详情。\n何时使用：会话内的 send 动作由编排层自动调用本工具发送，并同步写短期记忆、记操作日志，常规回复无需手动调用；仅当在编排层未覆盖的场景需要补发消息时才调用，避免与 send 动作重复发送。"
 
-    override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"content\": \"你好\"}"
+    override val parameterHint: String = "JSON: {\"conversationId\": \"private:123456\", \"content\": \"回复 #581866777：我也是 @小明(10001) [表情:14]\"}"
 
     override val inputClass: Class<SendMessageRequest> = SendMessageRequest::class.java
 
@@ -36,14 +48,20 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
             val type = parts[0]
             val id = parts[1].toLongOrNull() ?: return SendMessageResult(success = false, error = "无效ID")
 
+            // 富标记 → 消息段；解析为空（空内容或全是丢弃型标记）按失败返回
+            val segments = toWire(SendContentParser.parse(input.content))
+            if (segments.isEmpty()) {
+                return SendMessageResult(success = false, error = "消息内容为空（或只含无法发送的标记，如 [图片]）")
+            }
+
             val resp = when (type) {
-                "group" -> b.sendGroupMsg(id, input.content, false)
-                "private" -> b.sendPrivateMsg(id, input.content, false)
+                "group" -> b.sendGroupMsg(id, segments, false)
+                "private" -> b.sendPrivateMsg(id, segments, false)
                 else -> return SendMessageResult(success = false, error = "未知会话类型: $type")
             }
 
             // OneBot 返回非 ok（被禁言时 NapCat 返回 status=failed/retcode=120，Shiro 已打 ERROR 日志）
-            // ——消息实际没发出去：不写聊天记录，直接返回失败，由调用方立即离开会话
+            // ——消息实际没发出去：不写聊天记录，直接返回失败，由调用方通知 LLM 决定去留
             if (resp?.status != "ok") {
                 return SendMessageResult(
                     success = false,
@@ -57,11 +75,38 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
             // 曾用 `as? Number` 恒为 null，机器人消息全部丢失 id（UUID 兜底行）
             val sentMessageId = (resp?.data as? com.mikuac.shiro.dto.action.common.MsgId)?.messageId?.toLong()
                 ?: (resp?.data as? Number)?.toLong()
+            // content 存标记原文（与聊天记录同风格）：后续回复引用、prompt 圆环一致
             chatHistoryService?.recordBotReply(input.conversationId, input.content, sentMessageId)
 
             SendMessageResult(success = true)
         } catch (e: Exception) {
             SendMessageResult(success = false, error = e.message)
+        }
+    }
+
+    /**
+     * 消息段 → OneBot 数组消息（Shiro [ArrayMsg]）
+     *
+     * data 值统一字符串（OneBot v11 规范）；`type` 用 [MsgTypeEnum] 常量名
+     * （本身就是小写，序列化即 `text/at/face/reply`）。
+     * 无法按引用重发的段（图片/表情包）防御性丢弃——解析器已过滤。
+     */
+    fun toWire(members: List<MessageMember>): List<ArrayMsg> = members.mapNotNull { m ->
+        when (m) {
+            is TextMessageMember ->
+                ArrayMsg().setType(MsgTypeEnum.text).setData(mapOf("text" to m.text))
+
+            is AtMessageMember ->
+                ArrayMsg().setType(MsgTypeEnum.at)
+                    .setData(mapOf("qq" to if (m.isAtAll()) "all" else m.targetQqNumber.toString()))
+
+            is ReplyMessageMember ->
+                ArrayMsg().setType(MsgTypeEnum.reply).setData(mapOf("id" to m.replyToId.toString()))
+
+            is FaceMessageMember ->
+                ArrayMsg().setType(MsgTypeEnum.face).setData(mapOf("id" to m.faceId.toString()))
+
+            else -> null
         }
     }
 }

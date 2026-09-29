@@ -170,12 +170,15 @@ class ConversationController(
                     senderId = it.senderId.takeIf { id -> id != 0L }?.toString().orEmpty(),
                     isMe = it.isFromBot || it.sender == "bot" || it.sender == "我",
                     time = formatTime(it.timestamp),
-                    content = resolveRef(it.content)
+                    content = resolveRef(it.content),
+                    messageId = it.messageId
                 )
             }
-            // 新消息注释同样解析（它们引用的多是窗口内刚出现的消息）
+            // 新消息注释同样解析（它们引用的多是窗口内刚出现的消息）；
+            // 带 message_id 时附（#id）标记，本轮就能对新消息发起回复
             val newNotes = inserts.map {
-                "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]：${resolveRef(it.content)}"
+                val idTag = it.messageId?.let { id -> "（#$id）" } ?: ""
+                "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]$idTag：${resolveRef(it.content)}"
             }
 
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）

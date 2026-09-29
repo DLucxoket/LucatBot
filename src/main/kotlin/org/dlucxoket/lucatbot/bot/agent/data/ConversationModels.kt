@@ -134,7 +134,12 @@ data class ConversationChatLine(
     val isMe: Boolean = false,
     /** 展示用时间 */
     val time: String = "",
-    val content: String = ""
+    val content: String = "",
+    /**
+     * OneBot message_id（渲染成行上的「（#数字）」标记）——LLM send 时
+     * 以「回复 #id：」引用它。null = 老数据没有 id，不渲染。
+     */
+    val messageId: Long? = null
 )
 
 /**

@@ -69,7 +69,9 @@ class LucatBot {
         val content: String,
         val isAtMe: Boolean = false,
         val isAtAll: Boolean = false,
-        val timestamp: Long = 0L
+        val timestamp: Long = 0L,
+        /** OneBot message_id（待插入注释渲染成「（#id）」，供 LLM 直接回复新消息） */
+        val messageId: Long? = null
     )
 
     /** 当前状态 */
@@ -229,7 +231,8 @@ class LucatBot {
             content = extractRichContent(event),
             timestamp = event.timestamp,
             isAtMe = isAtMe,
-            isAtAll = isAtAll
+            isAtAll = isAtAll,
+            messageId = event.messageId
         )
     }
 
@@ -272,7 +275,8 @@ class LucatBot {
         content: String,
         timestamp: Long = System.currentTimeMillis(),
         isAtMe: Boolean = false,
-        isAtAll: Boolean = false
+        isAtAll: Boolean = false,
+        messageId: Long? = null
     ) {
         synchronized(pendingInsertLock) {
             pendingInsertQueue.add(
@@ -284,7 +288,8 @@ class LucatBot {
                     content = content,
                     isAtMe = isAtMe,
                     isAtAll = isAtAll,
-                    timestamp = timestamp
+                    timestamp = timestamp,
+                    messageId = messageId
                 )
             )
             pendingInsertLock.notifyAll()
@@ -304,7 +309,8 @@ class LucatBot {
                 content = extractRichContent(event),
                 isAtMe = isAtMe,
                 isAtAll = isAtAll,
-                timestamp = event.timestamp
+                timestamp = event.timestamp,
+                messageId = event.messageId
             )
         )
     }

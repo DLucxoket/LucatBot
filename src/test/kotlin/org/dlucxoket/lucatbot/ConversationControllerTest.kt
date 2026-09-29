@@ -248,6 +248,22 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `new message note carries message id so llm can reply to it`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, lucatBot, _) = buildController(llm)
+        // 带 message_id 的新消息 → 注释带（#id）标记，本轮即可对其发起引用回复
+        lucatBot.enqueuePendingInsert("private:123", 456L, "用户B", "在吗", messageId = 777L)
+        // 无 id（旧数据/异常）→ 注释不带标记，不渲染空（#）
+        lucatBot.enqueuePendingInsert("private:123", 456L, "用户B", "在吗2")
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("（#777）"), "新消息注释应带消息 id：$prompt")
+        assertTrue(prompt.contains("（新消息）用户B(456)"), "注释基础格式不变：$prompt")
+    }
+
+    @Test
     fun `read_more has no forced exit and prompt shows crawl stats`() {
         // 10 次 read_more：旧 stale 上限（6 轮）会中途强制退出，现在应全部放行，
         // 由 LLM 结合 prompt 里的爬楼状态自行决定（FakeLLM 耗尽后兜底 return）
@@ -831,5 +847,41 @@ class ConversationAgentFallbackTest {
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         ConversationAgent(llm).processObject(ConversationRequest(selfQq = 0L))
         assertTrue(llm.prompts.single().contains("你的 QQ 号：未知"), "selfQq=0 → 未知")
+    }
+
+    @Test
+    fun `send rule documents rich message markers`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("回复 #消息id"), "send 规则应含引用回复语法：$prompt")
+        assertTrue(prompt.contains("@全体成员"), "send 规则应含 @全体成员")
+        assertTrue(prompt.contains("[表情:14]"), "send 规则应含 QQ 表情语法")
+        assertTrue(prompt.contains("图片/表情包发不了"), "应声明图片发不了")
+        assertTrue(prompt.contains("不要原样发出去"), "应提醒行 id 标记不入正文")
+        assertTrue(prompt.contains("自己 send 时也用同样的标记"), "标记说明应覆盖自发场景")
+    }
+
+    @Test
+    fun `history line renders message id tag only when present`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(
+            ConversationRequest(
+                recentMessages = listOf(
+                    ConversationChatLine(
+                        sender = "小明", senderId = "7", time = "14:02",
+                        content = "吃了吗", messageId = 581866777L
+                    ),
+                    ConversationChatLine(
+                        sender = "小红", senderId = "8", time = "14:03",
+                        content = "老数据", messageId = null
+                    )
+                )
+            )
+        )
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("（#581866777）"), "有 id 的行渲染（#id）：$prompt")
+        assertTrue(prompt.contains("- 小红(8) [14:03]：老数据"), "无 id 的行不渲染空标记：$prompt")
+        assertFalse(prompt.contains("（#null）"), "null id 不应渲染出字面标记：$prompt")
     }
 }
