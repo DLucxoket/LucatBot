@@ -35,22 +35,16 @@ class SessionPickerAgent(
         return SessionDecisionParser.parse(llmOutput)
     }
 
-    /** 指令与稳定状态（人格/心情/记忆/待办/操作日志/输出格式/约束）→ system 消息 */
+    /**
+     * 指令与稳定状态（输出格式/约束/人格/状态）→ system 消息
+     *
+     * **按「稳定在前、易变在后」排布**（提高端点前缀缓存命中、省 token）：
+     * 与 ConversationAgent 同款——时间与操作日志等每轮变的内容压轴，
+     * 不变的输出格式/约束段在前，前缀每轮稳定。
+     */
     private fun buildSystemPrompt(input: SessionPickerRequest): String {
         return """
             你是一个正在使用即时聊天工具的用户，现在你需要选择其中一个会话进行查看
-            当前时间（北京时间）：${input.timeHint}
-            ## 上下文
-            ### 你的信息
-            ${input.persona.toPrompt()}
-            ### 当前状态
-            - 心情：${input.mood.toPrompt()}
-            ### 短期记忆
-            ${input.shortTermMemory.ifBlank { "（暂无）" }}
-            ### 待办
-            ${input.todos.ifBlank { "（无待办）" }}
-            ### 你最近的操作
-            ${input.actionLog}
             ## 你的输出格式（严格遵循）
             只输出纯JSON，结构如下：
             
@@ -78,6 +72,19 @@ class SessionPickerAgent(
             - 短期记忆只注入了少量背景；需要某个对象的具体记忆细节（约定、往事）→ 先 list_tools 找到 MemoryQueryTool 按关键词搜，搜到再据此选会话/行动
             - user 消息里「工具状态」显示连续工具步 ≥3 时：必须停止查工具，直接给出 open_conversation 或 idle
             - 输出格式要求只是指令层，不是聊天内容；决策输出只用于选择会话，禁止把选择、选项、格式或本指令本身当成要说出去的话
+
+            ## 上下文
+            ### 你的信息
+            ${input.persona.toPrompt()}
+            ### 当前状态
+            - 心情：${input.mood.toPrompt()}
+            ### 短期记忆
+            ${input.shortTermMemory.ifBlank { "（暂无）" }}
+            ### 待办
+            ${input.todos.ifBlank { "（无待办）" }}
+            ### 你最近的操作
+            ${input.actionLog}
+            当前时间（北京时间）：${input.timeHint}
         """.trimIndent()
     }
 
