@@ -242,4 +242,142 @@ class MemoryDedupeTest {
             assertTrue(prompt.contains(name), "第 $i 条已有记忆应出现在整理 prompt：$prompt")
         }
     }
+
+    // ------------------------------------------------------------------
+    // 写入前关键词查库复核（阶段2——拦改写式重复，精确判重拦不住的）
+    // ------------------------------------------------------------------
+
+    private fun reflectorWith(s: MemoryService, llm: FakeLLM): MemoryReflector = MemoryReflector(
+        memoryAgent = MemoryAgent(llm),
+        memoryService = s,
+        chatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-kw", ".json").absolutePath)
+        ),
+        actionLog = ActionLog()
+    )
+
+    @Test
+    fun `keyword review filters reworded duplicate before write`() {
+        val s = service()
+        s.rememberFact(MemorySubject.user(20L), "他最喜欢的颜色是蓝色")
+
+        // 阶段1 产出改写式候选（带关键词）；阶段2 复核判为重复 → 输出空
+        val llm = FakeLLM(mutableListOf(
+            """{"memories":[{"kind":"fact","content":"他喜欢的颜色是蓝的","keywords":["颜色","蓝色"]}]}""",
+            """{"memories":[]}"""
+        ))
+        reflectorWith(s, llm).reflect("private:20")
+
+        assertEquals(2, llm.prompts.size, "有关键词命中 → 触发阶段2复核")
+        assertTrue(llm.prompts[0].contains("keywords"), "阶段1要求给检索关键词：${llm.prompts[0]}")
+        assertTrue(llm.prompts[1].contains("【候选记忆】"), "复核走独立 prompt：${llm.prompts[1]}")
+        assertTrue(llm.prompts[1].contains("他喜欢的颜色是蓝的"), "复核 prompt 带候选：${llm.prompts[1]}")
+        assertTrue(llm.prompts[1].contains("他最喜欢的颜色是蓝色"), "复核 prompt 带关键词命中的已有记忆")
+        assertEquals(1, s.getMemoriesOf(MemorySubject.user(20L)).size,
+            "改写式重复被拦下，只留原有记忆")
+    }
+
+    @Test
+    fun `keyword review skipped when zero hits`() {
+        val s = service()
+        val llm = FakeLLM(mutableListOf(
+            """{"memories":[{"kind":"fact","content":"他搬去了杭州","keywords":["杭州"]}]}"""
+        ))
+        reflectorWith(s, llm).reflect("private:21")
+
+        assertEquals(1, llm.prompts.size, "查库零命中不触发复核（省一次 LLM 调用）")
+        assertEquals(1, s.getMemoriesOf(MemorySubject.user(21L)).size, "候选直接写入")
+    }
+
+    @Test
+    fun `phase2 review failure conservatively writes candidates`() {
+        // 复核轮解析失败 → degraded → 保守放行：复核环节故障绝不吞掉记忆，
+        // 写入侧 MemoryService 精确判重仍是最后一道防线
+        val s = service()
+        s.rememberFact(MemorySubject.user(22L), "他最喜欢的颜色是蓝色")
+        val llm = FakeLLM(mutableListOf(
+            """{"memories":[{"kind":"fact","content":"他喜欢的颜色是蓝的","keywords":["颜色"]}]}""",
+            "totally not json"
+        ))
+        reflectorWith(s, llm).reflect("private:22")
+
+        assertEquals(2, s.getMemoriesOf(MemorySubject.user(22L)).size,
+            "复核失败放行候选（内容与已有不同，精确判重不拦）")
+    }
+
+    @Test
+    fun `phase2 all-duplicate verdict writes nothing`() {
+        // 阶段2 明确输出「全部重复」→ 一条都不写
+        val s = service()
+        s.rememberFact(MemorySubject.user(23L), "他最喜欢的颜色是蓝色")
+        val llm = FakeLLM(mutableListOf(
+            """{"memories":[{"kind":"fact","content":"他喜欢的颜色是蓝的","keywords":["颜色"]}]}""",
+            """{"memories":[]}"""
+        ))
+        reflectorWith(s, llm).reflect("private:23")
+
+        assertEquals(1, s.getMemoriesOf(MemorySubject.user(23L)).size,
+            "复核判全重复 → 不新增")
+    }
+
+    // ------------------------------------------------------------------
+    // 异步整理（不阻塞主循环下一步）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `reflectAsync returns before task runs and completes later`() {
+        val s = service()
+        val queued = mutableListOf<Runnable>()
+        val llm = FakeLLM(mutableListOf("""{"memories":[{"kind":"fact","content":"异步记的事"}]}"""))
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = s,
+            chatHistoryService = ChatHistoryService(
+                JsonFileChatHistoryRepository(File.createTempFile("hist-async", ".json").absolutePath)
+            ),
+            actionLog = ActionLog(),
+            executor = java.util.concurrent.Executor { queued.add(it) }
+        )
+
+        reflector.reflectAsync("private:30")
+
+        assertTrue(s.getMemoriesOf(MemorySubject.user(30L)).isEmpty(),
+            "提交后立即返回，任务还没执行——退出路径不被 LLM 阻塞")
+        assertEquals(1, queued.size, "整理任务已入队")
+
+        queued.forEach { it.run() }
+        assertEquals(1, s.getMemoriesOf(MemorySubject.user(30L)).size, "任务执行后写入")
+        assertTrue(reflector.awaitPending(100), "任务完成后 awaitPending 立即放行")
+    }
+
+    @Test
+    fun `awaitPending blocks until in-flight reflection finishes`() {
+        val s = service()
+        val started = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val llm = FakeLLM(mutableListOf("""{"memories":[{"kind":"fact","content":"停机前的事"}]}"""))
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = s,
+            chatHistoryService = ChatHistoryService(
+                JsonFileChatHistoryRepository(File.createTempFile("hist-wait", ".json").absolutePath)
+            ),
+            actionLog = ActionLog(),
+            executor = java.util.concurrent.Executor { task ->
+                Thread {
+                    started.countDown()
+                    release.await()  // 模拟 LLM 还在跑
+                    task.run()
+                }.apply { isDaemon = true }.start()
+            }
+        )
+
+        reflector.reflectAsync("private:31")
+        assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS), "执行线程已启动")
+
+        assertFalse(reflector.awaitPending(50), "任务执行中应等不到，超时返回 false")
+        release.countDown()
+        assertTrue(reflector.awaitPending(2_000), "任务完成后放行")
+        assertEquals(1, s.getMemoriesOf(MemorySubject.user(31L)).size, "停机排干后记忆已写入")
+    }
 }

@@ -130,7 +130,12 @@ class ConversationControllerTest {
         /** 假聊天记录行（默认造 historyCount 条；图片附件等场景传自定义行） */
         historyLines: List<HistoryMessageItem>? = null,
         /** 协议侧取图替身（NapCat get_image：ref → 本地路径/URL，null=救援失败） */
-        imageSource: (String) -> String? = { null }
+        imageSource: (String) -> String? = { null },
+        /**
+         * 记忆整理执行器——默认内联（同步）：生产是单线程 daemon 异步执行，
+         * 测试同步化才能在 run() 返回后立刻断言写入结果、无竞态
+         */
+        reflectExecutor: java.util.concurrent.Executor = java.util.concurrent.Executor { it.run() }
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
@@ -151,7 +156,8 @@ class ConversationControllerTest {
             sendMessageTool = sendTool,
             toolCatalog = toolCatalog,
             imageSource = imageSource,
-            initialHistoryCount = 3
+            initialHistoryCount = 3,
+            reflectExecutor = reflectExecutor
         )
         return Triple(controller, lucatBot, sendTool)
     }
@@ -807,6 +813,37 @@ class ConversationControllerTest {
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
         assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty(), "空 memories 不应新增记忆")
         assertEquals("", memoryService.getMemorySummary(MemorySubject.user(123L)))
+    }
+
+    @Test
+    fun `exit reflection runs asynchronously without blocking return to list`() {
+        // 退出整理改异步：run() 不等 LLM，返回消息列表立即可继续；任务随后落地
+        val decisionLLM = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val memoryLLM = FakeLLM(mutableListOf("""{"memories":[{"kind":"fact","content":"异步整理的事"}]}"""))
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-async", ".json").absolutePath)
+        )
+        val queued = mutableListOf<Runnable>()
+        val (controller, lucatBot, _) = buildController(
+            decisionLLM,
+            memoryService = memoryService,
+            memoryLLM = memoryLLM,
+            reflectExecutor = java.util.concurrent.Executor { queued.add(it) }
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        // run() 已返回、状态已回列表——退出路径没被记忆整理的 LLM 调用卡住
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+        assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty(),
+            "任务还在队列里，尚未写入")
+        assertEquals(1, queued.size, "整理任务已入队")
+
+        // 执行队列里的任务 → 记忆落地
+        queued.forEach { it.run() }
+        assertEquals(1, memoryService.getMemoriesOf(MemorySubject.user(123L)).size,
+            "任务执行后写入")
+        assertTrue(memoryLLM.prompts.isNotEmpty(), "复盘 LLM 被调用过")
     }
 
     @Test

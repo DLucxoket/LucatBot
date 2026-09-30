@@ -108,4 +108,71 @@ class MemoryAgentTest {
             result.memories
         )
     }
+
+    // ------------------------------------------------------------------
+    // 阶段2：写入前关键词复核（candidates 非空即复核模式）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `parse reads keywords and preserves degraded flag`() {
+        val ok = MemoryReflectResult.parse(
+            """{"memories":[{"kind":"fact","content":"他养猫","keywords":["猫"]}]}"""
+        )
+        assertEquals(listOf("猫"), ok.memories.single().keywords)
+        assertFalse(ok.degraded, "合法输出不是降级结果")
+
+        val garbage = MemoryReflectResult.parse("totally not json")
+        assertTrue(garbage.degraded, "解析失败标记 degraded（调用方据此保守放行/兜底）")
+        assertTrue(garbage.memories.isEmpty())
+    }
+
+    @Test
+    fun `filter pass renders candidates and keyword hits then parses output`() {
+        val llm = FakeLLM(mutableListOf(
+            """{"memories":[{"kind":"fact","content":"他喜欢的颜色是蓝的","tags":[],"keywords":["颜色"]}]}"""
+        ))
+        val agent = MemoryAgent(llm)
+
+        val result = agent.processObject(MemoryReflectRequest(
+            candidates = listOf(
+                MemoryReflectItem(kind = "fact", content = "他喜欢的颜色是蓝的", keywords = listOf("颜色", "蓝色"))
+            ),
+            matchedMemories = listOf("他最喜欢的颜色是蓝色")
+        ))
+
+        assertEquals(1, llm.prompts.size, "复核只走一轮 LLM")
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("【候选记忆】"), "复核 user 数据段：$prompt")
+        assertTrue(prompt.contains("【关键词命中的已有记忆】"), "命中结果段：$prompt")
+        assertTrue(prompt.contains("关键词：颜色、蓝色"), "候选带关键词：$prompt")
+        assertTrue(prompt.contains("他最喜欢的颜色是蓝色"), "命中已有记忆：$prompt")
+        assertTrue(prompt.contains("换个说法"), "复核判定规则（改写式重复）：$prompt")
+        assertEquals("他喜欢的颜色是蓝的", result.memories.single().content, "保留项原样解析")
+        assertFalse(result.degraded)
+    }
+
+    @Test
+    fun `filter pass without matched memories returns candidates without llm call`() {
+        val llm = FakeLLM(mutableListOf())
+        val result = MemoryAgent(llm).processObject(MemoryReflectRequest(
+            candidates = listOf(MemoryReflectItem(kind = "fact", content = "新记忆"))
+        ))
+
+        assertTrue(llm.prompts.isEmpty(), "零命中没有比对对象，直接放行候选")
+        assertEquals(1, result.memories.size)
+        assertEquals("新记忆", result.memories.single().content)
+        assertFalse(result.degraded)
+    }
+
+    @Test
+    fun `filter pass llm garbage degrades instead of swallowing candidates`() {
+        val llm = FakeLLM(mutableListOf("totally not json"))
+        val result = MemoryAgent(llm).processObject(MemoryReflectRequest(
+            candidates = listOf(MemoryReflectItem(kind = "fact", content = "候选记忆")),
+            matchedMemories = listOf("已有记忆")
+        ))
+
+        assertTrue(result.degraded, "复核失败必须标记 degraded，由编排层保守放行候选")
+        assertTrue(result.memories.isEmpty())
+    }
 }

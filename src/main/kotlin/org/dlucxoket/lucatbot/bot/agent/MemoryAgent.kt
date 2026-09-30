@@ -32,27 +32,35 @@ class MemoryAgent(
 
     override fun handle(input: MemoryReflectRequest): MemoryReflectResult {
         return try {
-            val systemPrompt = buildSystemPrompt()
-            val userContent = buildUserContent(input)
-            val llmOutput = llm.ask(systemPrompt, userContent)
+            // 阶段2：写入前关键词复核（candidates 非空）——与阶段1（复盘）分支
+            val llmOutput = if (input.candidates.isNotEmpty()) {
+                if (input.matchedMemories.isEmpty()) {
+                    // 查库零命中：没有可比对的，候选直接放行（省一次 LLM）
+                    return MemoryReflectResult(input.candidates)
+                }
+                llm.ask(filterSystemPrompt(), filterUserContent(input))
+            } else {
+                llm.ask(buildSystemPrompt(), buildUserContent(input))
+            }
             MemoryReflectResult.parse(llmOutput)
         } catch (e: Exception) {
             log.warn("记忆整理失败（忽略，不影响退出流程）: {}", e.message)
-            MemoryReflectResult.EMPTY
+            MemoryReflectResult.DEGRADED
         }
     }
 
-    /** 任务说明（复盘/去重防矛盾/输出格式契约/kind 说明）→ system 消息 */
+    /** 任务说明（复盘/去重防矛盾/输出格式契约/kind 说明/关键词要求）→ system 消息 */
     private fun buildSystemPrompt(): String {
         return """
             你正在复盘一段刚结束的对话，决定要不要往长期记忆里记东西。
             【现有记忆】是读取参考，避免重复或矛盾。
             ## 输出（严格遵循）
             只输出纯JSON（不裹代码块），结构如下：
-            {"memories": [{"kind": "fact|opinion|event", "content": "一句话", "tags": ["标签"]}]}
+            {"memories": [{"kind": "fact|opinion|event", "content": "一句话", "tags": ["标签"], "keywords": ["关键词"]}]}
             - kind：fact=客观事实（名字/喜好/重要情况等）、opinion=你对这个人的主观看法/印象、event=发生过的事/约定
             - content：一句话，简明扼要
             - tags：检索标签，可选，没有就省略
+            - keywords：1~3 个检索关键词（content 里的核心名词/专名，如人名、喜好、地点）——**每条必给**：写入前会先拿它查该对象的已有记忆核对重复，命中会再复核一轮
             - 没有要记的输出 {"memories": []}
             
             只记值得长期保留的：
@@ -86,6 +94,41 @@ class MemoryAgent(
             $existing
             【本次会话内容】
             $content$timeLine
+        """.trimIndent()
+    }
+
+    /** 阶段2（写入前关键词复核）任务说明 → system 消息 */
+    private fun filterSystemPrompt(): String {
+        return """
+            你在做记忆写入前的最后复核，防止同一件事被换个说法记两遍。
+            【候选记忆】是阶段1复盘产出、准备写入的新记忆；
+            【关键词命中的已有记忆】是用每条候选的关键词在该对象已有记忆里查到的命中结果。
+            逐条判断每条候选是否与命中结果**重复**：
+            - 同一事实/事件换个说法、同义改写、措辞不同但核心信息相同 → 重复，删掉
+            - 只是沾边相关、说的是另一件事 → 保留
+            - 与命中结果矛盾（同一件事信息更新了）→ 保留候选（按最新信息覆盖）
+            ## 输出（严格遵循）
+            只输出纯JSON（不裹代码块），结构如下：
+            {"memories": [{"kind": "fact|opinion|event", "content": "一句话", "tags": ["标签"], "keywords": ["关键词"]}]}
+            - 只输出**保留**下来的候选，kind/content/tags/keywords 原样照抄，不要改写
+            - 全部重复就输出 {"memories": []}
+        """.trimIndent()
+    }
+
+    /** 阶段2 剧情数据（候选 + 关键词命中的已有记忆）→ user 消息；纯数据 */
+    private fun filterUserContent(input: MemoryReflectRequest): String {
+        val candidates = input.candidates.joinToString("\n") { item ->
+            val kind = item.kind.ifBlank { "?" }
+            val keywords = item.keywords.takeIf { it.isNotEmpty() }
+                ?.joinToString("、")?.let { "（关键词：$it）" } ?: ""
+            "- [$kind] ${item.content}$keywords"
+        }
+        val hits = input.matchedMemories.joinToString("\n") { "- $it" }
+        return """
+            【候选记忆】
+            $candidates
+            【关键词命中的已有记忆】
+            $hits
         """.trimIndent()
     }
 }

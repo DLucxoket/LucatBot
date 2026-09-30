@@ -65,6 +65,11 @@ class ConversationController(
     private val initialHistoryCount: Int = 10,
     /** 退出会话时记忆整理读取的聊天记录条数 */
     private val reflectHistoryCount: Int = 30,
+    /**
+     * 记忆整理任务执行器——默认单线程 daemon（异步，退出整理不阻塞返回消息列表）；
+     * 测试注入内联执行器（`Executor { it.run() }`）变同步，断言无竞态
+     */
+    private val reflectExecutor: java.util.concurrent.Executor = MemoryReflector.asyncExecutor(),
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
     private val maxReadMoreWithInserts: Int = 3,
     /** 连续发送失败上限（病态护栏：如被禁言还反复试发，达上限强制收尾） */
@@ -84,7 +89,8 @@ class ConversationController(
         memoryService = memoryService,
         chatHistoryService = chatHistoryService,
         actionLog = actionLog,
-        reflectHistoryCount = reflectHistoryCount
+        reflectHistoryCount = reflectHistoryCount,
+        executor = reflectExecutor
     )
 
     /**
@@ -112,9 +118,11 @@ class ConversationController(
 
         try {
             loop(conversationId, isGroup, proactive)
-            // loop() 正常返回（含内部 return）→ 退出前整理一次记忆；
+            // loop() 正常返回（含内部 return）→ 异步整理一次记忆：任务丢进执行器
+            // 立即返回，返回消息列表与主循环下一步不等 LLM（停机时由
+            // ProgramShutdown 先 awaitPendingReflects 排干、再同步补做）
             // loop() 抛异常则跳过整理，直接走 finally
-            reflector.reflect(conversationId)
+            reflector.reflectAsync(conversationId)
         } finally {
             actionLog.append("返回消息列表")
             lucatBot.backToConversationList()
@@ -398,6 +406,13 @@ class ConversationController(
             reflector.reflect(state.conversationId)
         }
     }
+
+    /**
+     * 停机收尾入口：等待已排队的异步记忆整理落地（在 [reflectForShutdown] 之前调用）
+     *
+     * @return true = 全部落地；false = 超时仍有任务在跑
+     */
+    fun awaitPendingReflects(timeoutMs: Long): Boolean = reflector.awaitPending(timeoutMs)
 
     /**
      * 处理决策信封的副作用字段（在执行 action 之前）
