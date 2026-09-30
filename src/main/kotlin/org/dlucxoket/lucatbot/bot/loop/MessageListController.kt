@@ -46,12 +46,26 @@ class MessageListController(
     private val todoSettlement = TodoSettlement(todoService, memoryService, actionLog)
 
     /**
+     * 最近一次 IDLE 决策里 LLM 指定的空闲秒数（`params.seconds`；0 = 没给/兜底路径）
+     *
+     * 单线程主循环写读：[pickSession] 每轮开头清零、IDLE 分支写入，
+     * 主循环进空闲前经 [consumeIdleSeconds] 取走（**空闲时长由 LLM 决定**，
+     * 只在 LLM 没给时才回退到按心情随机）
+     */
+    var lastIdleSeconds: Int = 0
+        private set
+
+    /** 取走并清零 LLM 指定的空闲秒数（主循环进空闲时调用） */
+    fun consumeIdleSeconds(): Int = lastIdleSeconds.also { lastIdleSeconds = 0 }
+
+    /**
      * 走一轮「看消息列表」决策（可含多步工具调用）
      *
      * @param fromIdleWake 是否是空闲唤醒（拼入可主动找的人）
      * @return 选中的会话；null = 去空闲
      */
     fun pickSession(fromIdleWake: Boolean): SessionPick? {
+        lastIdleSeconds = 0 // 本轮重新记录（选中会话/工具超限兜底 → 保持 0 = 随机兜底）
         val sessions = collectSessions()
         actionLog.append("查看消息列表（${sessions.sumOf { it.unreadCount }}条未读）")
 
@@ -94,7 +108,8 @@ class MessageListController(
                 }
 
                 SessionAction.IDLE -> {
-                    log.info("选会话结果: idle")
+                    lastIdleSeconds = decision.idleSeconds // LLM 决定空闲多久（0 = 随机兜底）
+                    log.info("选会话结果: idle（{}）", if (decision.idleSeconds > 0) "${decision.idleSeconds}s" else "时长未指定")
                     return null
                 }
 

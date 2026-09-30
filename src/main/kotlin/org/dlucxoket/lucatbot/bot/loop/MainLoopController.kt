@@ -204,13 +204,15 @@ class MainLoopController(
     }
 
     /**
-     * 进入空闲并休眠 10~60s（按心情加权，测试用短值）；@我/@全体 可缩短（最少再等 5s）
+     * 进入空闲并休眠——**时长由 LLM 决定**（idle 的 `params.seconds`，钳 5~1800s），
+     * LLM 没给才回退到按心情随机（[idleMillis]）；@我/@全体 可缩短（最少再等 5s）
      */
     private fun enterIdleAndSleep() {
         lucatBot.goIdle()
-        val sleepMs = idleMillis(lucatBot.mood)
+        val sleepMs = resolveIdleMillis(messageListController.consumeIdleSeconds(), lucatBot.mood)
         lastIdleStartMs = System.currentTimeMillis()
-        actionLog.append("进入空闲（约 ${sleepMs / 60000} 分钟）")
+        val idleLabel = if (sleepMs < 60_000L) "${sleepMs / 1000} 秒" else "约 ${sleepMs / 60_000} 分钟"
+        actionLog.append("进入空闲（$idleLabel）")
         log.info("进入空闲，休眠 {} ms", sleepMs)
 
         val deadline = System.currentTimeMillis() + sleepMs
@@ -236,6 +238,26 @@ class MainLoopController(
         // 测试用短休眠（正式可恢复 3min / 20min）
         const val MIN_IDLE_MS = 10 * 1000L
         const val MAX_IDLE_MS = 60 * 1000L
+
+        /** LLM 指定空闲秒数的钳制范围（5 秒 ~ 30 分钟） */
+        const val MIN_LLM_IDLE_SECONDS = 5
+        const val MAX_LLM_IDLE_SECONDS = 1800
+
+        /**
+         * 空闲休眠时长：**LLM 在 idle 里给的 seconds 优先**（钳 5~1800s——
+         * 太短像抽风、太长像死机，两头都防）；没给（0：LLM 省略或解析兜底）
+         * 才回退到按心情随机 [idleMillis]
+         */
+        fun resolveIdleMillis(
+            llmSeconds: Int,
+            mood: BotMood,
+            random: java.util.Random = java.util.Random()
+        ): Long =
+            if (llmSeconds > 0) {
+                llmSeconds.coerceIn(MIN_LLM_IDLE_SECONDS, MAX_LLM_IDLE_SECONDS).toLong() * 1000L
+            } else {
+                idleMillis(mood, random)
+            }
 
         /**
          * 心情加权的空闲时长：累/困/烦 → 更久，开心 → 更短。

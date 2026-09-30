@@ -272,6 +272,34 @@ class SessionDecisionParserTest {
     }
 
     @Test
+    fun `idle carries llm-chosen sleep seconds`() {
+        // 空闲时长由 LLM 决定：给数就用、没给/坏值/负数回退随机兜底
+        val given = SessionDecisionParser.parse(
+            """{"action":"idle","params":{"seconds":600},"reason":"没人理，睡会儿"}"""
+        )
+        assertEquals(600, given.idleSeconds, "LLM 指定的空闲秒数")
+        assertEquals(
+            120,
+            SessionDecisionParser.parse("""{"action":"idle","params":{"seconds":"120"}}""").idleSeconds,
+            "数字字符串也收"
+        )
+        assertEquals(0, SessionDecisionParser.parse("""{"action":"idle"}""").idleSeconds, "没给 → 随机兜底")
+        assertEquals(
+            0,
+            SessionDecisionParser.parse("""{"action":"idle","params":{"seconds":"abc"}}""").idleSeconds,
+            "坏值 → 随机兜底"
+        )
+        assertEquals(
+            0,
+            SessionDecisionParser.parse("""{"action":"idle","params":{"seconds":-5}}""").idleSeconds,
+            "负数归零"
+        )
+        assertEquals(
+            0, SessionDecisionParser.parse("not json").idleSeconds, "兜底路径不带秒数"
+        )
+    }
+
+    @Test
     fun `list_tools with and without query`() {
         val all = SessionDecisionParser.parse("""{"action":"list_tools"}""")
         assertEquals(SessionAction.LIST_TOOLS, all.action)
@@ -417,5 +445,24 @@ class IdleMillisTest {
             sleepySum += MainLoopController.idleMillis(BotMood(BotMood.MoodType.SLEEPY, 0.5), random)
         }
         assertTrue(happySum < sleepySum, "happy=$happySum sleepy=$sleepySum")
+    }
+
+    @Test
+    fun `resolveIdleMillis prefers llm seconds with clamp and falls back to random`() {
+        val mood = BotMood(BotMood.MoodType.NORMAL, 0.5)
+        val random = java.util.Random(11)
+
+        assertEquals(600_000L, MainLoopController.resolveIdleMillis(600, mood, random), "LLM 给的秒数直接用")
+        assertEquals(
+            MainLoopController.MAX_LLM_IDLE_SECONDS * 1000L,
+            MainLoopController.resolveIdleMillis(99_999, mood, random), "超上限钳到 1800s"
+        )
+        assertEquals(
+            MainLoopController.MIN_LLM_IDLE_SECONDS * 1000L,
+            MainLoopController.resolveIdleMillis(1, mood, random), "低于下限钳到 5s"
+        )
+        val fallback = MainLoopController.resolveIdleMillis(0, mood, random)
+        assertTrue(fallback in MainLoopController.MIN_IDLE_MS..MainLoopController.MAX_IDLE_MS,
+            "没给 → 按心情随机兜底：$fallback")
     }
 }

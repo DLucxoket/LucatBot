@@ -109,6 +109,26 @@ class MessageListControllerTest {
     }
 
     @Test
+    fun `idle decision exposes llm-chosen sleep seconds`() {
+        // 空闲时长由 LLM 决定：IDLE 带 params.seconds → 透传给主循环，取走即清零
+        val llm = FakeLLM(mutableListOf("""{"action":"idle","params":{"seconds":420},"reason":"没啥事"}"""))
+        val (controller, _) = buildController(llm)
+
+        assertNull(controller.pickSession(fromIdleWake = false))
+        assertEquals(420, controller.consumeIdleSeconds(), "LLM 决定的空闲秒数透传")
+        assertEquals(0, controller.consumeIdleSeconds(), "取走即清零（不复用上一轮）")
+    }
+
+    @Test
+    fun `open pick keeps idle seconds at zero`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"open_conversation","params":{"type":"private","target":"42"}}"""))
+        val (controller, _) = buildController(llm)
+
+        assertNotNull(controller.pickSession(fromIdleWake = false))
+        assertEquals(0, controller.consumeIdleSeconds(), "选中会话不带空闲时长（上轮残留已清零）")
+    }
+
+    @Test
     fun `todo side effects are applied before action and feed next prompt`() {
         val todoService = TodoService(
             JsonFileTodoRepository(File.createTempFile("todos-todo", ".json").absolutePath)

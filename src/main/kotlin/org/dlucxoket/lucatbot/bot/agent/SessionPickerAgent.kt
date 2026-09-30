@@ -55,7 +55,7 @@ class SessionPickerAgent(
             }
             
             - open_conversation：打开一个会话。params：{"type": "private/group/proactive", "target": "ID"}
-            - idle：不看任何会话，去空闲。params 可省略
+            - idle：不看任何会话，去空闲。params：{"seconds": 空闲秒数}——**睡多久由你决定**（按心情、时间和有没有事等着判断）：心情差/犯困、短期内不会有人找 → 给长点（600~1800）；心情好、可能很快有人回话 → 给短点（60~300）。省略 params = 由系统按心情随机兜底（能判断就自己给）
             - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）
             - tool：调用一个工具。params：{"name": "工具名", "input": { ...参数，格式见目录里的「参数」... }}
             - reason 是内心动机（不会发给用户）

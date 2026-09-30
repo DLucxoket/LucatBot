@@ -145,6 +145,8 @@ enum class SessionAction {
  * @param todoAdd 新增待办内容（可选，与 action 无关的副作用字段，任何决策都可携带）
  * @param todoDone 完成待办的 id 或内容片段（可选，同上）
  * @param reason 内心动机（不发出）
+ * @param idleSeconds IDLE 的空闲休眠秒数（`params.seconds`；0 = LLM 没给 →
+ *   编排层按心情随机兜底）——空闲多久由 LLM 判断，不再纯代码随机
  */
 data class SessionDecision(
     val action: SessionAction,
@@ -154,7 +156,8 @@ data class SessionDecision(
     val toolInput: Map<String, Any?> = emptyMap(),
     val todoAdd: String? = null,
     val todoDone: String? = null,
-    val reason: String? = null
+    val reason: String? = null,
+    val idleSeconds: Int = 0
 )
 
 /**
@@ -197,7 +200,11 @@ object SessionDecisionParser {
                 )
             }
 
-            "idle" -> SessionDecision(SessionAction.IDLE, todoAdd = todoAdd, todoDone = todoDone, reason = reason)
+            "idle" -> SessionDecision(
+                SessionAction.IDLE,
+                idleSeconds = idleSecondsOf(LlmJson.paramsOf(node)),
+                todoAdd = todoAdd, todoDone = todoDone, reason = reason
+            )
 
             "list_tools", "tools" -> {
                 val params = LlmJson.paramsOf(node)
@@ -229,6 +236,20 @@ object SessionDecisionParser {
     /** 兜底空闲（副作用字段照样保留——LLM 已经说要记的待办不能因 action 无效丢掉） */
     private fun idle(reason: String, todoAdd: String? = null, todoDone: String? = null) =
         SessionDecision(SessionAction.IDLE, todoAdd = todoAdd, todoDone = todoDone, reason = reason)
+
+    /**
+     * idle 的空闲秒数（`params.seconds`）——LLM 决定睡多久
+     *
+     * 数字/数字字符串都收；缺省、坏值、非正数 → 0（编排层按心情随机兜底）
+     */
+    private fun idleSecondsOf(params: Map<String, Any?>): Int {
+        val raw = when (val s = params["seconds"]) {
+            is Number -> s.toInt()
+            is String -> s.trim().toIntOrNull() ?: 0
+            else -> 0
+        }
+        return raw.coerceAtLeast(0)
+    }
 }
 
 /**
