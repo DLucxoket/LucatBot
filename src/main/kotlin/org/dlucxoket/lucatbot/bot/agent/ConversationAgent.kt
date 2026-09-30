@@ -43,7 +43,7 @@ class ConversationAgent(
      */
     private fun buildSystemPrompt(input: ConversationRequest): String {
         val proactiveHint = if (input.proactive) {
-            "\n（这是你主动发起的会话，请先发一条简短的破冰招呼，例如「在吗」「干嘛呢」）"
+            "\n（这是你主动发起的会话：有明确任务/待办要办就直接说正事；没有就先发一条简短的破冰招呼，例如「在吗」「干嘛呢」）"
         } else {
             ""
         }

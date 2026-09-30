@@ -89,6 +89,27 @@ class LucatBot {
     private val unreadQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()
 
     /**
+     * 疑似被禁言的会话 → 最近一次禁言失败的时间（进程级，发送成功即清除）
+     *
+     * 发送失败 retCode 判禁言时打点；会话列表行渲染【疑似禁言 MM-dd】标记，
+     * 让选会话 LLM 知情（日期=最近一次发现的更新时间，重复失败刷新）。
+     */
+    private val suspectedBans = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** 记录/刷新疑似禁言（每次禁言失败刷新——标记日期即更新日期） */
+    fun markSuspectedBan(conversationId: String) {
+        suspectedBans[conversationId] = System.currentTimeMillis()
+    }
+
+    /** 发送成功 → 解除疑似 */
+    fun clearSuspectedBan(conversationId: String) {
+        suspectedBans.remove(conversationId)
+    }
+
+    /** 疑似禁言的最近发现时间（epoch ms；null = 无记录） */
+    fun suspectedBanSince(conversationId: String): Long? = suspectedBans[conversationId]
+
+    /**
      * 当前会话的待插入新消息队列
      *
      * 会话内决策循环进行中到来的消息先进这里，不打断 LLM 调用；

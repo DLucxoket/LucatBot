@@ -249,8 +249,13 @@ class ConversationController(
             )
 
             var decision = conversationAgent.processObject(request)
-            // send 动作的 remember 延后到发送成功才写（防「没发出去却记了『我回复了』」）
-            val deferredRemember = applyDecisionSideEffects(decision, conversationId)
+            // send 动作的 remember 延后到发送成功才写（防「没发出去却记了『我回复了』」）；
+            // 上一轮发送仍失败（sendFailureNote 未清）期间，非 send 动作的 remember
+            // 一律忽略——失败现场 LLM 补记的多与没发出的消息相关，防假记忆
+            val deferredRemember = applyDecisionSideEffects(
+                decision, conversationId,
+                suppressRemember = sendFailureNote != null
+            )
 
             // proactive 破冰：首条必须 send（查目录/调工具/看图是前置动作，不视为破冰失败）
             val isToolStep = decision.action == ConversationAction.LIST_TOOLS ||
@@ -355,8 +360,15 @@ class ConversationController(
                         val sentText = sentContents.joinToString(" ")
                         sendFailStreak = 0
                         sendFailureNote = null
-                        // 发送成功 → 才写延后的 remember（「我回复了xxx」此时才属实）
-                        deferredRemember?.let { writeRemember(it, conversationId) }
+                        if (failDetail == null) {
+                            // 全部成功才写延后的 remember（「我回复了xxx」此时才属实），
+                            // 并解除疑似禁言标记（发出去了 = 没被禁）
+                            deferredRemember?.let { writeRemember(it, conversationId) }
+                            lucatBot.clearSuspectedBan(conversationId)
+                        } else if (deferredRemember != null) {
+                            // 部分失败：remember 语义覆盖整段发送、不可靠 → 丢弃
+                            log.info("部分发送失败，丢弃随发送写入的记忆: {}", deferredRemember)
+                        }
                         // 只从「对方最后一条消息」提取记忆：recentLines 末尾可能是
                         // 机器人自己的回复，把 bot 的话喂给正则会误记成用户的长期 FACT
                         val lastUser = recentLines.lastOrNull { !it.isMe }
@@ -408,6 +420,10 @@ class ConversationController(
                                 else "发送部分失败（已发 ${sentContents.size}/${outgoing.size}）"
                             )
                             sendFailureNote = buildSendFailureNote(detail, isGroup)
+                            // 疑似禁言打点：会话列表渲染【疑似禁言 MM-dd】（发送成功自动清除）
+                            if (bannedRetCode(detail) != null) {
+                                lucatBot.markSuspectedBan(conversationId)
+                            }
                             mustIcebreak = false // 破冰已尝试——失败后去留交给 LLM，不许再强制重发
                             if (sentContents.isEmpty() && deferredRemember != null) {
                                 // 一条都没发出去就不能记「我回复了…」——丢弃（LLM 可下轮重新 decide）
@@ -508,16 +524,28 @@ class ConversationController(
      * **send 动作的 remember 延后到发送成功后才写**（返回值即待写的 remember）——
      * 否则 LLM 边发边记的「我回复了 xxx」会在发送失败（如被禁言）时留下假记忆。
      *
+     * @param suppressRemember 发送仍处于失败状态（sendFailureNote 未清）——
+     *   非 send 动作的 remember 一律忽略（失败现场补记的多与没发出的消息相关）
      * 每项单独 try/catch：失败只 log，不中断主循环；
      * 成功与失败都追加一行操作日志（记住 / 待办+ / 待办完成 / 写入失败）。
      *
      * @return 被延后的 remember（非 send 动作或无 remember → null，已即时写入）
      */
-    private fun applyDecisionSideEffects(decision: ConversationDecision, conversationId: String): String? {
+    private fun applyDecisionSideEffects(
+        decision: ConversationDecision,
+        conversationId: String,
+        suppressRemember: Boolean = false
+    ): String? {
         val deferredRemember = decision.remember?.takeIf { decision.action == ConversationAction.SEND }
         decision.remember
             ?.takeIf { decision.action != ConversationAction.SEND }
-            ?.let { writeRemember(it, conversationId) }
+            ?.let {
+                if (suppressRemember) {
+                    log.info("上一轮发送仍失败，忽略 remember（防把没发出去的话记进记忆）: {}", it)
+                } else {
+                    writeRemember(it, conversationId)
+                }
+            }
         decision.todo_add?.let { content ->
             try {
                 todoService.add(content, conversationId)
@@ -654,19 +682,27 @@ class ConversationController(
     }
 
     /**
+     * 发送失败是否属于禁言——返回命中的 retCode（120/1200），null = 非禁言
+     *
+     * 只认 retCode：工具的非 ok 兜底文案恒带「（可能被禁言）」，拿文案子串
+     * 当依据会把所有失败（含网络抖动）误判成禁言。
+     */
+    private fun bannedRetCode(detail: String): String? {
+        val retCode = Regex("""retCode=(\d+)""").find(detail)?.groupValues?.get(1)
+        return retCode.takeIf { it == "120" || it == "1200" }
+    }
+
+    /**
      * 发送失败通知（注入 hint，**发送成功或离开前每一轮重复出现**）：
      * 明确点出「消息没发出也没入档」，避免 LLM 误以为已发送。
      *
      * - **禁言（retCode=120/1200）**：明确**禁止再发**——实盘禁言后仍每轮试发，
      *   旧文案「可以重试/换个说法再发」在重复注入下等于每轮递刀；只留 return/stay
      * - **非禁言**：保留自主决定，但点明不要一轮接一轮连续试发
-     *
-     * 禁言判定按 retCode 解析：工具的非 ok 兜底文案恒带「（可能被禁言）」，
-     * 拿文案子串当依据会把所有失败（含网络抖动）误判成禁言。
      */
     private fun buildSendFailureNote(detail: String, isGroup: Boolean): String {
-        val retCode = Regex("""retCode=(\d+)""").find(detail)?.groupValues?.get(1)
-        val banned = retCode == "120" || retCode == "1200"
+        val retCode = bannedRetCode(detail)
+        val banned = retCode != null
         return if (banned) {
             "上一轮你发送的消息失败了：$detail——你**被禁言了**（retCode=$retCode），禁言解除前发不出任何消息。" +
                 "该消息没有发出去，也没有写入聊天记录，对方看不到。" +

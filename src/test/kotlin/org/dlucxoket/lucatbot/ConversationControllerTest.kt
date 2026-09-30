@@ -632,6 +632,80 @@ class ConversationControllerTest {
         assertTrue(secondPrompt.contains("禁言解除前绝不输出 send"), "system 约束同步禁令：$secondPrompt")
         assertFalse(secondPrompt.contains("接下来自行决定"), "禁言时不再邀请自主决策重试：$secondPrompt")
         assertFalse(secondPrompt.contains("或换个说法再发"), "旧的重试邀请应已移除：$secondPrompt")
+        assertNotNull(lucatBot.suspectedBanSince("group:42"), "禁言失败 → 打疑似禁言点（会话列表标记）")
+    }
+
+    @Test
+    fun `suspected ban clears after successful send`() {
+        // 打点闭环：第 1 次失败标疑似 → 第 2 次发送成功解除
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"再试"}}""",
+            """{"action":"send","params":{"content":"发出去了"}}""",
+            """{"action":"return"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply {
+            failOnCall = 1
+            error = "发送失败 status=failed retCode=1200（可能被禁言）"
+        }
+        val (controller, lucatBot, _) = buildController(llm, sendTool = sendTool)
+
+        controller.run(SessionPick(SessionPickType.GROUP, "42"))
+
+        assertNull(lucatBot.suspectedBanSince("group:42"), "发送成功应解除疑似禁言标记")
+    }
+
+    @Test
+    fun `remember is suppressed while send keeps failing`() {
+        // 被禁言期间 LLM 补的 remember 一律忽略——防把没发出去的话记进记忆
+        // （首轮 send 的延后记忆因全失败丢弃；次轮非 send 的被失败状态抑制）
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"我发的话"},"remember":"我回复了：我发的话"}""",
+            """{"action":"return","remember":"我回复了：我发的话"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply {
+            fail = true
+            error = "发送失败 status=failed retCode=1200（可能被禁言）"
+        }
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-supp", ".json").absolutePath)
+        )
+        val (controller, _, _) = buildController(
+            llm, sendTool = sendTool, memoryService = memoryService
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(memoryService.getMemoriesOf(MemorySubject.user(123L)).isEmpty(),
+            "禁言失败期间的 remember 不得写入记忆")
+    }
+
+    @Test
+    fun `partial send failure drops deferred remember`() {
+        // 部分成功（第 1 条发出、第 2 条禁言失败）：remember 语义覆盖整段、不可靠 → 丢弃
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":[
+                {"members":[{"type":"text","text":"第一条"}]},
+                {"members":[{"type":"text","text":"第二条"}]}
+            ]},"remember":"我回复了：第一条和第二条"}""",
+            """{"action":"return"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply {
+            failOnCall = 2
+            error = "发送失败 status=failed retCode=1200（可能被禁言）"
+        }
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-part", ".json").absolutePath)
+        )
+        val (controller, _, _) = buildController(
+            llm, sendTool = sendTool, memoryService = memoryService
+        )
+
+        controller.run(SessionPick(SessionPickType.GROUP, "42"))
+
+        assertEquals(2, sendTool.requests.size, "第 1 条成功、第 2 条失败即停（requests 含失败那次）")
+        assertEquals(1, sendTool.sent.size, "仅第 1 条真正发出")
+        assertTrue(memoryService.getMemoriesOf(MemorySubject.group(42L)).isEmpty(),
+            "部分失败：随发送的 remember 丢弃（内容不可靠）")
     }
 
     @Test

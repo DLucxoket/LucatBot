@@ -164,7 +164,8 @@ class MessageListController(
                 lastMessage = last?.content.orEmpty(),
                 isAtMe = lucatBot.hasUnreadAtMe(convId),
                 isAtAll = lucatBot.hasUnreadAtAll(convId),
-                botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) }
+                botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) },
+                suspectedBanDate = lucatBot.suspectedBanSince(convId)?.let { formatBanDate(it) }
             )
         }
 
@@ -181,10 +182,19 @@ class MessageListController(
                 time = formatTime(entry.timestamp),
                 unreadCount = 0,
                 lastMessage = entry.content,
-                botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) }
+                botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) },
+                suspectedBanDate = lucatBot.suspectedBanSince(convId)?.let { formatBanDate(it) }
             )
         }
         return lines
+    }
+
+    /** 疑似禁言标记日期（MMdd；跨年 yyyy-MM-dd） */
+    private fun formatBanDate(epochMs: Long): String {
+        val zone = java.time.ZoneId.of("Asia/Shanghai")
+        val date = java.time.Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
+        val pattern = if (date.year == java.time.LocalDate.now(zone).year) "MM-dd" else "yyyy-MM-dd"
+        return date.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
     }
 
     /** 相对时长（「我上次发言 X 前」用）：刚刚 / X 分钟前 / X 小时前 / X 天前 */

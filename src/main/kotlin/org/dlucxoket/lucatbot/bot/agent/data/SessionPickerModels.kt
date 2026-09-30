@@ -48,7 +48,13 @@ data class SessionSummaryLine(
      * 机器人上次在该会话发言距今（"刚刚"/"3分钟前"/…；null = 还没说过话）——
      * 选会话优先级依据：**刚发过言且还有未读**的会话优先（对话正热）。
      */
-    val botSpokeAgo: String? = null
+    val botSpokeAgo: String? = null,
+
+    /**
+     * 疑似被禁言的标记日期（MMdd，跨年 yyyy-MM-dd；null = 无记录）——
+     * 发送失败 retCode 判禁言时打点、发送成功清除（见 LucatBot.markSuspectedBan）
+     */
+    val suspectedBanDate: String? = null
 )
 
 /**
