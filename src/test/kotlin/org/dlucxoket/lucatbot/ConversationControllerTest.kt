@@ -429,8 +429,9 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `banned failure note explicitly says banned and lets llm decide`() {
-        // 被禁言（retCode=1200）→ 点名「被禁言了」，由 LLM 决策去留
+    fun `banned failure note forbids further sends until ban lifts`() {
+        // 被禁言（retCode=1200）→ 提示每轮重复 + 明确禁止再发。
+        // 实盘：旧文案每轮邀请「stay 重试 / 换个说法再发」，禁言期间不断试发
         val llm = FakeLLM(mutableListOf(
             """{"action":"send","params":{"content":"hi"}}""",
             """{"action":"return"}"""
@@ -443,8 +444,32 @@ class ConversationControllerTest {
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "去留交给 LLM")
         val secondPrompt = llm.prompts[1]
         assertTrue(secondPrompt.contains("被禁言了"), "应点名被禁言：$secondPrompt")
-        assertTrue(secondPrompt.contains("接下来自行决定"), "应让智能体决策")
         assertTrue(secondPrompt.contains("没有发出去"), "应说明没发出")
+        assertTrue(secondPrompt.contains("**禁言期间不要再输出 send**"), "禁言期间必须禁止再发：$secondPrompt")
+        assertTrue(secondPrompt.contains("return（离开会话）与 stay"), "只留 return/stay 两个选项：$secondPrompt")
+        assertTrue(secondPrompt.contains("每一轮都会重复"), "提示成功前每轮重复（持续可见）：$secondPrompt")
+        assertTrue(secondPrompt.contains("禁言解除前绝不输出 send"), "system 约束同步禁令：$secondPrompt")
+        assertFalse(secondPrompt.contains("接下来自行决定"), "禁言时不再邀请自主决策重试：$secondPrompt")
+        assertFalse(secondPrompt.contains("或换个说法再发"), "旧的重试邀请应已移除：$secondPrompt")
+    }
+
+    @Test
+    fun `non-ban failure note keeps options but discourages endless retries`() {
+        // 无 retCode 的失败（网络抖动等）→ 不误判为禁言：保留去留自主权，但点名别连发
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"hi"}}""",
+            """{"action":"return"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply { fail = true; error = "发送通道超时" }
+        val (controller, _, _) = buildController(llm, sendTool = sendTool)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val secondPrompt = llm.prompts[1]
+        assertTrue(secondPrompt.contains("接下来自行决定"), "非禁言失败保留自主决定：$secondPrompt")
+        assertTrue(secondPrompt.contains("不要一轮接一轮连续试发"), "点名不要连续试发：$secondPrompt")
+        assertFalse(secondPrompt.contains("**被禁言了**"), "无禁言回执不误判为禁言：$secondPrompt")
+        assertFalse(secondPrompt.contains("或换个说法再发"), "旧的重试邀请应已移除：$secondPrompt")
     }
 
     @Test

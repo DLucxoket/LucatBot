@@ -549,20 +549,31 @@ class ConversationController(
     }
 
     /**
-     * 发送失败通知（注入下一轮 hint，让 LLM 知道失败原因并自行决定去留）：
-     * 带上原始错误（status/retCode，如被禁言 1200）+ 现场提示 + 行为选项；
+     * 发送失败通知（注入 hint，**发送成功或离开前每一轮重复出现**）：
      * 明确点出「消息没发出也没入档」，避免 LLM 误以为已发送。
+     *
+     * - **禁言（retCode=120/1200）**：明确**禁止再发**——实盘禁言后仍每轮试发，
+     *   旧文案「可以重试/换个说法再发」在重复注入下等于每轮递刀；只留 return/stay
+     * - **非禁言**：保留自主决定，但点明不要一轮接一轮连续试发
+     *
+     * 禁言判定按 retCode 解析：工具的非 ok 兜底文案恒带「（可能被禁言）」，
+     * 拿文案子串当依据会把所有失败（含网络抖动）误判成禁言。
      */
     private fun buildSendFailureNote(detail: String, isGroup: Boolean): String {
-        val banned = detail.contains("1200") || detail.contains("禁言")
-        val guess = when {
-            banned -> "你**被禁言了**，这段时间在群里发不出任何消息"
-            isGroup -> "你在本群可能被禁言了"
-            else -> "发送通道可能异常（网络/对方限制）"
+        val retCode = Regex("""retCode=(\d+)""").find(detail)?.groupValues?.get(1)
+        val banned = retCode == "120" || retCode == "1200"
+        return if (banned) {
+            "上一轮你发送的消息失败了：$detail——你**被禁言了**（retCode=$retCode），禁言解除前发不出任何消息。" +
+                "该消息没有发出去，也没有写入聊天记录，对方看不到。" +
+                "**禁言期间不要再输出 send**：重试、换个说法都会失败，只会连番撞墙；" +
+                "只在 return（离开会话）与 stay（等禁言过去）之间选。" +
+                "不要假装已经发送过；本提示在你成功发送或离开会话前每一轮都会重复。"
+        } else {
+            val guess = if (isGroup) "你在本群可能被禁言了，或网络/通道异常" else "发送通道可能异常（网络/对方限制）"
+            "上一轮你发送的消息失败了：$detail——$guess。" +
+                "该消息没有发出去，也没有写入聊天记录，对方看不到。" +
+                "接下来自行决定：可以 stay 稍等后再试一次、return 离开；不要一轮接一轮连续试发；也不要假装已经发送过。"
         }
-        return "上一轮你发送的消息失败了：$detail——$guess。" +
-            "该消息没有发出去，也没有写入聊天记录，对方看不到。" +
-            "接下来自行决定：可以 stay 等一会儿重试、return 离开、或换个说法再发；不要假装已经发送过。"
     }
 
     /**
