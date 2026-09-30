@@ -173,20 +173,28 @@ class MySqlStorage(private val config: MySqlConfig) {
     // ------------------------------------------------------------------
 
     /**
-     * 确保关键词存在并返回其 id（注册表幂等插入：INSERT IGNORE + 查 id）
+     * 确保关键词存在并返回其 id（**先查后插**）
+     *
+     * 曾用「INSERT IGNORE + 查 id」：每次写记忆都对**已存在的老词条**执行一次
+     * 必然撞唯一键的 INSERT——MySQL 为被跳过的行照样消耗自增值，`tags.id`
+     * 因此持续跳空（且每次写入每个老词浪费一个 ID）。改为 SELECT 命中即返回、
+     * 只有新词才 INSERT；并发竞态（另一连接刚插入同名词）撞唯一键时回落
+     * SELECT 取既有 id，不吞真实错误（查不到照常抛）。
      *
      * 同连接执行，供记忆写入/导入的事务复用。
      */
     fun ensureTagId(conn: Connection, name: String): Int {
-        update(conn, "INSERT IGNORE INTO tags (name) VALUES (?)", name)
-        return conn.prepareStatement("SELECT id FROM tags WHERE name = ?").use { ps ->
-            ps.setString(1, name)
-            ps.executeQuery().use { rs ->
-                if (rs.next()) rs.getInt(1)
-                else error("关键词注册失败（name=$name）")
-            }
-        }
+        selectTagId(conn, name)?.let { return it }
+        runCatching { update(conn, "INSERT INTO tags (name) VALUES (?)", name) }
+        return selectTagId(conn, name) ?: error("关键词注册失败（name=$name）")
     }
+
+    /** 查词条 id（不存在返回 null） */
+    private fun selectTagId(conn: Connection, name: String): Int? =
+        conn.prepareStatement("SELECT id FROM tags WHERE name = ?").use { ps ->
+            ps.setString(1, name)
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else null }
+        }
 
     /**
      * 重建某条记忆的关键词关联（先清后写，幂等）

@@ -274,6 +274,42 @@ class MySqlStorageSmokeTest {
     }
 
     @Test
+    fun `ensureTagId burns no auto increment for existing words`() {
+        // 块体（JVM void）：JUnit 对 @Test 的返回类型敏感，表达式体若推断出
+        // 非 Unit（本用例末句 update 返回 Int）会被静默不予发现
+        withDbOrSkip {
+        // 跳空根因回归：旧实现每次写记忆都对老词条 INSERT IGNORE 撞唯一键，
+        // MySQL 为跳过的行照样消耗自增 ID → tags.id 持续跳空
+        val storage = initOrSkip()
+        val word = "zstest-${System.nanoTime()}"
+        storage.connection().use { conn ->
+            conn.autoCommit = true
+            val first = storage.ensureTagId(conn, word)
+            val maxAfter1 = storage.queryOne(
+                "SELECT MAX(id) AS m FROM tags", map = { it.getInt("m") }
+            )
+            repeat(10) {
+                assertEquals(first, storage.ensureTagId(conn, word), "已存在词返回同一 id")
+            }
+            val maxAfter10 = storage.queryOne(
+                "SELECT MAX(id) AS m FROM tags", map = { it.getInt("m") }
+            )
+            assertEquals(maxAfter1, maxAfter10,
+                "已存在词条反复 ensure 不得再消耗自增 ID（跳空根因已修）")
+            // 新词恰好前进 1（先查后插：只在真正新词时 INSERT）
+            val word2 = "$word-b"
+            storage.ensureTagId(conn, word2)
+            val maxAfterNew = storage.queryOne(
+                "SELECT MAX(id) AS m FROM tags", map = { it.getInt("m") }
+            )
+            assertEquals((maxAfter10 ?: error("MAX(id) 应非空")) + 1, maxAfterNew, "新词条插入恰好 +1")
+            // 清理测试词条（未进关联表，可直接删），保证用例可重复执行
+            storage.update(conn, "DELETE FROM tags WHERE name IN (?, ?)", word, word2)
+        }
+        }
+    }
+
+    @Test
     fun `chat history has sender nickname column for card vs qq name`() = withDbOrSkip {
         // 老库（建表时无该列）靠启动期 ensureColumn 补列——测试库首跑即走该路径
         val storage = initOrSkip()
