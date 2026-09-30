@@ -30,8 +30,11 @@ interface LLM {
          *
          * 仅应由 Spring 环境调用一次；非 Spring 环境（单元测试）不注册，
          * [DEFAULT] 会落到 [OpenAIAPI.DEFAULT] 兜底。
+         *
+         * @param llm 要注册的实例；传 `null` 清除注册（单元测试收尾用，
+         *   避免测试替身残留在同 JVM 中污染后续用例）
          */
-        fun install(llm: LLM) {
+        fun install(llm: LLM?) {
             springInstance = llm
         }
 
@@ -52,6 +55,12 @@ interface LLM {
         val DEFAULT: LLM = object : LLM {
             override fun ask(systemPrompt: String, question: String): String =
                 (springInstance ?: OpenAIAPI.DEFAULT).ask(systemPrompt, question)
+
+            // 三参（图片通道）必须与两参同步转发——委托对象只 override 两参时，
+            // 图片会走接口默认实现被静默丢弃，生产 ConversationAgent（默认注入
+            // DEFAULT）的全部图片取材白做（第四轮 OOP 审查 P1-1）
+            override fun ask(systemPrompt: String, question: String, images: List<PromptImage>): String =
+                (springInstance ?: OpenAIAPI.DEFAULT).ask(systemPrompt, question, images)
         }
     }
 
