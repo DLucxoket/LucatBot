@@ -109,6 +109,23 @@ data class ConversationDecision(
     /** stay 的停留秒数（params.seconds，默认 30；执行侧会再钳制到 1~1800） */
     val staySeconds: Int get() = (params["seconds"] as? Number)?.toInt() ?: 30
 
+    /**
+     * send 的「等回信」秒数（params.wait_message，默认 0=发完立即再次决策）
+     *
+     * 发送成功后原地等新消息：期间来消息（或让位请求）立即唤醒进下一轮处理，
+     * 等满仍无任何新消息 = 没人接话 → 编排层直接退出会话。执行侧钳 1~300。
+     * 兼容 camelCase 写法（LLM 偶尔不按 snake_case 输出）。
+     */
+    val waitMessageSeconds: Int
+        get() {
+            val raw = params["wait_message"] ?: params["waitMessage"] ?: return 0
+            return when (raw) {
+                is Number -> raw.toInt()
+                is String -> raw.trim().toIntOrNull() ?: 0
+                else -> 0
+            }
+        }
+
     /** list_tools 的搜索关键词（null = 获取全部） */
     val toolQuery: String?
         get() = (params["query"] as? String)?.trim()?.takeIf { it.isNotEmpty() }

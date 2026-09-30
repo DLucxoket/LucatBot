@@ -68,6 +68,13 @@ class ConversationController(
      */
     private val segmentDelayWait: (conversationId: String, ms: Long) -> Boolean =
         { id, ms -> lucatBot.awaitPendingInsert(id, ms) },
+    /**
+     * send 的 `wait_message` 计时——发送后原地等新消息：来了即唤醒、等满即超时。
+     * 默认走 [LucatBot.awaitPendingInsert]；**依赖注入**：测试传记录型替身即可断言
+     * 「超时直接退出 / 被唤醒继续」而无需真睡
+     */
+    private val replyWait: (conversationId: String, ms: Long) -> Boolean =
+        { id, ms -> lucatBot.awaitPendingInsert(id, ms) },
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
     /** 退出会话时记忆整理读取的聊天记录条数 */
@@ -510,6 +517,32 @@ class ConversationController(
                                 log.warn("连续发送失败 {} 次，强制离开会话", sendFailStreak)
                                 return
                             }
+                        }
+                    }
+
+                    // send 带 wait_message：发送成功后**原地等回信**——期间来了新消息
+                    // （或让位请求）立即唤醒、进下一轮处理；等满仍没有任何新消息 =
+                    // 没人接话 → 不再空转，直接退出会话。失败/空发不等（失败提示链路接管）
+                    val waitSec = decision.waitMessageSeconds
+                    if (waitSec > 0 && sentContents.isNotEmpty() && failDetail == null) {
+                        val waitMs = waitSec.coerceIn(1, 300) * 1000L
+                        val woken = try {
+                            replyWait(conversationId, waitMs)
+                        } catch (e: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            log.info("发送后等回信被中断，退出会话")
+                            logAct("等回信被中断，退出")
+                            return
+                        }
+                        if (woken) {
+                            // 唤醒可能是新消息、也可能是通知让位请求（复用同一等待）
+                            val whyWait = if (lucatBot.sessionYieldRequested) "被通知打断" else "新消息提前唤醒"
+                            log.info("发送后等回信 {}s，被{}", waitSec, whyWait)
+                            logAct("等回信 ${waitSec}s（$whyWait）")
+                        } else {
+                            log.info("发送后等回信 {}s 仍无新消息，退出会话", waitSec)
+                            logAct("等回信 ${waitSec}s 无人回复，退出")
+                            return
                         }
                     }
                 }

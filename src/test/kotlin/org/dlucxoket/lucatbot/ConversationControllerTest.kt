@@ -150,6 +150,11 @@ class ConversationControllerTest {
          */
         segmentDelayWait: (conversationId: String, ms: Long) -> Boolean = { _, _ -> false },
         /**
+         * send 的 wait_message 计时替身——记录等待时长；返回 false = 等满超时
+         * （无人回信）、true = 被新消息/让位提前唤醒
+         */
+        replyWait: (conversationId: String, ms: Long) -> Boolean = { _, _ -> false },
+        /**
          * 已读水位服务——默认 temp 仓库（测试不污染 data/）；水位用例显式传自己的实例
          */
         readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService =
@@ -182,6 +187,7 @@ class ConversationControllerTest {
             initialHistoryCount = 3,
             reflectExecutor = reflectExecutor,
             segmentDelayWait = segmentDelayWait,
+            replyWait = replyWait,
             readStateService = readStateService
         )
         return Triple(controller, lucatBot, sendTool)
@@ -213,6 +219,39 @@ class ConversationControllerTest {
         assertTrue(secondPrompt.contains("刚发送"), "send 后那轮 prompt 应含「刚发送」hint：$secondPrompt")
         // 历史时间戳是 1970 年（非今天）→ 必须带 yyyy-MM-dd 日期前缀
         assertTrue(secondPrompt.contains("1970-01-01"), "非今天的历史消息时间应带日期：$secondPrompt")
+    }
+
+    @Test
+    fun `send with wait_message exits when nobody replies`() {
+        // wait_message：发送后原地等回信——等满仍无任何新消息 = 没人接话 → 直接退出，
+        // 不再发起下一轮决策（不再空转）
+        val waits = mutableListOf<Long>()
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"在吗","wait_message":30}}"""
+        ))
+        val (controller, lucatBot, sendTool) = buildController(llm, replyWait = { _, ms -> waits += ms; false })
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(listOf(30_000L), waits, "按 wait_message 秒数计时：$waits")
+        assertEquals(1, llm.prompts.size, "等满无回信 → 退出会话，不再决策：实际 ${llm.prompts.size} 轮")
+        assertEquals(listOf("在吗"), sendTool.sent, "消息已发出")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "回到消息列表")
+    }
+
+    @Test
+    fun `send with wait_message wakes up on new message`() {
+        // 等回信期间来了新消息 → 立即唤醒，进下一轮处理新消息（不等满）
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"在吗","wait_message":30}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, sendTool) = buildController(llm, replyWait = { _, _ -> true })
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(2, llm.prompts.size, "被新消息唤醒 → 进入下一轮决策")
+        assertEquals(listOf("在吗"), sendTool.sent)
     }
 
     @Test
