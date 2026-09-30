@@ -92,6 +92,11 @@ class ConversationController(
     private val maxReadMoreWithInserts: Int = 3,
     /** 连续发送失败上限（病态护栏：如被禁言还反复试发，达上限强制收尾） */
     private val maxSendFailures: Int = 3,
+    /**
+     * 连续停留且没人接话的次数上限（病态护栏）：到此仍无新消息，hint 要求本轮
+     * return；模型还输出 stay → 强制退出。有新消息即清零，正常等待不受影响
+     */
+    private val maxIdleStays: Int = 3,
     /** 每轮 prompt 的图片附件上限（请求体体积闸；取最近的几张） */
     private val maxPromptImages: Int = 6
 ) {
@@ -161,6 +166,9 @@ class ConversationController(
         var mustIcebreak = proactive
         var justSent: String? = null // 本轮刚发出的消息（有新回应即清空，用于组装 hint）
         var noReplyRounds = 0 // 连续无新消息的轮数（自上次发送起累计；SEND 成功不重置，有新消息清零）
+        // 连续「停留且没人接话」的次数（有新消息即清零）——stay 几次仍无人回应
+        // 就该离开：hint 升级要求 return，模型仍不走时由 maxIdleStays 强制兜底
+        var stayStreak = 0
         // 发送失败状态（注入下一轮 prompt 通知 LLM，由它决定去留；连续失败达上限强制收尾）
         var sendFailureNote: String? = null
         var sendFailStreak = 0
@@ -201,6 +209,7 @@ class ConversationController(
             if (inserts.isNotEmpty()) {
                 justSent = null // 有新回应就不再提示旧发送
                 noReplyRounds = 0
+                stayStreak = 0 // 有人接话 → 停留连击清零
             } else if (justSent != null) {
                 // 已发出消息且本轮仍没有任何新消息 → 递进一轮（衡量连续无回应）
                 noReplyRounds++
@@ -281,7 +290,7 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
-                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote),
+                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote, stayStreak),
                 toolNotes = toolNotes.snapshot(),
                 images = attachments.images,
                 missingImages = attachments.missing
@@ -343,6 +352,15 @@ class ConversationController(
             val why: String? = decision.reason?.trim()?.take(30)?.takeIf { it.isNotEmpty() }
 
             val hadInserts = newNotes.isNotEmpty()
+
+            // 病态护栏：连续停留 [maxIdleStays] 次始终没人接话——hint 已在上一轮
+            // 要求「本轮必须 return」，模型仍输出 stay 时强制收尾（只拦 STAY：
+            // send/read_more/tool 等正常动作不受影响；有新消息时 stayStreak 已清零）
+            if (decision.action == ConversationAction.STAY && stayStreak >= maxIdleStays) {
+                logAct("连续停留 $stayStreak 次无人接话，强制返回消息列表", why)
+                log.warn("连续停留 {} 次无新消息，强制离开会话", stayStreak)
+                return
+            }
 
             when (decision.action) {
                 ConversationAction.READ_MORE -> {
@@ -520,6 +538,8 @@ class ConversationController(
                     }
                     if (interrupted) return
                     readMoreWithInsertStreak = 0 // 停留打断连续爬楼计数
+                    // 没被新消息唤醒的停留才算「白等」——累计连击交 hint/强制退出
+                    if (!hadInserts) stayStreak++
                 }
 
                 ConversationAction.RETURN -> {
@@ -790,16 +810,29 @@ class ConversationController(
      *   第 1 轮提示不要连发；N≥2 轮点明「已连续 N 轮行动但始终没有任何新消息」，
      *   并附上当前心情（含强度数值），由 LLM 自行判断 stay / return / 确有必要再发
      *   （无代码强制退出，去留全交智能体）
+     * - 连续停留没人接话（[stayStreak]，有新消息即清零）：第 2 次点名「下一轮就走」，
+     *   ≥[maxIdleStays] 次要求**本轮必须 return**；模型仍输出 stay 时编排层强制退出
+     *   （实盘出过连刷 9 次 stay 空等同一个人——纯靠模型自觉走不掉）
      */
     private fun buildHint(
         readMoreWithInsertStreak: Int,
         justSent: String?,
         noReplyRounds: Int,
         newNotes: List<String>,
-        sendFailureNote: String? = null
+        sendFailureNote: String? = null,
+        stayStreak: Int = 0
     ): String {
         val parts = mutableListOf<String>()
         sendFailureNote?.let { parts += it }
+        if (stayStreak >= maxIdleStays - 1) {
+            parts += if (stayStreak >= maxIdleStays) {
+                "你已连续停留 $stayStreak 次，期间始终没有任何新消息（没人接话）——不要再干等了，" +
+                    "本轮直接 return 离开会话；若继续输出 stay 会被强制退出。"
+            } else {
+                "你已连续停留 $stayStreak 次，期间始终没有任何新消息（没人接话）：若这轮还是没人接话，" +
+                    "下一轮就直接 return 离开，别无限等下去。"
+            }
+        }
         if (readMoreWithInsertStreak >= maxReadMoreWithInserts) {
             parts += "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
         }

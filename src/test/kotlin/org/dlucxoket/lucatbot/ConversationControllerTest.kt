@@ -602,6 +602,34 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `repeated idle stays escalate then force return`() {
+        // 实盘：连刷 9 次 stay 空等同一个人不接话——第 2 次起 hint 点名「下一轮就走」，
+        // 第 3 次后要求本轮必须 return；模型仍输出 stay 时编排层强制收尾
+        val stay = """{"action":"stay","params":{"seconds":1},"reason":"再等等"}"""
+        val llm = FakeLLM(mutableListOf(stay, stay, stay, stay))
+        val (controller, _, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(4, llm.prompts.size,
+            "3 次停留后第 4 轮强制退出（不再发起第 4 次停留）：实际 ${llm.prompts.size} 轮")
+        assertTrue(llm.prompts[2].contains("已连续停留 2 次") && llm.prompts[2].contains("下一轮就直接 return"),
+            "第 3 轮前点名下一轮离开：${llm.prompts[2]}")
+        assertTrue(
+            llm.prompts[3].contains("已连续停留 3 次") && llm.prompts[3].contains("强制退出"),
+            "第 4 轮要求必须 return：${llm.prompts[3]}"
+        )
+    }
+
+    @Test
+    fun `system prompt tells bot to leave when nobody replies after stays`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        assertTrue(llm.prompts.single().contains("连续停留几次仍没人接话"),
+            "系统约束写明停留几次仍没人接话就 return：${llm.prompts.single()}")
+    }
+
+    @Test
     fun `entering conversation advances read watermark`() {
         // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
         val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
