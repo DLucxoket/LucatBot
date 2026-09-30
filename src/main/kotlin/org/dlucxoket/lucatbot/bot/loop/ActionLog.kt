@@ -1,38 +1,53 @@
 package org.dlucxoket.lucatbot.bot.loop
 
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
 import org.dlucxoket.lucatbot.bot.storage.DebouncedFlusher
-import org.dlucxoket.lucatbot.bot.storage.JsonFiles
 import org.slf4j.LoggerFactory
-import java.io.File
+import java.time.Instant
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * 滚动操作日志（**全局、跨会话、窗口滚动、可持久化**）
+ * 操作日志条目（结构化——落库即四列：时间 / 所处会话 / 操作 / 原因）
+ *
+ * @param timestamp 记录时间（epoch ms）
+ * @param conversationId 发生时所处会话（null = 消息列表/空闲等无会话态）
+ * @param action 操作本身（客观描述）
+ * @param reason 决策动机（可空；注入 prompt 时拼在操作后「（…）」）
+ */
+data class ActionLogEntry(
+    val timestamp: Long,
+    val conversationId: String? = null,
+    val action: String,
+    val reason: String? = null
+)
+
+/**
+ * 滚动操作日志（**全局、跨会话、窗口滚动、结构化持久化**）
  *
  * 让机器人知道自己刚才干了什么——消息列表 / 会话内 / 通知通道的 prompt
  * 都注入同一份（[LoopConfig] 单例 Bean），进入会话不清空：
- * - **记操作 + 简短动机**：动作行尾挂本轮决策的 reason（≤30 字，
- *   「回复：哈哈（接住话茬）」——操作本身与内心动机一条讲完，不额外加行省 token）
+ * - **结构化记录**：每条 = 时间 + 所处会话 + 操作 + 原因（[ActionLogEntry]），
+ *   持久化为 mysql `action_log` 表（第七张）/ `data/action-log.json`
+ * - **prompt 渲染**：`[HH:mm][会话] 操作（原因）`——会话标签让跨会话的日志
+ *   分得清「哪条是在哪个会话干的」；原因 ≤30 字（调用方截断 + 此处兜底）
  * - **窗口滚动**：只保留最近 [maxLines] 行，超出丢最旧
- * - **持久化**：[filePath] 非空时启动恢复、写入防抖落盘（进程退出兜底）——
- *   重启后仍记得自己干过什么；测试默认 null（纯内存，不污染 data/）
+ * - **持久化**：[repository] 非空时启动恢复、写入防抖落盘（进程退出兜底）；
+ *   测试默认 null（纯内存，不污染 data/）
  */
 class ActionLog(
     private val maxLines: Int = 20,
-    /** 持久化文件路径（null = 纯内存）；生产由 LoopConfig 显式传 `data/action-log.json` */
-    private val filePath: String? = null
+    /** 持久化仓库（null = 纯内存）；生产由 LoopConfig 注入 storage.type 对应实现 */
+    private val repository: ActionLogRepository? = null
 ) {
     private val log = LoggerFactory.getLogger(ActionLog::class.java)
-    private val mapper = jacksonObjectMapper()
-    private val lines = CopyOnWriteArrayList<String>()
+    private val entries = CopyOnWriteArrayList<ActionLogEntry>()
+    private val zone = ZoneId.of("Asia/Shanghai")
     private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 
     /** 防抖落盘（仅持久化模式）：append 后约 5s 批量写，shutdown 兜底 */
-    private val flusher = filePath?.let {
+    private val flusher = repository?.let {
         DebouncedFlusher(
             flushAction = { doFlush() },
             delayMs = 5_000L,
@@ -41,28 +56,54 @@ class ActionLog(
     }
 
     init {
-        filePath?.let { load(it) }
+        repository?.let { repo ->
+            runCatching { entries.addAll(repo.loadEntries().takeLast(maxLines)) }
+                .onFailure { e -> log.warn("操作日志恢复失败（以空启动）: {}", e.message) }
+        }
     }
 
-    /** 追加一行（自动带时间戳）；滚动窗口 + 触发防抖落盘 */
-    fun append(action: String) {
-        val line = "[${LocalTime.now().format(timeFormat)}] $action"
-        lines.add(line)
-        while (lines.size > maxLines) {
-            lines.removeAt(0)
+    /**
+     * 追加一条（时间取当前；自动滚动窗口）
+     *
+     * @param action 操作本身（客观描述）
+     * @param reason 决策动机（可空；截 30 字兜底）
+     * @param conversationId 发生时所处会话（null = 消息列表/空闲态）
+     */
+    fun append(action: String, reason: String? = null, conversationId: String? = null) {
+        entries.add(
+            ActionLogEntry(
+                timestamp = System.currentTimeMillis(),
+                conversationId = conversationId?.takeIf { it.isNotBlank() },
+                action = action,
+                reason = reason?.trim()?.take(30)?.takeIf { it.isNotEmpty() }
+            )
+        )
+        while (entries.size > maxLines) {
+            entries.removeAt(0)
         }
         flusher?.markDirty()
     }
 
     /** 导出为多行文本（注入 prompt）；空日志返回占位说明 */
     fun dump(): String {
-        return if (lines.isEmpty()) "（暂无）" else lines.joinToString("\n")
+        if (entries.isEmpty()) return "（暂无）"
+        return entries.joinToString("\n") { e ->
+            buildString {
+                append("[")
+                append(LocalTime.ofInstant(Instant.ofEpochMilli(e.timestamp), zone).format(timeFormat))
+                append("]")
+                e.conversationId?.let { append("[$it]") }
+                append(" ")
+                append(e.action)
+                e.reason?.let { append("（$it）") }
+            }
+        }
     }
 
-    fun size(): Int = lines.size
+    fun size(): Int = entries.size
 
     fun clear() {
-        lines.clear()
+        entries.clear()
         flusher?.markDirty()
     }
 
@@ -73,26 +114,8 @@ class ActionLog(
     }
 
     private fun doFlush() {
-        val path = filePath ?: return
-        try {
-            JsonFiles.writeAtomic(mapper, File(path), lines.toList())
-            log.debug("操作日志已持久化（{} 行）", lines.size)
-        } catch (e: Exception) {
-            log.error("操作日志持久化失败: ${e.message}")
-        }
-    }
-
-    private fun load(path: String) {
-        val file = File(path)
-        if (!file.exists()) return
-        try {
-            val loaded: List<String> = mapper.readValue(file)
-            lines.addAll(loaded.takeLast(maxLines))
-            log.info("已恢复操作日志 ${lines.size} 行")
-        } catch (e: Exception) {
-            // 加载失败绝不能让空日志覆盖原文件：改名备份，以空日志启动
-            JsonFiles.backupCorrupt(file)
-            log.error("操作日志加载失败（${e.message}）：以空启动，原文件已备份")
-        }
+        val repo = repository ?: return
+        runCatching { repo.saveEntries(entries.toList()) }
+            .onFailure { e -> log.error("操作日志持久化失败: {}", e.message) }
     }
 }

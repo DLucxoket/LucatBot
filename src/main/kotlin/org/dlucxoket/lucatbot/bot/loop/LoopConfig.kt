@@ -28,11 +28,12 @@ import org.springframework.context.annotation.Configuration
 class LoopConfig {
 
     /**
-     * 全局滚动操作日志——**持久化**（重启后仍记得干过什么）；
-     * 纯内存参数版（filePath=null）供测试构造
+     * 全局滚动操作日志——**结构化持久化**（时间/所处会话/操作/原因四列，
+     * mysql action_log 表或 data/action-log.json）；测试构造默认纯内存
      */
     @Bean(destroyMethod = "shutdown")
-    fun actionLog(): ActionLog = ActionLog(filePath = "data/action-log.json")
+    fun actionLog(actionLogRepository: ActionLogRepository): ActionLog =
+        ActionLog(repository = actionLogRepository)
 
     /**
      * 图片取材器——**全上下文共享的单例**（图片通道）。

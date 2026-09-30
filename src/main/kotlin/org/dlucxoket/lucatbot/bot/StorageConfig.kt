@@ -85,6 +85,15 @@ class StorageConfig(
             org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository()
         }
 
+    /** 操作日志（第七张表 action_log / data/action-log.json）——结构化四列 */
+    @Bean(destroyMethod = "shutdown")
+    fun actionLogRepository(): org.dlucxoket.lucatbot.bot.loop.ActionLogRepository =
+        if (useMySql) {
+            org.dlucxoket.lucatbot.bot.storage.mysql.MySqlActionLogRepository(mysql)
+        } else {
+            org.dlucxoket.lucatbot.bot.loop.JsonFileActionLogRepository()
+        }
+
     /**
      * 启动清理：把聊天记录存储层的孪生双份行合并为一条（仅 mysql 模式）
      *

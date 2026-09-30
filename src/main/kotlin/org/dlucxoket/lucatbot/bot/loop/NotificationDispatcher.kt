@@ -89,18 +89,18 @@ class NotificationDispatcher(
             when (decision.action) {
                 NotificationAction.IGNORE -> {
                     log.info("通知无视：{}（{}）—— {}", senderName, convId, decision.reason ?: "无说明")
-                    actionLog.append("通知：无视 ${senderName}(${targetId})")
+                    actionLog.append("通知：无视 ${senderName}(${targetId})", decision.reason, convId)
                 }
 
                 NotificationAction.TODO -> {
                     val todoContent = decision.todoContent
                     if (todoContent == null) {
                         log.warn("通知转待办缺 content，降级无视")
-                        actionLog.append("通知：无视 ${senderName}(${targetId})")
+                        actionLog.append("通知：无视 ${senderName}(${targetId})", conversationId = convId)
                     } else {
                         todoService.add(todoContent, convId)
                         log.info("通知转待办：{}", todoContent)
-                        actionLog.append("通知转待办：$todoContent")
+                        actionLog.append("通知转待办：$todoContent", decision.reason, convId)
                     }
                 }
 
@@ -111,14 +111,14 @@ class NotificationDispatcher(
                     )
                     val tookOver = mainLoopController.tryRunSessionExclusive(gateWaitMs) {
                         log.info("通知当场跳转：{}（{}）", senderName, convId)
-                        actionLog.append("通知点开：${senderName}(${targetId})")
+                        actionLog.append("通知点开：${senderName}(${targetId})", decision.reason, convId)
                         conversationController.run(pick)
                     }
                     if (!tookOver) {
                         // 主循环正跑另一会话/选会话——不并发抢：消息已在未读队列，
                         // 下轮 pick（该会话有新未读/@我）优先级天然很高
                         log.info("通知判跳转但主循环正忙，入未读排队（下轮高优先级）")
-                        actionLog.append("通知点开排队（主循环正忙）：${senderName}(${targetId})")
+                        actionLog.append("通知点开排队（主循环正忙）：${senderName}(${targetId})", conversationId = convId)
                     }
                 }
             }

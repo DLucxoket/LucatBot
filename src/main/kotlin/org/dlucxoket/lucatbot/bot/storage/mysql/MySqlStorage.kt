@@ -530,6 +530,15 @@ class MySqlStorage(private val config: MySqlConfig) {
                 conversation_id VARCHAR(64) NOT NULL PRIMARY KEY,
                 last_read_at DATETIME(3) NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS action_log (
+                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                logged_at DATETIME(3) NOT NULL,
+                conversation_id VARCHAR(64) NULL,
+                action VARCHAR(512) NOT NULL,
+                reason VARCHAR(256) NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent()
         )
     }

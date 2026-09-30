@@ -128,7 +128,8 @@ class ConversationController(
         )
         lucatBot.mood = lucatBot.mood.boost()
         actionLog.append(
-            "进入${if (isGroup) "群聊" else "私聊"} ${pick.targetId}" + if (proactive) "（主动找人）" else ""
+            "进入${if (isGroup) "群聊" else "私聊"} ${pick.targetId}" + if (proactive) "（主动找人）" else "",
+            conversationId = conversationId
         )
         log.info("进入会话 {}（{}{}）", conversationId,
             if (isGroup) "群聊" else "私聊", if (proactive) "，主动发起" else "")
@@ -177,6 +178,10 @@ class ConversationController(
         // 实盘怀疑「没调决策智能体」其实是日志盲区）
         var round = 0
 
+        // 会话内记日志（自动带上所处会话——操作日志结构化落库的 conversationId）
+        fun logAct(action: String, reason: String? = null) =
+            actionLog.append(action, reason, conversationId)
+
         while (true) {
             // 让位检查点：通知通道要当场跳转、当前会话占着执行锁 → 让出。
             // 让位 = 退出本会话循环（释放锁给通知），并记「回到会话继续」的待办——
@@ -184,9 +189,9 @@ class ConversationController(
             if (lucatBot.consumeSessionYield()) {
                 if (lucatBot.suspectedBanSince(conversationId) == null) {
                     todoService.add("回到 $conversationId 继续刚才的对话（被新通知打断）", conversationId)
-                    actionLog.append("被新通知打断，切出（已记待办：回到 $conversationId 继续）")
+                    logAct("被新通知打断，切出（已记待办：回到 $conversationId 继续）")
                 } else {
-                    actionLog.append("被新通知打断，切出（禁言会话，不记返回待办）")
+                    logAct("被新通知打断，切出（禁言会话，不记返回待办）")
                 }
                 log.info("会话 {} 让位给通知跳转", conversationId)
                 return
@@ -333,7 +338,9 @@ class ConversationController(
             // 本轮决策的简短动机（reason ≤30 字）——**挂进操作日志的动作行**：
             // 「操作本身 + 内心动机」同一条进全局 ActionLog（跨会话、滚动窗口、
             // 持久化），LLM 下一轮能看到自己刚做了什么、为什么做；不额外加行省 token
-            val why = decision.reason?.trim()?.take(30)?.let { "（$it）" }.orEmpty()
+            // reason 存**裸文本**（不带括号）——ActionLog 结构化存储后由 dump()
+            // 统一渲染成「操作（原因）」，此处再包一层会出现「（（…））」双括号
+            val why: String? = decision.reason?.trim()?.take(30)?.takeIf { it.isNotEmpty() }
 
             val hadInserts = newNotes.isNotEmpty()
 
@@ -346,7 +353,7 @@ class ConversationController(
                     if (!hadInserts) {
                         lucatBot.mood = lucatBot.mood.decay()
                     }
-                    actionLog.append("爬楼 $count 条$why")
+                    logAct("爬楼 $count 条", why)
                     log.info("read_more → 累计读取 {}", historyCount)
                 }
 
@@ -372,7 +379,7 @@ class ConversationController(
                                 } catch (e: InterruptedException) {
                                     Thread.currentThread().interrupt()
                                     log.info("分段发送延迟被中断，退出会话")
-                                    actionLog.append("发送延迟被中断，退出")
+                                    logAct("发送延迟被中断，退出")
                                     interrupted = true
                                     break
                                 }
@@ -434,7 +441,7 @@ class ConversationController(
                                 )
                             }
                         }
-                        actionLog.append("回复：$sentText$why")
+                        logAct("回复：$sentText", why)
                         log.info("发送成功 {} 条：{}", sentContents.size, sentText.take(80))
                         lucatBot.mood = lucatBot.mood.boost()
                         mustIcebreak = false
@@ -449,7 +456,7 @@ class ConversationController(
                             // LLM 输出的 content 空/全是无效条目——如实告知重发；
                             // 属输出格式问题（非通道失败），不计 sendFailStreak
                             log.warn("send 的 content 无有效消息，未发出")
-                            actionLog.append("发送内容无效$why")
+                            logAct("发送内容无效", why)
                             sendFailureNote = "上一轮你 send 的 content 为空或无法识别任何有效消息，" +
                                 "没有发出任何内容——按 send 动作说明重新组织（JSON 数组，每条含 members）再发。"
                             mustIcebreak = false
@@ -464,9 +471,10 @@ class ConversationController(
                                 failDetail
                             }
                             log.warn("发送失败: {}", detail)
-                            actionLog.append(
-                                (if (sentContents.isEmpty()) "发送失败"
-                                else "发送部分失败（已发 ${sentContents.size}/${outgoing.size}）") + why
+                            logAct(
+                                if (sentContents.isEmpty()) "发送失败"
+                                else "发送部分失败（已发 ${sentContents.size}/${outgoing.size}）",
+                                why
                             )
                             sendFailureNote = buildSendFailureNote(detail, isGroup)
                             // 疑似禁言打点：会话列表渲染【疑似禁言 MM-dd】（发送成功自动清除）
@@ -480,7 +488,7 @@ class ConversationController(
                             }
                             if (sendFailStreak >= maxSendFailures) {
                                 // 病态护栏：连续失败达上限（如一直被禁言还反复试发）强制收尾
-                                actionLog.append("连续发送失败 $sendFailStreak 次，返回消息列表")
+                                logAct("连续发送失败 $sendFailStreak 次，返回消息列表")
                                 log.warn("连续发送失败 {} 次，强制离开会话", sendFailStreak)
                                 return
                             }
@@ -497,17 +505,17 @@ class ConversationController(
                         if (woken) {
                             // 唤醒可能是新消息、也可能是通知让位请求（requestSessionYield 复用同一等待）
                             val byYield = lucatBot.sessionYieldRequested
-                            val why = if (byYield) "被通知打断（让位）" else "新消息提前唤醒"
-                            log.info("停留计划 {}s，被{}", sec, why)
-                            actionLog.append("停留 ${sec}s（${if (byYield) "被通知打断" else "新消息提前唤醒"}）")
+                            val whyStay = if (byYield) "被通知打断" else "新消息提前唤醒"
+                            log.info("停留计划 {}s，被{}", sec, why.orEmpty())
+                            logAct("停留 ${sec}s（$whyStay）", why)
                         } else {
-                            actionLog.append("停留 ${sec}s$why")
+                            logAct("停留 ${sec}s", why)
                         }
                         false
                     } catch (e: InterruptedException) {
                         Thread.currentThread().interrupt()
                         log.info("停留 {}s 被中断，退出会话", sec)
-                        actionLog.append("停留被中断，退出")
+                        logAct("停留被中断，退出")
                         true
                     }
                     if (interrupted) return
@@ -516,14 +524,14 @@ class ConversationController(
 
                 ConversationAction.RETURN -> {
                     log.info("决策 return，离开会话")
-                    actionLog.append("返回消息列表$why")
+                    logAct("返回消息列表", why)
                     return
                 }
 
                 ConversationAction.LIST_TOOLS -> {
                     val query = decision.toolQuery
                     toolNotes.recordCatalog(query, toolCatalog.catalog(query))
-                    actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）$why")
+                    logAct("查看工具目录（${toolCatalog.count(query)} 个）", why)
                     log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
                 }
 
@@ -531,7 +539,7 @@ class ConversationController(
                     val toolName = decision.toolName.orEmpty()
                     val result = toolCatalog.invoke(toolName, decision.toolInput)
                     toolNotes.recordResult(toolName, result)
-                    actionLog.append("调用工具 $toolName$why")
+                    logAct("调用工具 $toolName", why)
                     log.info("tool {} → {} 字符", toolName, result.length)
                 }
 
@@ -540,9 +548,10 @@ class ConversationController(
                     val refs = decision.viewRefs.take(maxPromptImages)
                     val att = gatherImagesForRefs(imageSources, refs)
                     pendingViewImages = att
-                    actionLog.append(
-                        (if (att.missing.isEmpty()) "看图 ${att.images.size} 张"
-                        else "看图 ${att.images.size} 张（${att.missing.size} 张没拿到）") + why
+                    logAct(
+                        if (att.missing.isEmpty()) "看图 ${att.images.size} 张"
+                        else "看图 ${att.images.size} 张（${att.missing.size} 张没拿到）",
+                        why
                     )
                     log.info("view_images 请求 {} 张 → 附件 {}、缺失 {}", refs.size, att.images.size, att.missing)
                 }
@@ -603,23 +612,23 @@ class ConversationController(
         decision.todo_add?.let { content ->
             try {
                 todoService.add(content, conversationId)
-                actionLog.append("待办+：$content")
+                actionLog.append("待办+：$content", conversationId = conversationId)
             } catch (e: Exception) {
                 log.warn("todo_add 写入失败: {}", e.message)
-                actionLog.append("待办写入失败")
+                actionLog.append("待办写入失败", conversationId = conversationId)
             }
         }
         decision.todo_done?.let { ref ->
             try {
                 if (todoService.complete(ref)) {
-                    actionLog.append("待办完成：$ref")
+                    actionLog.append("待办完成：$ref", conversationId = conversationId)
                 } else {
                     log.warn("todo_done 未匹配到待办: {}", ref)
-                    actionLog.append("待办未匹配：$ref")
+                    actionLog.append("待办未匹配：$ref", conversationId = conversationId)
                 }
             } catch (e: Exception) {
                 log.warn("todo_done 处理失败: {}", e.message)
-                actionLog.append("待办完成失败")
+                actionLog.append("待办完成失败", conversationId = conversationId)
             }
         }
         return deferredRemember
@@ -629,10 +638,10 @@ class ConversationController(
     private fun writeRemember(note: String, conversationId: String) {
         try {
             memoryService.rememberEvent(MemorySubject.fromConversation(conversationId), note)
-            actionLog.append("记住：$note")
+            actionLog.append("记住：$note", conversationId = conversationId)
         } catch (e: Exception) {
             log.warn("remember 写入失败: {}", e.message)
-            actionLog.append("记忆写入失败")
+            actionLog.append("记忆写入失败", conversationId = conversationId)
         }
     }
 
