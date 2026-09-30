@@ -38,7 +38,9 @@ class NotificationDispatcher(
     private val memoryService: MemoryService,
     private val actionLog: ActionLog,
     /** 处于聊天界面时附带的当前聊天记录条数（判断打断价值用） */
-    private val currentChatLines: Int = 20
+    private val currentChatLines: Int = 20,
+    /** 跳转等锁上限（请求让位后等会话循环让出；测试传短值避免真等） */
+    private val gateWaitMs: Long = 15_000L
 ) {
     private val log = LoggerFactory.getLogger(NotificationDispatcher::class.java)
 
@@ -107,7 +109,7 @@ class NotificationDispatcher(
                         conversationType = if (isGroup) SessionPickType.GROUP else SessionPickType.PRIVATE,
                         targetId = targetId
                     )
-                    val tookOver = mainLoopController.tryRunSessionExclusive {
+                    val tookOver = mainLoopController.tryRunSessionExclusive(gateWaitMs) {
                         log.info("通知当场跳转：{}（{}）", senderName, convId)
                         actionLog.append("通知点开：${senderName}(${targetId})")
                         conversationController.run(pick)

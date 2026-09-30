@@ -136,6 +136,8 @@ class ConversationController(
         // 进入会话即消费未读并标已读（水位推进 → 重启后未读=水位之后的消息）
         lucatBot.consumeUnread(conversationId)
         readStateService.markRead(conversationId)
+        // 丢弃陈旧的让位请求（通知等锁超时后可能残留——不属于本会话，开跑前清掉）
+        lucatBot.consumeSessionYield()
 
         try {
             loop(conversationId, isGroup, proactive)
@@ -176,6 +178,19 @@ class ConversationController(
         var round = 0
 
         while (true) {
+            // 让位检查点：通知通道要当场跳转、当前会话占着执行锁 → 让出。
+            // 让位 = 退出本会话循环（释放锁给通知），并记「回到会话继续」的待办——
+            // **被禁言的会话除外**（列表已标【疑似禁言】，不会回去，记了也白记）
+            if (lucatBot.consumeSessionYield()) {
+                if (lucatBot.suspectedBanSince(conversationId) == null) {
+                    todoService.add("回到 $conversationId 继续刚才的对话（被新通知打断）", conversationId)
+                    actionLog.append("被新通知打断，切出（已记待办：回到 $conversationId 继续）")
+                } else {
+                    actionLog.append("被新通知打断，切出（禁言会话，不记返回待办）")
+                }
+                log.info("会话 {} 让位给通知跳转", conversationId)
+                return
+            }
             // 1) 把待插入的新消息以系统注释形式合并
             val inserts = lucatBot.drainPendingInserts(conversationId)
             if (inserts.isNotEmpty()) {
@@ -478,10 +493,13 @@ class ConversationController(
                     val sec = decision.staySeconds.coerceIn(1, 1800)
                     // 计时等待：当前会话在时间到之前来了新消息 → 立即唤醒（取消剩余计时），否则等满
                     val interrupted = try {
-                        val wokenByMessage = lucatBot.awaitPendingInsert(conversationId, sec * 1000L)
-                        if (wokenByMessage) {
-                            log.info("停留计划 {}s，被新消息提前唤醒", sec)
-                            actionLog.append("停留 ${sec}s（新消息提前唤醒）$why")
+                        val woken = lucatBot.awaitPendingInsert(conversationId, sec * 1000L)
+                        if (woken) {
+                            // 唤醒可能是新消息、也可能是通知让位请求（requestSessionYield 复用同一等待）
+                            val byYield = lucatBot.sessionYieldRequested
+                            val why = if (byYield) "被通知打断（让位）" else "新消息提前唤醒"
+                            log.info("停留计划 {}s，被{}", sec, why)
+                            actionLog.append("停留 ${sec}s（${if (byYield) "被通知打断" else "新消息提前唤醒"}）")
                         } else {
                             actionLog.append("停留 ${sec}s$why")
                         }
@@ -743,7 +761,8 @@ class ConversationController(
             "上一轮你发送的消息失败了：$detail——你**被禁言了**（retCode=$retCode），禁言解除前发不出任何消息。" +
                 "该消息没有发出去，也没有写入聊天记录，对方看不到。" +
                 "**禁言期间不要再输出 send**：重试、换个说法都会失败，只会连番撞墙；" +
-                "只在 return（离开会话）与 stay（等禁言过去）之间选。" +
+                "**直接 return 离开这个会话**——被禁言的会话里干等没意义（发不出消息也没进展），" +
+                "会话列表已标【疑似禁言】，有新未读或禁言过去自然会再进来。" +
                 "不要假装已经发送过；本提示在你成功发送或离开会话前每一轮都会重复。"
         } else {
             val guess = if (isGroup) "你在本群可能被禁言了，或网络/通道异常" else "发送通道可能异常（网络/对方限制）"

@@ -624,6 +624,60 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `session yields to notification and records return todo`() {
+        // stay 等待中收到通知跳转请求 → 唤醒 → 下轮检查点让位退出（不等满 60s），
+        // 并记「回到会话继续」的待办（之后选会话凭它回来）
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"stay","params":{"seconds":60}}"""
+        ))
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos-yield", ".json").apply { delete() }.absolutePath)
+        )
+        val (controller, lucatBot, _) = buildController(llm, todoService = todoService)
+
+        val runner = Thread { controller.run(SessionPick(SessionPickType.PRIVATE, "123")) }.apply { isDaemon = true }
+        runner.start()
+        // 等到第一轮决策已返回（STAY 即将/正在等待）
+        val deadline = System.currentTimeMillis() + 5_000
+        while (llm.prompts.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertTrue(llm.prompts.isNotEmpty(), "第一轮决策已发出")
+
+        lucatBot.requestSessionYield()
+        runner.join(8_000)
+
+        assertFalse(runner.isAlive, "让位退出，不等满 60s 停留")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "回到消息列表（锁已释放）")
+        assertTrue(todoService.pendingSummary().contains("回到 private:123 继续"),
+            "记了回到会话的待办：${todoService.pendingSummary()}")
+    }
+
+    @Test
+    fun `banned session yields without return todo`() {
+        // 被禁言的会话让位不记返回待办（列表已标【疑似禁言】，不会回去）
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"stay","params":{"seconds":60}}"""
+        ))
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos-banyield", ".json").apply { delete() }.absolutePath)
+        )
+        val (controller, lucatBot, _) = buildController(llm, todoService = todoService)
+        lucatBot.markSuspectedBan("private:123")
+
+        val runner = Thread { controller.run(SessionPick(SessionPickType.PRIVATE, "123")) }.apply { isDaemon = true }
+        runner.start()
+        val deadline = System.currentTimeMillis() + 5_000
+        while (llm.prompts.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertTrue(llm.prompts.isNotEmpty(), "第一轮决策已发出")
+
+        lucatBot.requestSessionYield()
+        runner.join(8_000)
+
+        assertFalse(runner.isAlive, "让位退出")
+        assertFalse(todoService.pendingSummary().contains("回到 private:123 继续"),
+            "禁言会话不记返回待办：${todoService.pendingSummary()}")
+    }
+
+    @Test
     fun `no new message constraint and anti recite are in prompt`() {
         // 实盘：停滞 12 分钟后凭记忆旧话题自发发了一条（还概括了自己的人设内容）
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
@@ -679,7 +733,9 @@ class ConversationControllerTest {
         assertTrue(secondPrompt.contains("被禁言了"), "应点名被禁言：$secondPrompt")
         assertTrue(secondPrompt.contains("没有发出去"), "应说明没发出")
         assertTrue(secondPrompt.contains("**禁言期间不要再输出 send**"), "禁言期间必须禁止再发：$secondPrompt")
-        assertTrue(secondPrompt.contains("return（离开会话）与 stay"), "只留 return/stay 两个选项：$secondPrompt")
+        assertTrue(secondPrompt.contains("**直接 return 离开这个会话**"),
+            "禁言 → 直接 return，不在会话里干等解禁：$secondPrompt")
+        assertTrue(secondPrompt.contains("干等没意义"), "点名等解禁是浪费：$secondPrompt")
         assertTrue(secondPrompt.contains("每一轮都会重复"), "提示成功前每轮重复（持续可见）：$secondPrompt")
         assertTrue(secondPrompt.contains("禁言解除前绝不输出 send"), "system 约束同步禁令：$secondPrompt")
         assertFalse(secondPrompt.contains("接下来自行决定"), "禁言时不再邀请自主决策重试：$secondPrompt")

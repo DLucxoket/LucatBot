@@ -108,13 +108,37 @@ class MainLoopController(
     }
 
     /**
-     * 通知通道侧：**当场跳转**执行一段会话（tryLock 不阻塞）
+     * 通知通道侧：**当场跳转**执行一段会话
      *
-     * @return false = 主循环正忙（正跑另一会话/选会话）——调用方降级
-     * （消息已入未读，下轮 pick 会高优先级看到它）
+     * tryLock 失败（主循环正跑另一会话/选会话）→ **请求当前会话让位**
+     * （[LucatBot.requestSessionYield]：置位 + 唤醒 STAY 等待——会话循环在
+     * 下一轮检查点记 todo 后退出释放锁），再等最多 [yieldWaitMs]；
+     * 仍拿不到（如主循环在选会话的 LLM 里、或被禁言会话让位中）→ 返回 false，
+     * 调用方降级入未读（下轮 pick 高优先级）。
+     *
+     * @return false = 没拿到会话执行权——调用方降级
      */
-    fun tryRunSessionExclusive(block: () -> Unit): Boolean {
-        if (!sessionGate.tryLock()) return false
+    // 注意：默认参数必须在 block 之前——Kotlin 尾随 lambda 绑定最后一个形参
+    fun tryRunSessionExclusive(
+        yieldWaitMs: Long = 15_000L,
+        block: () -> Unit
+    ): Boolean {
+        if (!sessionGate.tryLock()) {
+            lucatBot.requestSessionYield()
+            val acquired = try {
+                sessionGate.tryLock(yieldWaitMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                false
+            }
+            if (!acquired) return false
+            try {
+                block()
+            } finally {
+                sessionGate.unlock()
+            }
+            return true
+        }
         try {
             block()
         } finally {

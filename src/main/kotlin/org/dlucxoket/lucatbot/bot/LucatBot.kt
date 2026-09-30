@@ -122,6 +122,35 @@ class LucatBot {
      */
     private val pendingInsertLock = Object()
 
+    /**
+     * 会话让位请求（通知通道要当场跳转、而当前会话循环正占着执行锁）
+     *
+     * 置位 + 唤醒正在 STAY/延迟等待的会话循环 → 对方在**下一轮决策前的检查点
+     * 让位退出**（记 todo「回到会话继续」后 return，被禁言的会话除外），
+     * 释放执行锁给通知跳转。消费见 [consumeSessionYield]。
+     */
+    @Volatile
+    private var yieldRequested = false
+
+    /** 是否有未消费的让位请求（只读——open 类禁私有 setter，走私有字段+getter） */
+    val sessionYieldRequested: Boolean
+        get() = yieldRequested
+
+    /** 请求当前会话让位（通知线程调用）：置位并唤醒会话内的等待 */
+    fun requestSessionYield() {
+        yieldRequested = true
+        synchronized(pendingInsertLock) {
+            pendingInsertLock.notifyAll()
+        }
+    }
+
+    /** 消费让位请求（会话循环每轮检查点调用）：读取并清除 */
+    fun consumeSessionYield(): Boolean {
+        if (!yieldRequested) return false
+        yieldRequested = false
+        return true
+    }
+
     /** 当前 Shiro Bot 实例（用于发送消息） */
     @Volatile
     var shiroBot: com.mikuac.shiro.core.Bot? = null
@@ -299,6 +328,8 @@ class LucatBot {
         synchronized(pendingInsertLock) {
             while (true) {
                 if (pendingInsertQueue.any { it.conversationId == conversationId }) return true
+                // 让位请求也算唤醒（requestSessionYield 复用本等待；置位在 wait 前后都能醒）
+                if (yieldRequested) return true
                 val remaining = deadline - System.currentTimeMillis()
                 if (remaining <= 0) return false
                 pendingInsertLock.wait(remaining)

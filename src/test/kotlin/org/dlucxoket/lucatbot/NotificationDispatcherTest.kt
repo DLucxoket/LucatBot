@@ -39,8 +39,8 @@ import java.util.concurrent.TimeUnit
  */
 class NotificationDispatcherTest {
 
-    /** 通知决策给定 + 会话决策 return 的完整通道夹具 */
-    private class Fixture(notifyResponse: String) {
+    /** 通知决策给定 + 会话决策 return 的完整通道夹具（gateWaitMs 供测试控等锁时长） */
+    private class Fixture(notifyResponse: String, gateWaitMs: Long = 15_000L) {
         val lucatBot = LucatBot()
         val sessionManager = org.dlucxoket.lucatbot.model.session.SessionManager()
         val memoryService = MemoryService(
@@ -95,7 +95,8 @@ class NotificationDispatcherTest {
             todoService = todoService,
             chatHistoryService = chatHistoryService,
             memoryService = memoryService,
-            actionLog = actionLog
+            actionLog = actionLog,
+            gateWaitMs = gateWaitMs
         )
 
         fun privateEvent(content: String = "在吗") = FriendMessageEvent(
@@ -183,16 +184,16 @@ class NotificationDispatcherTest {
     }
 
     @Test
-    fun `open decision degrades to queued when main loop busy`() {
-        val f = Fixture("""{"action":"open"}""")
+    fun `open decision degrades to queued when gate never yields`() {
+        // 持锁方不是会话循环（不会响应让位）+ 等锁上限 200ms → 超时降级入未读
+        val f = Fixture("""{"action":"open"}""", gateWaitMs = 200L)
 
-        // 另一线程占住会话执行锁（模拟主循环正跑会话）
         val held = CountDownLatch(1)
         val release = CountDownLatch(1)
         val holder = Thread {
             f.mainLoopController.tryRunSessionExclusive {
                 held.countDown()
-                release.await(5, TimeUnit.SECONDS)
+                release.await(10, TimeUnit.SECONDS)
             }
         }.apply { isDaemon = true }
         holder.start()
@@ -200,9 +201,31 @@ class NotificationDispatcherTest {
 
         f.dispatcher.handle(f.privateEvent("急事"), "急事", isAtMe = true, isAtAll = false)
 
-        assertTrue(f.convLLM.prompts.isEmpty(), "主循环忙不并发跑第二个会话循环")
+        assertTrue(f.convLLM.prompts.isEmpty(), "等锁超时不并发跑第二个会话循环")
         assertTrue(f.actionLog.dump().contains("排队"), "降级入未读排队：${f.actionLog.dump()}")
         release.countDown()
+        holder.join(2_000)
+    }
+
+    @Test
+    fun `open waits for held gate to free then jumps`() {
+        // 持锁方短暂持有（模拟会话循环让位后释放）→ 通知等锁拿到 → 当场跳转成功
+        val f = Fixture("""{"action":"open"}""", gateWaitMs = 5_000L)
+
+        val held = CountDownLatch(1)
+        val holder = Thread {
+            f.mainLoopController.tryRunSessionExclusive {
+                held.countDown()
+                Thread.sleep(300)  // 让位/收尾耗时后释放锁
+            }
+        }.apply { isDaemon = true }
+        holder.start()
+        assertTrue(held.await(2, TimeUnit.SECONDS), "锁已被占")
+
+        f.dispatcher.handle(f.privateEvent("急事"), "急事", isAtMe = true, isAtAll = false)
+
+        assertEquals(1, f.convLLM.prompts.size, "等锁释放后当场跳转成功")
+        assertTrue(f.actionLog.dump().contains("通知点开"), "成功记录（非排队）：${f.actionLog.dump()}")
         holder.join(2_000)
     }
 
