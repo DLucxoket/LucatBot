@@ -128,11 +128,22 @@ data class ConversationDecision(
             ?: emptyList()
 
     companion object {
+        private val log = org.slf4j.LoggerFactory.getLogger(ConversationDecision::class.java)
+
         /** 解析失败兜底：RETURN，避免卡死在会话里 */
         val FALLBACK = ConversationDecision(
             action = ConversationAction.RETURN,
             reason = "解析失败兜底退出"
         )
+
+        /**
+         * 解析失败统一出口：记原文（截断）+ 返回兜底——实盘出现过
+         * 「解析失败兜底退出」却无从知道 LLM 到底说了什么，诊断全靠猜
+         */
+        private fun fail(raw: String, why: String): ConversationDecision {
+            log.warn("决策解析失败（{}）——LLM 原文: {}", why, raw.take(500))
+            return FALLBACK
+        }
 
         /** 连续 read_more 超限时的强制动作 */
         fun forceReturn(reason: String) = ConversationDecision(
@@ -144,8 +155,10 @@ data class ConversationDecision(
          * 从 LLM 输出的统一信封解析
          */
         fun parse(llmOutput: String): ConversationDecision {
-            val node = LlmJson.parseTree(llmOutput) ?: return FALLBACK
-            val actionText = node.get("action")?.asText()?.trim()?.lowercase() ?: return FALLBACK
+            val node = LlmJson.parseTree(llmOutput)
+                ?: return fail(llmOutput, "非 JSON（或 markdown 包裹外无可提取的 JSON）")
+            val actionText = node.get("action")?.asText()?.trim()?.lowercase()
+                ?: return fail(llmOutput, "缺 action 字段")
             val action = when (actionText) {
                 "read_more", "readmore" -> ConversationAction.READ_MORE
                 "send" -> ConversationAction.SEND
@@ -154,20 +167,20 @@ data class ConversationDecision(
                 "list_tools", "tools" -> ConversationAction.LIST_TOOLS
                 "tool", "call_tool" -> ConversationAction.CALL_TOOL
                 "view_images", "view", "view_image" -> ConversationAction.VIEW_IMAGES
-                else -> return FALLBACK
+                else -> return fail(llmOutput, "未知 action=$actionText")
             }
             val params = LlmJson.paramsOf(node)
             // tool 调用必须带工具名，否则视为无效决策兜底退出（与 send 缺正文同规则）
             if (action == ConversationAction.CALL_TOOL &&
                 (params["name"]?.toString()?.trim().isNullOrEmpty())
             ) {
-                return FALLBACK
+                return fail(llmOutput, "tool 动作缺 name")
             }
             // view_images 必须带 refs（看图请求没对象 = 无效决策）
             if (action == ConversationAction.VIEW_IMAGES &&
                 (params["refs"] as? List<*>)?.isNotEmpty() != true
             ) {
-                return FALLBACK
+                return fail(llmOutput, "view_images 缺 refs")
             }
             val reason = node.get("reason")?.takeIf { !it.isNull }?.asText()
             val remember = node.get("remember")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
@@ -175,7 +188,7 @@ data class ConversationDecision(
             val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
             // SEND 必须带正文，否则视为无效决策兜底退出
             if (action == ConversationAction.SEND && params["content"]?.toString().isNullOrBlank()) {
-                return FALLBACK
+                return fail(llmOutput, "send 动作缺 content")
             }
             return ConversationDecision(
                 action = action,

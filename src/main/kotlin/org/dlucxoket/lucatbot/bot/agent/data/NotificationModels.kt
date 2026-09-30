@@ -73,23 +73,33 @@ data class NotificationDecision(
         get() = params["content"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }
 
     companion object {
-        /** 解析失败/缺参兜底：保守无视 */
+        private val log = org.slf4j.LoggerFactory.getLogger(NotificationDecision::class.java)
+
+        /** 解析失败/缺参兜底：保守无视（消息仍在未读里不丢） */
         val FALLBACK = NotificationDecision(action = NotificationAction.IGNORE, reason = "解析失败兜底")
+
+        /** 兜底并记 LLM 原文（截断）——失败时能看到模型说了什么 */
+        private fun fail(raw: String, why: String): NotificationDecision {
+            log.warn("通知决策解析失败（{}）——LLM 原文: {}", why, raw.take(500))
+            return FALLBACK
+        }
 
         /** 从 LLM 输出的统一信封解析 */
         fun parse(llmOutput: String): NotificationDecision {
-            val node = LlmJson.parseTree(llmOutput) ?: return FALLBACK
-            val actionText = node.get("action")?.asText()?.trim()?.lowercase() ?: return FALLBACK
+            val node = LlmJson.parseTree(llmOutput)
+                ?: return fail(llmOutput, "非 JSON 或无可提取 JSON")
+            val actionText = node.get("action")?.asText()?.trim()?.lowercase()
+                ?: return fail(llmOutput, "缺 action 字段")
             val action = when (actionText) {
                 "ignore", "dismiss" -> NotificationAction.IGNORE
                 "todo" -> NotificationAction.TODO
                 "open", "jump" -> NotificationAction.OPEN
-                else -> return FALLBACK
+                else -> return fail(llmOutput, "未知 action=$actionText")
             }
             val params = LlmJson.paramsOf(node)
             // todo 必须带内容，否则视为无效 → 保守无视（消息仍在未读里不丢）
             if (action == NotificationAction.TODO && params["content"]?.toString().isNullOrBlank()) {
-                return FALLBACK
+                return fail(llmOutput, "todo 缺 content")
             }
             return NotificationDecision(
                 action = action,

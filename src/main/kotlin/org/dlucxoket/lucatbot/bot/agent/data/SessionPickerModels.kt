@@ -167,11 +167,22 @@ data class SessionDecision(
  * 任何动作（含兜底 idle）都携带，由编排层在执行 action 前落地。
  */
 object SessionDecisionParser {
+    private val log = org.slf4j.LoggerFactory.getLogger(SessionDecisionParser::class.java)
+
+    /**
+     * 兜底空闲并记 LLM 原文（截断）——解析失败时能看到模型到底说了什么，
+     * 不用对着「兜底空闲」猜
+     */
+    private fun idleLogged(raw: String, why: String, todoAdd: String? = null, todoDone: String? = null): SessionDecision {
+        log.warn("选会话决策解析失败（{}）——LLM 原文: {}", why, raw.take(500))
+        return idle(why, todoAdd, todoDone)
+    }
+
     fun parse(llmOutput: String): SessionDecision {
         val node = LlmJson.parseTree(llmOutput)
-            ?: return idle("解析失败兜底空闲")
+            ?: return idleLogged(llmOutput, "非 JSON 或无可提取 JSON，兜底空闲")
         val actionText = node.get("action")?.asText()?.trim()?.lowercase()
-            ?: return idle("缺 action 字段，兜底空闲")
+            ?: return idleLogged(llmOutput, "缺 action 字段，兜底空闲")
         val reason = node.get("reason")?.takeIf { !it.isNull }?.asText()
         val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
         val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
@@ -179,7 +190,7 @@ object SessionDecisionParser {
         return when (actionText) {
             "open_conversation" -> {
                 val pick = SessionPickParser.parse(llmOutput)
-                    ?: return idle("open_conversation 参数无效，兜底空闲", todoAdd, todoDone)
+                    ?: return idleLogged(llmOutput, "open_conversation 参数无效，兜底空闲", todoAdd, todoDone)
                 SessionDecision(
                     SessionAction.OPEN_CONVERSATION, pick = pick,
                     todoAdd = todoAdd, todoDone = todoDone, reason = reason
@@ -202,7 +213,7 @@ object SessionDecisionParser {
                 val params = LlmJson.paramsOf(node)
                 val name = params["name"]?.toString()?.trim()
                     ?.takeIf { it.isNotEmpty() && it != "null" }
-                    ?: return idle("工具名缺失，兜底空闲", todoAdd, todoDone)
+                    ?: return idleLogged(llmOutput, "工具名缺失，兜底空闲", todoAdd, todoDone)
                 @Suppress("UNCHECKED_CAST")
                 val input = params["input"] as? Map<String, Any?> ?: emptyMap()
                 SessionDecision(
@@ -211,7 +222,7 @@ object SessionDecisionParser {
                 )
             }
 
-            else -> idle("未知 action=$actionText，兜底空闲", todoAdd, todoDone)
+            else -> idleLogged(llmOutput, "未知 action=$actionText，兜底空闲", todoAdd, todoDone)
         }
     }
 
