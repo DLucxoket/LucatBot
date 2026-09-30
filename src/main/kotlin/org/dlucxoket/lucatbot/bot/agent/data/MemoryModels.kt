@@ -42,7 +42,8 @@ data class MemoryReflectRequest(
  * @param kind fact=客观事实、opinion=主观看法、event=发生过的事/约定
  * @param content 一句话描述
  * @param tags 检索标签（可选）
- * @param keywords 检索关键词（1~3 个核心名词/专名）——写入前拿它查库判重，
+ * @param keywords 检索关键词——**尽量写全**（核心名词/专名 + 同义词、别名、
+ *   口语说法、相关词，建议 5~10 个），写入前拿它查库判重、覆盖面越广命中越准；
  *   阶段1 必给；解析缺失时编排层退化用 content 查
  */
 data class MemoryReflectItem(
