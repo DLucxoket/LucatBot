@@ -51,7 +51,18 @@ dependencies {
 
 kotlin {
     compilerOptions {
+        // 钉死字节码版本：jvmTarget 缺省跟随编译进程 JDK 漂移——残留的
+        // Kotlin compile daemon（JDK 24）曾把 main 编成 class 68，而 test
+        // worker（JDK 21，只认 65）加载即 UnsupportedClassVersionError
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
         freeCompilerArgs.addAll("-Xjsr305=strict", "-Xannotation-default-target=param-property")
+    }
+}
+
+// Java 工具链与测试 JVM 同钉 21（与 kotlin jvmTarget 对齐，杜绝版本漂移）
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
