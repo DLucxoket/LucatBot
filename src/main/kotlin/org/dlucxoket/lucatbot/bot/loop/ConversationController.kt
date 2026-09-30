@@ -17,6 +17,7 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
+import org.dlucxoket.lucatbot.bot.tool.NapCatImageAction
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
 import org.dlucxoket.lucatbot.bot.tool.Tool
@@ -55,6 +56,11 @@ class ConversationController(
     private val toolCatalog: ToolCatalog = ToolCatalog(),
     /** 图片附件取材（图片通道）：地址 → data URI，带缓存 */
     private val imageResolver: org.dlucxoket.lucatbot.bot.llm.ImageResolver = org.dlucxoket.lucatbot.bot.llm.ImageResolver(),
+    /**
+     * 协议侧取图（NapCat `get_image`：ref → 本地路径/新鲜 URL，失败 null）——
+     * 图片必达链路的兜底来源。**依赖注入**：测试传替身即可覆盖救援/降级路径。
+     */
+    private val imageSource: (String) -> String? = { NapCatImageAction.localSource(lucatBot, it) },
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
     /** 退出会话时记忆整理读取的聊天记录条数 */
@@ -477,9 +483,12 @@ class ConversationController(
                 val img = imageResolver.resolve(url, ref, refreshSupplier(line.messageId, ref))
                 if (img != null) images += img else missing += ref
             }
-            // 占位符有、地址没有（旧数据/收集不全）→ 也算未能附上
+            // 占位符有、地址没有（旧数据/收集不全）→ 先走协议侧 get_image 救，救不回才算未能附上
             for (i in line.urls.size until refs.size) {
-                refs[i].takeIf { it.isNotBlank() }?.let { missing += it }
+                val ref = refs[i].takeIf { it.isNotBlank() } ?: continue
+                val img = runCatching { imageSource(ref) }.getOrNull()
+                    ?.let { imageResolver.resolve(it, ref) }
+                if (img != null) images += img else missing += ref
             }
         }
         return PromptAttachments(
@@ -489,23 +498,33 @@ class ConversationController(
     }
 
     /**
-     * 地址刷新器（4xx 时调用一次）：`get_msg` 现取消息原文，
-     * 按 file 标签取**新鲜 url**——QQ 图片地址短效（rkey 过期即
-     * `download url has expired`），只有现场重取才可能还在有效期内。
+     * 地址刷新器（4xx 时调用一次）——**按可靠性排序的两级链**：
      *
-     * @return null = 无从刷新（无 message_id / Bot 未连接）
+     * 1. `get_image`（NapCat 协议侧自下载 → 本地路径/新鲜 URL）——不依赖直链
+     *    rkey 有效期，实测 8/8 救回（见 方案记录.md 第一节），是必达路径
+     * 2. `get_msg` 现取消息原文按 file 标签取新鲜 url——get_image 失败时兜底
+     *
+     * 返回值可以是**本地路径**（ImageResolver.download 对非 http 源直读文件）。
+     *
+     * @return null = 无从刷新（Bot 未连接且两条路都失败）
      */
     private fun refreshSupplier(messageId: Long?, ref: String): (() -> String?)? {
-        val id = messageId ?: return null
-        val b = lucatBot.shiroBot ?: return null
+        val id = messageId
+        if (id == null && lucatBot.shiroBot == null) return null
         return {
-            try {
-                val cq = b.getMsg(id.toInt())?.data?.message
-                if (cq.isNullOrBlank()) null
-                else org.dlucxoket.lucatbot.model.message.CqParser.imageUrlOf(cq, ref)
-            } catch (e: Exception) {
-                log.debug("get_msg 刷新图片地址失败: {}", e.message)
-                null
+            val viaProtocol = runCatching { imageSource(ref) }.getOrNull()
+            if (viaProtocol != null) {
+                log.debug("图片协议侧取图成功: {}", ref)
+                viaProtocol
+            } else {
+                try {
+                    val cq = if (id != null) lucatBot.shiroBot?.getMsg(id.toInt())?.data?.message else null
+                    if (cq.isNullOrBlank()) null
+                    else org.dlucxoket.lucatbot.model.message.CqParser.imageUrlOf(cq, ref)
+                } catch (e: Exception) {
+                    log.debug("get_msg 刷新图片地址失败: {}", e.message)
+                    null
+                }
             }
         }
     }

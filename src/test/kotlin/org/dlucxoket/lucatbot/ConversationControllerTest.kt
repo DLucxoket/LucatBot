@@ -126,7 +126,9 @@ class ConversationControllerTest {
         /** 工具目录网关（list_tools / tool 集成测试用假工具目录） */
         toolCatalog: ToolCatalog = ToolCatalog(),
         /** 假聊天记录行（默认造 historyCount 条；图片附件等场景传自定义行） */
-        historyLines: List<HistoryMessageItem>? = null
+        historyLines: List<HistoryMessageItem>? = null,
+        /** 协议侧取图替身（NapCat get_image：ref → 本地路径/URL，null=救援失败） */
+        imageSource: (String) -> String? = { null }
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
@@ -146,6 +148,7 @@ class ConversationControllerTest {
             chatHistoryTool = historyTool,
             sendMessageTool = sendTool,
             toolCatalog = toolCatalog,
+            imageSource = imageSource,
             initialHistoryCount = 3
         )
         return Triple(controller, lucatBot, sendTool)
@@ -288,6 +291,76 @@ class ConversationControllerTest {
         assertEquals(2, llm.images.size, "窗口记录与新消息的图片都应成为附件：${llm.images}")
         assertEquals(listOf("hist.png", "live.png"), llm.images.map { it.ref }, "附件与占位符标签对应")
         assertTrue(llm.images.all { it.dataUri.startsWith("data:image/png;base64,") })
+    }
+
+    @Test
+    fun `protocol side get_image rescues expired image url`() {
+        // 实测：HTTP 三路全挂的 8 张图，NapCat get_image 8/8 救回（协议侧自下载）。
+        // 主地址 4xx（本地不存在文件即 404）→ 刷新链首站 imageSource → 本地路径直读
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
+        val rescued = File.createTempFile("rescued", ".png").apply { writeBytes(png) }
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(
+            llm,
+            historyLines = listOf(
+                HistoryMessageItem(
+                    sender = "用户A", content = "看这个[图片 file=dead.png]", timestamp = 1_000L,
+                    imageUrls = listOf(File("definitely-not-exist-xyz.png").absolutePath),
+                    messageId = 7L  // 有 id 才会构建刷新链
+                )
+            ),
+            imageSource = { ref -> if (ref == "dead.png") rescued.absolutePath else null }
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(1, llm.images.size, "协议侧救援成功的图应成为附件：${llm.images}")
+        assertEquals("dead.png", llm.images[0].ref)
+        assertFalse(llm.prompts[0].contains("（以下图片未能附上"), "救援成功就不该进缺失清单")
+    }
+
+    @Test
+    fun `protocol side get_image rescues placeholder without any url`() {
+        // 旧数据只有占位符没有地址 → 直接走协议侧取图，救不回才算未能附上
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
+        val rescued = File.createTempFile("rescued2", ".png").apply { writeBytes(png) }
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(
+            llm,
+            historyLines = listOf(
+                HistoryMessageItem(
+                    sender = "用户A", content = "老图[图片 file=old.png]", timestamp = 1_000L
+                    // 无 imageUrls（旧档常见）
+                )
+            ),
+            imageSource = { rescued.absolutePath }
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(1, llm.images.size, "无地址占位符应经协议侧救回：${llm.images}")
+        assertFalse(llm.prompts[0].contains("（以下图片未能附上"), "救回后不进缺失清单")
+    }
+
+    @Test
+    fun `protocol side failure degrades to missing list without breaking loop`() {
+        // 协议侧也救不回 → 如实进「未能附上」，会话链路照常（绝不因图片失败）
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, lucatBot, _) = buildController(
+            llm,
+            historyLines = listOf(
+                HistoryMessageItem(
+                    sender = "用户A", content = "看这个[图片 file=gone.png]", timestamp = 1_000L
+                )
+            ),
+            imageSource = { null }
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(llm.images.isEmpty())
+        assertTrue(llm.prompts[0].contains("（以下图片未能附上，你看不到它们的内容）：gone.png"), "救不回如实标注")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
     }
 
     @Test
