@@ -145,7 +145,9 @@ class ImageChannelTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `expired url refreshes once via supplier then caches under original`() {
+    fun `rescue runs before primary on expired url then caches under original`() {
+        // 救援优先：直链实盘到达即过期，先打直链每次都白失败一次——
+        // 有救援器时先救援，主地址一次都不碰；后续轮按原地址命中缓存
         val fresh = "https://x/fresh.png"
         var primary = 0
         var freshCalls = 0
@@ -160,13 +162,26 @@ class ImageChannelTest {
         })
 
         val img = resolver.resolve("https://x/old.png", "a.png", refresh = { fresh })
-        assertNotNull(img, "刷新成功应产出附件")
-        assertEquals(1, primary, "原地址一次")
+        assertNotNull(img, "救援成功应产出附件")
+        assertEquals(0, primary, "救援优先：过期直链一次都不打")
         assertEquals(1, freshCalls, "新鲜地址一次")
 
-        // 后续轮次按【原地址】命中缓存：不再下载也不再刷新
-        assertNotNull(resolver.resolve("https://x/old.png", "a.png", refresh = { throw AssertionError("缓存命中不应刷新") }))
-        assertEquals(2, primary + freshCalls, "总请求次数不变（原1 + 新1）")
+        // 后续轮次按【原地址】命中缓存：不再下载也不再救援
+        assertNotNull(resolver.resolve("https://x/old.png", "a.png", refresh = { throw AssertionError("缓存命中不应救援") }))
+        assertEquals(1, primary + freshCalls, "总请求次数不变（直链 0 + 新地址 1）")
+    }
+
+    @Test
+    fun `primary is tried only when rescue comes up empty`() {
+        // 救援无果（刷新器给不出地址）→ 直链作最后防线兜底一次
+        var primary = 0
+        val resolver = ImageResolver(fetchHttp = { _ ->
+            primary++
+            pngBytes  // 直链其实活着（NapCat 不可用等场景的兜底价值）
+        })
+        val img = resolver.resolve("https://x/only-direct.png", "o.png", refresh = { null })
+        assertNotNull(img, "救援无果时直链兜底成功：primary=$primary")
+        assertEquals(1, primary, "直链恰好一次")
     }
 
     @Test

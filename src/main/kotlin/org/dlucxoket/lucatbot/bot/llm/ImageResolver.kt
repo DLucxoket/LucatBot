@@ -20,11 +20,14 @@ private class BoundedLru<K, V>(private val maxSize: Int) : LinkedHashMap<K, V>(1
  * （谁发的、对应哪条记录由调用方处理）。
  *
  * - 来源：http(s) 下载（NapCat 的图片 url）或本地文件路径兜底
+ * - **救援优先**（调用方带 refresh 时）：先走不依赖过期直链的救援
+ *   （`get_image` 协议侧自下载 → `get_msg` 取新鲜 url），直链降级为救援无果时
+ *   的最后防线——实盘直链在消息到达时就已过期，先打直链每次都白失败一次
  * - **成功缓存**：同一地址只下载一次（有界 LRU，防反复拉同一张图烧带宽/内存）
  * - **负缓存**：HTTP 4xx（确定性拒绝）记入失败表、同一地址不再重复下载——
  *   否则每轮 prompt 都会打一次必败请求刷日志；网络抖动/5xx **不**进失败表，
- *   下轮照常重试。负缓存只封「下载这个 URL」：带刷新器的取材仍会做一次
- *   救援（**URL 死了 ≠ 救援试过**），救援结局确定（[rescueTried]）后才彻底跳过
+ *   下轮照常重试。负缓存只封「直链下载这个 URL」：带救援器的取材仍会救援
+ *   （**URL 死了 ≠ 救援试过**），救援结局确定（[rescueTried]）后才彻底跳过
  * - **请求头**：QQ 多媒体 CDN（multimedia.nt.qq.com.cn）缺 Referer/UA 直接 400，
  *   下载带浏览器 UA + `Referer: https://qq.com/`
  * - **体积闸**：超过 [maxBytes] 的图放弃（避免 data URI 撑爆请求体）
@@ -69,28 +72,35 @@ class ImageResolver(
      *
      * @param source 图片地址（http/https 或本地路径——入档时从消息段 url 收集）
      * @param ref    关联标识（占位符 file 标签，用于边界渲染 `[图片 <ref>]` 文本）
-     * @param refresh **地址刷新器**（可空）：主地址 4xx（QQ 图片 rkey 短效过期，
-     *   实测 `download url has expired`）时调用一次拿新鲜地址重试——
-     *   调用方用 `get_msg(message_id)` 现取消息原文、按 file 标签取新 url。
-     *   刷新只试一次；新地址同样被拒则一并进失败表，绝不循环。
+     * @param refresh **救援器**（可空）：不依赖过期直链的取图通道——调用方先走
+     *   NapCat `get_image` 协议侧自下载，再用 `get_msg` 按 file 标签取新鲜 url 兜底。
+     *   **救援优先**：实盘 QQ 图片直链在消息到达时就已过期（400 expired），有救援器
+     *   时先救援、直链降级为救援无果时的最后防线（NapCat 不可用等场景）；
+     *   救援只试一轮，结局确定后记 [rescueTried]，绝不循环。
      * @return null = 拿不到（地址不可达/超限/格式不明），调用方跳过附件
      */
     @Synchronized
     fun resolve(source: String, ref: String, refresh: (() -> String?)? = null): PromptImage? {
         val key = source.trim()
         if (key.isEmpty() || key.startsWith("base64")) return null
-        // 负缓存只封「下载这个 URL」：地址已死但救援（refresh）还没结局确定时，
-        // 带刷新器的取材仍走一次救援——否则预取链（不带 refresh）写入的负缓存
-        // 会把决策轮的必达救援短路掉，图片通道形同虚设（第四轮 OOP 审查 P1-2）
+        // 负缓存只封「直链下载这个 URL」：直链已死但救援还没结局确定时，
+        // 带救援器的取材仍走救援——「URL 死了 ≠ 救援试过」（第四轮 OOP 审查 P1-2）
         val dead = rejected.containsKey(key)
         if (dead && (refresh == null || rescueTried.containsKey(key))) return null
 
         cache[key]?.let { return it }
 
-        val fetched = if (dead && refresh != null) {
-            rescue(key, ref, refresh)
+        val fetched = if (refresh != null) {
+            // 救援优先：先走不依赖过期直链的协议侧救援，省掉一次注定 400 的直链请求
+            //（实盘到达即过期，先打直链每次都失败一次才转救援）
+            val rescued = if (rescueTried.containsKey(key)) null else rescue(key, ref, refresh)
+            when {
+                rescued != null -> rescued
+                dead -> null              // 直链已知死且救援无果：不再白打直链
+                else -> tryDownload(key, ref)  // 救援无果的最后防线（4xx 进负缓存）
+            }
         } else {
-            fetchOrRefresh(key, ref, refresh)
+            tryDownload(key, ref)  // 无救援器：直链现状（4xx 进负缓存即止）
         }
         val bytes = fetched ?: return null
         if (bytes.isEmpty()) return null
@@ -112,26 +122,27 @@ class ImageResolver(
     }
 
     /**
-     * 下载主地址；4xx（确定性拒绝）进负缓存后经 [rescue] 救援
+     * 直链下载（救援优先模式的**最后防线**与无救援器路径共用）
      *
-     * 失败分类：4xx = 确定性拒绝（进失败表，救援接手）；
+     * 失败分类：4xx = 确定性拒绝（进失败表——后续直链不再打）；
      * 其余（超时/5xx/异常）= 瞬时（不进失败表，下轮重试）。
+     * 本方法**不触发救援**——救援由 [resolve] 的救援优先分支负责，绝不循环。
      */
-    private fun fetchOrRefresh(key: String, ref: String, refresh: (() -> String?)?): ByteArray? {
+    private fun tryDownload(key: String, ref: String): ByteArray? {
         try {
             return download(key)
         } catch (e: HttpStatusException) {
-            if (e.code !in 400..499) {
+            if (e.code in 400..499) {
+                // 确定性拒绝：进失败表（响应体带上——报错文本能指出 400 原因）
+                rejected[key] = true
+                log.debug(
+                    "图片地址确定性失败（{}），记入失败表: {} body: {}",
+                    e.code, ref, e.body?.take(300)
+                )
+            } else {
                 log.debug("图片下载失败（瞬时，下轮可重试）status={} ref={}", e.code, ref)
-                return null
             }
-            // 确定性拒绝：原地址进失败表（响应体带上——报错文本能指出 400 原因）
-            rejected[key] = true
-            log.debug(
-                "图片地址确定性失败（{}），记入失败表: {} body: {}",
-                e.code, ref, e.body?.take(300)
-            )
-            return if (refresh == null) null else rescue(key, ref, refresh)
+            return null
         } catch (e: Exception) {
             log.debug("图片取材失败（瞬时，下轮可重试）source={}: {}", key, e.message)
             return null
@@ -139,7 +150,10 @@ class ImageResolver(
     }
 
     /**
-     * 救援：主地址确定性失效后经 [refresh] 拿新鲜地址（或本地路径）重试一次
+     * 救援：经 [refresh] 拿新鲜地址（或本地路径）取图——**有救援器时的首选路径**
+     *
+     * 不碰主地址直链（实盘直链到达即过期，先打纯属浪费）；调用方在救援无果时
+     * 再回退 [tryDownload] 直链兜底。
      *
      * **结局语义**：只有救援「结局已确定」（刷新给不出新鲜地址 / 新地址同样被拒）
      * 才记 [rescueTried]，后续轮次不再救援；刷新调用本身瞬时失败**不标记**，
