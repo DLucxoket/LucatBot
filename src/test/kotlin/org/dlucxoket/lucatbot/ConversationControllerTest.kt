@@ -79,12 +79,14 @@ class FakeChatHistoryTool(
 class FakeSendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
     val sent = mutableListOf<String>()
     var fail = false
+    /** 失败时返回的错误文案（默认通用失败；可配 retCode 等细节验证失败提示） */
+    var error = "mock fail"
     override val name = "FakeSendMessageTool"
     override val description = ""
     override val parameterHint = ""
     override val inputClass = SendMessageRequest::class.java
     override fun handle(input: SendMessageRequest): SendMessageResult {
-        if (fail) return SendMessageResult(success = false, error = "mock fail")
+        if (fail) return SendMessageResult(success = false, error = error)
         sent += input.content
         return SendMessageResult(success = true)
     }
@@ -316,12 +318,12 @@ class ConversationControllerTest {
 
         assertEquals(1, llm.images.size, "协议侧救援成功的图应成为附件：${llm.images}")
         assertEquals("dead.png", llm.images[0].ref)
-        assertFalse(llm.prompts[0].contains("（以下图片未能附上"), "救援成功就不该进缺失清单")
+        assertFalse(llm.prompts[0].contains("（以下图片加载失败"), "救援成功就不该进缺失清单")
     }
 
     @Test
     fun `protocol side get_image rescues placeholder without any url`() {
-        // 旧数据只有占位符没有地址 → 直接走协议侧取图，救不回才算未能附上
+        // 旧数据只有占位符没有地址 → 直接走协议侧取图，救不回才算加载失败
         val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
         val rescued = File.createTempFile("rescued2", ".png").apply { writeBytes(png) }
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
@@ -339,12 +341,12 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertEquals(1, llm.images.size, "无地址占位符应经协议侧救回：${llm.images}")
-        assertFalse(llm.prompts[0].contains("（以下图片未能附上"), "救回后不进缺失清单")
+        assertFalse(llm.prompts[0].contains("（以下图片加载失败"), "救回后不进缺失清单")
     }
 
     @Test
     fun `protocol side failure degrades to missing list without breaking loop`() {
-        // 协议侧也救不回 → 如实进「未能附上」，会话链路照常（绝不因图片失败）
+        // 协议侧也救不回 → 如实进「图片加载失败」，会话链路照常（绝不因图片失败）
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val (controller, lucatBot, _) = buildController(
             llm,
@@ -359,7 +361,7 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertTrue(llm.images.isEmpty())
-        assertTrue(llm.prompts[0].contains("（以下图片未能附上，你看不到它们的内容）：gone.png"), "救不回如实标注")
+        assertTrue(llm.prompts[0].contains("（以下图片加载失败，你没能看到内容）：gone.png"), "救不回如实标注")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
     }
 
@@ -377,7 +379,7 @@ class ConversationControllerTest {
 
         assertTrue(llm.images.isEmpty(), "拿不到的图跳过附件")
         val prompt = llm.prompts[0]
-        assertTrue(prompt.contains("未能附上"), "附件缺失的事实要如实进 prompt：$prompt")
+        assertTrue(prompt.contains("图片加载失败"), "附件缺失的事实要如实进 prompt：$prompt")
         assertTrue(prompt.contains("gone.png"), "缺失清单带文件标签：$prompt")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
     }
@@ -418,6 +420,36 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("图片附件这轮才成功附上"), "迟到附件不算新消息：$prompt")
         assertTrue(prompt.contains("都不是新消息") || prompt.contains("不是新消息"), "点明系统侧变化非新消息：$prompt")
         assertTrue(prompt.contains("对方不说话你就不说话"), "给出行为准则：$prompt")
+    }
+
+    @Test
+    fun `banned failure note explicitly says banned and lets llm decide`() {
+        // 被禁言（retCode=1200）→ 点名「被禁言了」，由 LLM 决策去留
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"hi"}}""",
+            """{"action":"return"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply { fail = true; error = "发送失败 status=failed retCode=1200（可能被禁言）" }
+        val (controller, lucatBot, _) = buildController(llm, sendTool = sendTool)
+
+        controller.run(SessionPick(SessionPickType.GROUP, "42"))
+
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "去留交给 LLM")
+        val secondPrompt = llm.prompts[1]
+        assertTrue(secondPrompt.contains("被禁言了"), "应点名被禁言：$secondPrompt")
+        assertTrue(secondPrompt.contains("接下来自行决定"), "应让智能体决策")
+        assertTrue(secondPrompt.contains("没有发出去"), "应说明没发出")
+    }
+
+    @Test
+    fun `prompt marks own lines as self not others`() {
+        // 实盘：把自己发的消息误认为别人发的 → 行格式规则点名「我」行是自己
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("是**你自己发出的话**"), "应点明「我」行是自己：$prompt")
+        assertTrue(prompt.contains("不要把它当成对方或群友的发言"), "应禁止误认：$prompt")
     }
 
     @Test
@@ -1136,7 +1168,7 @@ class ConversationAgentFallbackTest {
             ConversationRequest(missingImages = listOf("gone1.jpg", "gone2.jpg"))
         )
         val prompt = llm.prompts.single()
-        assertTrue(prompt.contains("（以下图片未能附上，你看不到它们的内容）：gone1.jpg、gone2.jpg"),
+        assertTrue(prompt.contains("（以下图片加载失败，你没能看到内容）：gone1.jpg、gone2.jpg"),
             "缺失清单进 user 消息：$prompt")
         assertTrue(prompt.contains("不要假装看过"), "禁令：不许装看过")
         assertTrue(prompt.contains("禁止编造图里有什么"), "点名禁止编造")

@@ -535,7 +535,12 @@ class ConversationController(
      * 明确点出「消息没发出也没入档」，避免 LLM 误以为已发送。
      */
     private fun buildSendFailureNote(detail: String, isGroup: Boolean): String {
-        val guess = if (isGroup) "你在本群可能被禁言了" else "发送通道可能异常（网络/对方限制）"
+        val banned = detail.contains("1200") || detail.contains("禁言")
+        val guess = when {
+            banned -> "你**被禁言了**，这段时间在群里发不出任何消息"
+            isGroup -> "你在本群可能被禁言了"
+            else -> "发送通道可能异常（网络/对方限制）"
+        }
         return "上一轮你发送的消息失败了：$detail——$guess。" +
             "该消息没有发出去，也没有写入聊天记录，对方看不到。" +
             "接下来自行决定：可以 stay 等一会儿重试、return 离开、或换个说法再发；不要假装已经发送过。"
