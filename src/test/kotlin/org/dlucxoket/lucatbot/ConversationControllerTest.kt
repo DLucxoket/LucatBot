@@ -459,6 +459,25 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `prompt nudges climbing when context feels incomplete and keeps climbing until complete`() {
+        // 感觉上文不全 → 更勤快爬楼；爬完仍不全 → 继续爬，补齐或翻到头才停
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        val prompt = llm.prompts[0]
+
+        assertTrue(prompt.contains("上文不全 → 先爬楼"), "应有专门的爬楼引导段：$prompt")
+        assertTrue(prompt.contains("这一轮就 read_more"), "有不全信号当轮即爬：$prompt")
+        assertTrue(prompt.contains("继续 read_more"), "爬完仍不全要继续爬：$prompt")
+        assertTrue(prompt.contains("直到补齐"), "爬到补齐为止：$prompt")
+        assertTrue(prompt.contains("已翻到最早消息时不要再 read_more"), "翻到头仍要收口：$prompt")
+        // 旧约束「不要无休止地反复爬楼」会压制勤快爬楼，已改为按不全信号判断
+        assertFalse(prompt.contains("不要无休止地反复爬楼"), "旧的保守约束应已移除：$prompt")
+        assertTrue(prompt.contains("觉得上文不全就用 read_more 往前翻"),
+            "视窗顶部提示同步引导：$prompt")
+    }
+
+    @Test
     fun `prompt clarifies resend means new content not verbatim repeat`() {
         // 实盘 4 组 MD5 全同的重复发送：prompt 侧双保险——system 禁令 + hint 语义引导，
         // 点明「再发」是新内容而非原样重发
