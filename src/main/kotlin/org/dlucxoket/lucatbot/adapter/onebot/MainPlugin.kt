@@ -50,6 +50,10 @@ internal class MainPlugin: BotPlugin() {
     @Autowired
     private lateinit var actionLog: ActionLog
 
+    /** 通知通道（外来私聊/@ 的横幅决策；取代旧的唤醒主循环路径） */
+    @Autowired
+    private lateinit var notificationDispatcher: org.dlucxoket.lucatbot.bot.loop.NotificationDispatcher
+
     /** 戳一戳旁路直接用的会话内决策智能体 */
     private val conversationAgent = ConversationAgent()
 
@@ -93,9 +97,10 @@ internal class MainPlugin: BotPlugin() {
             when (action) {
                 LucatBot.MessageAction.IGNORE -> return MESSAGE_IGNORE
                 LucatBot.MessageAction.NOTIFY -> {
-                    // @我/@全体：缩短空闲休眠（最少再等 30s）
-                    log.debug("收到 @我/@全体 消息，通知主循环唤醒")
-                    mainLoopController.notifyUrgent()
+                    // 通知通道（取代旧「@我 → 唤醒主循环」）：NotificationAgent
+                    // 当场判 无视 / 建待办 / 跳转会话；消息已入档+进未读
+                    log.debug("外来私聊/@ 消息，转入通知通道")
+                    notificationDispatcher.handle(modelEvent, content, isAtMe, isAtAll)
                 }
                 LucatBot.MessageAction.PROCESS -> {
                     // 当前会话消息已进待插入队列，由会话循环在决策间隙合并

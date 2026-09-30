@@ -133,6 +133,9 @@ class LucatBot {
             is State.ViewingConversations -> {
                 if (isAtMe || isAtAll) {
                     mood = mood.boost()  // 有人找我，心情好一点
+                    // 通知类消息同样入未读：通知通道判「无视」后，选会话侧
+                    // 仍要能看到它（判「跳转」进会话时 consumeUnread 自动清）
+                    addUnread(event, conversationId, isAtMe, isAtAll)
                     MessageAction.NOTIFY
                 } else {
                     addUnread(event, conversationId, isAtMe, isAtAll)
@@ -151,8 +154,9 @@ class LucatBot {
                     addPendingInsert(event, conversationId, isAtMe, isAtAll)
                     MessageAction.PROCESS
                 } else if (isAtMe || isAtAll) {
-                    // 其他会话但 @我/@全体 → 通知
+                    // 其他会话但 @我/@全体 → 通知通道（同样入未读，无视可见/跳转即清）
                     mood = mood.boost()
+                    addUnread(event, conversationId, isAtMe, isAtAll)
                     MessageAction.NOTIFY
                 } else {
                     // 其他会话普通消息 → 未读（被冷落，心情微降）

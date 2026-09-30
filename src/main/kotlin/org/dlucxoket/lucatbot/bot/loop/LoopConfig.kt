@@ -97,4 +97,28 @@ class LoopConfig {
         toolCatalog = toolCatalog,
         imageResolver = imageResolver
     )
+
+    /**
+     * 通知通道——外来私聊/@消息的「手机横幅」决策（取代 @我 → 唤醒主循环）。
+     *
+     * 依赖主循环的会话执行锁做当场跳转（主循环忙则降级入未读）。
+     */
+    @Bean
+    fun notificationDispatcher(
+        lucatBot: LucatBot,
+        conversationController: ConversationController,
+        mainLoopController: MainLoopController,
+        todoService: TodoService,
+        chatHistoryService: ChatHistoryService,
+        memoryService: MemoryService,
+        actionLog: ActionLog
+    ): NotificationDispatcher = NotificationDispatcher(
+        lucatBot = lucatBot,
+        conversationController = conversationController,
+        mainLoopController = mainLoopController,
+        todoService = todoService,
+        chatHistoryService = chatHistoryService,
+        memoryService = memoryService,
+        actionLog = actionLog
+    )
 }

@@ -88,37 +88,79 @@ class MainLoopController(
         notifyUrgent()
     }
 
+    /**
+     * 会话执行互斥锁——主循环的「选会话+跑会话」与通知通道的「当场跳转」串行
+     *
+     * 同一时刻只允许一个会话循环（两套 loop 并发会抢 drain 待插入、互改 state）。
+     * 空闲休眠与会话间歇在**锁外**，通知跳转才有机可乘；主循环跑会话期间
+     * 通知的 tryLock 失败 → 降级入未读（下轮 pick 高优先级处理）。
+     */
+    private val sessionGate = java.util.concurrent.locks.ReentrantLock()
+
+    /** 主循环侧：持锁执行选会话+会话段 */
+    private fun <T> withSessionGate(block: () -> T): T {
+        sessionGate.lock()
+        try {
+            return block()
+        } finally {
+            sessionGate.unlock()
+        }
+    }
+
+    /**
+     * 通知通道侧：**当场跳转**执行一段会话（tryLock 不阻塞）
+     *
+     * @return false = 主循环正忙（正跑另一会话/选会话）——调用方降级
+     * （消息已入未读，下轮 pick 会高优先级看到它）
+     */
+    fun tryRunSessionExclusive(block: () -> Unit): Boolean {
+        if (!sessionGate.tryLock()) return false
+        try {
+            block()
+        } finally {
+            sessionGate.unlock()
+        }
+        return true
+    }
+
     private fun runLoop() {
         var fromIdle = false
         while (running) {
             try {
                 when (val state = lucatBot.state) {
                     is LucatBot.State.ViewingConversations -> {
-                        val pick = messageListController.pickSession(fromIdleWake = fromIdle)
+                        // pick + 会话段持锁（与通知跳转互斥）；idle 休眠与会话间歇在锁外
+                        val pick = withSessionGate {
+                            val p = messageListController.pickSession(fromIdleWake = fromIdle)
+                            if (p != null) {
+                                if (p.conversationType ==
+                                    org.dlucxoket.lucatbot.bot.agent.data.SessionPickType.PROACTIVE
+                                ) {
+                                    actionLog.append("主动找人 ${p.targetId}")
+                                }
+                                conversationController.run(p)
+                            }
+                            p
+                        }
                         if (pick == null) {
                             enterIdleAndSleep()
                             fromIdle = true
                         } else {
                             fromIdle = false
-                            if (pick.conversationType ==
-                                org.dlucxoket.lucatbot.bot.agent.data.SessionPickType.PROACTIVE
-                            ) {
-                                actionLog.append("主动找人 ${pick.targetId}")
-                            }
-                            conversationController.run(pick)
-                            // 会话结束后回到消息列表，小憩一下模拟人
+                            // 会话结束后回到消息列表，小憩一下模拟人（锁外，通知可插入）
                             Thread.sleep(1_000L)
                         }
                     }
 
                     is LucatBot.State.Idle -> {
-                        // 从空闲状态恢复（异常路径）
-                        lucatBot.backToConversationList()
+                        // 从空闲状态恢复（异常路径）——锁内，避免与通知跳转互改 state
+                        withSessionGate { lucatBot.backToConversationList() }
                     }
 
                     is LucatBot.State.InConversation -> {
-                        // 会话循环由 ConversationController 串行驱动；顶层级见到此状态只做恢复
-                        lucatBot.backToConversationList()
+                        // 会话循环由会话执行锁串行驱动：读到此状态说明通知会话正跑
+                        // 或刚结束——持锁等它完成后再恢复，不并发踢掉别人的会话
+                        withSessionGate { lucatBot.backToConversationList() }
                     }
                 }
             } catch (e: InterruptedException) {
