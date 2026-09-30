@@ -52,15 +52,17 @@ class MemoryService(
      *
      * @param subject 记忆主体
      * @param opinion 看法描述
+     * @param tags 检索标签（落库成为关键词，见 tags/memory_tags 关联）
      */
-    fun rememberOpinion(subject: MemorySubject, opinion: String) {
+    fun rememberOpinion(subject: MemorySubject, opinion: String, tags: List<String> = emptyList()) {
         if (isDuplicate(subject, opinion)) return
         repository.save(
             MemoryItem(
                 userId = subject.id,
                 subjectType = subject.type,
                 type = MemoryItem.MemoryType.OPINION,
-                content = opinion
+                content = opinion,
+                tags = tags
             )
         )
         log.info("记住看法: subject=$subject, opinion=$opinion")
@@ -72,8 +74,14 @@ class MemoryService(
      * @param subject 记忆主体
      * @param event 事件描述
      * @param relatedUserIds 涉及的其他用户
+     * @param tags 检索标签（落库成为关键词，见 tags/memory_tags 关联）
      */
-    fun rememberEvent(subject: MemorySubject, event: String, relatedUserIds: List<Long> = emptyList()) {
+    fun rememberEvent(
+        subject: MemorySubject,
+        event: String,
+        relatedUserIds: List<Long> = emptyList(),
+        tags: List<String> = emptyList()
+    ) {
         if (isDuplicate(subject, event)) return
         repository.save(
             MemoryItem(
@@ -81,7 +89,8 @@ class MemoryService(
                 subjectType = subject.type,
                 type = MemoryItem.MemoryType.EVENT,
                 content = event,
-                relatedUserIds = relatedUserIds
+                relatedUserIds = relatedUserIds,
+                tags = tags
             )
         )
         log.info("记住事件: subject=$subject, event=$event")

@@ -157,17 +157,21 @@ class MemoryReflector(
 
             var written = 0
             for (item in toWrite) {
+                // keywords 转正落库：阶段1的检索关键词（5~10 个）与 tags 合并写入——
+                // 落库的关键词（tags/memory_tags）才是 search 命中的另一半，
+                // 只用来查库不入库等于让后续每条记忆的关键词都缺一半（tags 还常被 LLM 省略）
+                val effectiveTags = (item.tags + item.keywords).distinct()
                 when (item.kind.lowercase()) {
                     "fact" -> {
-                        memoryService.rememberFact(subject, item.content, item.tags)
+                        memoryService.rememberFact(subject, item.content, effectiveTags)
                         written++
                     }
                     "opinion" -> {
-                        memoryService.rememberOpinion(subject, item.content)
+                        memoryService.rememberOpinion(subject, item.content, effectiveTags)
                         written++
                     }
                     "event" -> {
-                        memoryService.rememberEvent(subject, item.content)
+                        memoryService.rememberEvent(subject, item.content, tags = effectiveTags)
                         written++
                     }
                     else -> log.debug("退出时记忆整理：跳过未知 kind={}（content={}）", item.kind, item.content)

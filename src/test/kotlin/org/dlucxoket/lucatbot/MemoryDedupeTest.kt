@@ -320,6 +320,31 @@ class MemoryDedupeTest {
             "复核判全重复 → 不新增")
     }
 
+    @Test
+    fun `reflector persists keywords as searchable tags for all kinds`() {
+        // 落库的关键词（tags）才是 search 命中的另一半——而 prompt 让 tags 可省略、
+        // LLM 常给空；keywords（必给 5~10 个）必须转正落库，且 opinion/event
+        // 的写入口原本连 tags 参数都没有（用户实盘：库里有些记忆没有关键词）
+        val llm = FakeLLM(mutableListOf(
+            """{"memories":[
+                {"kind":"fact","content":"他最喜欢蓝色","tags":["喜好"],"keywords":["蓝色","颜色","偏好"]},
+                {"kind":"opinion","content":"这人挺有趣","keywords":["性格","有趣"]},
+                {"kind":"event","content":"约好周五打球","keywords":["打球","约定","周五"]}
+            ]}"""
+        ))
+        val s = service()
+        reflectorWith(s, llm).reflect("private:40")
+
+        val items = s.getMemoriesOf(MemorySubject.user(40L)).associateBy { it.type }
+        assertEquals(3, items.size, "三类各写一条（零命中不触发复核）")
+        assertEquals(setOf("喜好", "蓝色", "颜色", "偏好"),
+            items[MemoryItem.MemoryType.FACT]!!.tags.toSet(), "fact = tags ∪ keywords")
+        assertEquals(setOf("性格", "有趣"),
+            items[MemoryItem.MemoryType.OPINION]!!.tags.toSet(), "opinion 无 tags 时 keywords 全落库")
+        assertEquals(setOf("打球", "约定", "周五"),
+            items[MemoryItem.MemoryType.EVENT]!!.tags.toSet(), "event 同样带关键词")
+    }
+
     // ------------------------------------------------------------------
     // 异步整理（不阻塞主循环下一步）
     // ------------------------------------------------------------------
