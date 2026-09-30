@@ -143,7 +143,12 @@ class ConversationControllerTest {
          * 记忆整理执行器——默认内联（同步）：生产是单线程 daemon 异步执行，
          * 测试同步化才能在 run() 返回后立刻断言写入结果、无竞态
          */
-        reflectExecutor: java.util.concurrent.Executor = java.util.concurrent.Executor { it.run() }
+        reflectExecutor: java.util.concurrent.Executor = java.util.concurrent.Executor { it.run() },
+        /**
+         * 分段发送条间延迟替身——记录每次等待时长（测试断言「只在条间计时、
+         * 第一条不等」而无需真睡）；返回 false = 未被新消息提前唤醒
+         */
+        segmentDelayWait: (conversationId: String, ms: Long) -> Boolean = { _, _ -> false }
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
@@ -165,7 +170,8 @@ class ConversationControllerTest {
             toolCatalog = toolCatalog,
             imageSource = imageSource,
             initialHistoryCount = 3,
-            reflectExecutor = reflectExecutor
+            reflectExecutor = reflectExecutor,
+            segmentDelayWait = segmentDelayWait
         )
         return Triple(controller, lucatBot, sendTool)
     }
@@ -503,6 +509,51 @@ class ConversationControllerTest {
         val secondPrompt = llm.prompts[1]
         assertTrue(secondPrompt.contains("无法识别任何有效消息"), "无效发送如实告知：$secondPrompt")
         assertTrue(secondPrompt.contains("重新组织"), "引导按格式重发：$secondPrompt")
+    }
+
+    @Test
+    fun `segment delay times only between messages and send window messages inject next round`() {
+        // delay 语义：上一条发完之后才开始计时（第一条没有上一条、不等）；
+        // 整个序列在同一轮决策内发完才进下一轮；发送窗口内到达的别人消息
+        // 进待插入队列、下一轮 drain 进 prompt（机器人自己发的由 Tool 逐条
+        // 写聊天记录，生产链路下一轮历史可读）
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":[
+                {"delay": 999, "members":[{"type":"text","text":"第一条"}]},
+                {"delay": 5, "members":[{"type":"text","text":"第二条"}]},
+                {"members":[{"type":"text","text":"第三条"}]}
+            ]}}""",
+            """{"action":"return"}"""
+        ))
+        val waits = mutableListOf<Long>()
+        var bot: LucatBot? = null
+        val (controller, lucatBot, sendTool) = buildController(
+            llm,
+            segmentDelayWait = { _, ms ->
+                waits += ms
+                // 模拟条间等待期间对方发来消息
+                bot?.enqueuePendingInsert(
+                    "private:123", 9L, "用户B", "等你的时候插一句",
+                    messageId = 99L
+                )
+                false
+            }
+        )
+        bot = lucatBot
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(listOf(5_000L), waits,
+            "只在条间计时一次：第一条 delay(999s) 不等（无上一条）、第三条无 delay 不等")
+        assertEquals(3, sendTool.requests.size, "序列在同一轮内发完（否则会多轮决策）")
+        assertEquals(2, llm.prompts.size, "发完才进入下一轮决策")
+
+        val nextPrompt = llm.prompts[1]
+        assertTrue(nextPrompt.contains("第一条") && nextPrompt.contains("第三条"),
+            "发送窗口内自己发的消息进下一轮 prompt（操作日志「回复：…」；聊天记录「我」行靠 Tool 写真实历史，生产链路）：$nextPrompt")
+        assertTrue(nextPrompt.contains("等你的时候插一句"),
+            "发送窗口内到达的别人消息注入下一轮 prompt：$nextPrompt")
+        assertTrue(nextPrompt.contains("（新消息）"), "以新消息注释形式呈现：$nextPrompt")
     }
 
     @Test

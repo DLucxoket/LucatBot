@@ -61,6 +61,13 @@ class ConversationController(
      * 图片必达链路的兜底来源。**依赖注入**：测试传替身即可覆盖救援/降级路径。
      */
     private val imageSource: (String) -> String? = { NapCatImageAction.localSource(lucatBot, it) },
+    /**
+     * 分段发送的条间等待（默认走 [LucatBot.awaitPendingInsert]：等满 delay 或被
+     * 新消息提前唤醒；InterruptedException 向上传播 → 退出会话）。**依赖注入**：
+     * 测试传记录型替身即可断言「只在条间计时、第一条不等」而无需真睡。
+     */
+    private val segmentDelayWait: (conversationId: String, ms: Long) -> Boolean =
+        { id, ms -> lucatBot.awaitPendingInsert(id, ms) },
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
     /** 退出会话时记忆整理读取的聊天记录条数 */
@@ -300,17 +307,22 @@ class ConversationController(
                     var failIndex = 0
                     var interrupted = false
                     for ((idx, msg) in outgoing.withIndex()) {
-                        val delayMs = (msg.delaySeconds * 1000).toLong().coerceIn(0L, 30_000L)
-                        if (delayMs > 0) {
-                            try {
-                                if (lucatBot.awaitPendingInsert(conversationId, delayMs)) {
-                                    log.info("第 {} 条发送前延迟被新消息提前唤醒（{}ms）", idx + 1, delayMs)
+                        // 条间打字延迟：**上一条发完之后才开始计时**（第一条没有
+                        // 上一条、不等）——同步顺序执行天然保证计时起点=上一条
+                        // 发送完成；等满或被新消息提前唤醒后发本条
+                        if (idx > 0) {
+                            val delayMs = (msg.delaySeconds * 1000).toLong().coerceIn(0L, 30_000L)
+                            if (delayMs > 0) {
+                                try {
+                                    if (segmentDelayWait(conversationId, delayMs)) {
+                                        log.info("第 {} 条发送前条间延迟被新消息提前唤醒（{}ms）", idx + 1, delayMs)
+                                    }
+                                } catch (e: InterruptedException) {
+                                    Thread.currentThread().interrupt()
+                                    log.info("分段发送延迟被中断，退出会话")
+                                    interrupted = true
+                                    break
                                 }
-                            } catch (e: InterruptedException) {
-                                Thread.currentThread().interrupt()
-                                log.info("分段发送延迟被中断，退出会话")
-                                interrupted = true
-                                break
                             }
                         }
                         val sendResult = sendMessageTool.processObject(
@@ -326,20 +338,25 @@ class ConversationController(
                             failIndex = idx + 1
                             break
                         }
-                        sentContents += msg.summarize()
+                        val sentText = msg.summarize()
+                        sentContents += sentText
+                        // 每条成功即写短期记忆（与 Tool 写聊天记录同步——分段发送
+                        // 期间的每条机器人消息都立即可查，不等整个序列发完）
+                        sessionManager.addMessage(
+                            conversationId, lucatBot.persona.name, sentText, isBot = true
+                        )
                     }
+                    // 全部条目发完（或中途失败/中断）才进入下一轮决策——
+                    // 这期间到达的别人消息在待插入队列里，下一轮 drain 进 prompt
 
                     // 已发部分统一记账（部分成功也算发出去了——Tool 已写聊天记录，
-                    // 这里补短期记忆/正则提取/操作日志/justSent）
+                    // 这里补正则提取/操作日志/justSent；短期记忆已逐条写）
                     if (sentContents.isNotEmpty()) {
                         val sentText = sentContents.joinToString(" ")
                         sendFailStreak = 0
                         sendFailureNote = null
                         // 发送成功 → 才写延后的 remember（「我回复了xxx」此时才属实）
                         deferredRemember?.let { writeRemember(it, conversationId) }
-                        sessionManager.addMessage(
-                            conversationId, lucatBot.persona.name, sentText, isBot = true
-                        )
                         // 只从「对方最后一条消息」提取记忆：recentLines 末尾可能是
                         // 机器人自己的回复，把 bot 的话喂给正则会误记成用户的长期 FACT
                         val lastUser = recentLines.lastOrNull { !it.isMe }
