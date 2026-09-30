@@ -488,6 +488,23 @@ class ConversationController(
      * 没收到的图当成看过（实盘出过：零附件却声称「盯着图看了半天」）。
      */
     private fun gatherPromptImages(sources: List<ImageLine>): PromptAttachments {
+        // 模型已确认不支持识图（进程级记忆，不持久化）→ 不给图片内容：
+        // 跳过下载与救援（省资源），refs 如实进缺失清单，交给 prompt 现有约束链
+        // （「加载失败你确实没看到 → 按上下文回应」）
+        if (org.dlucxoket.lucatbot.bot.llm.VisionSupport.unsupported()) {
+            val missing = linkedSetOf<String>()
+            for (line in sources) {
+                val refs = org.dlucxoket.lucatbot.model.message.AssetMarkers.refs(line.content)
+                line.urls.forEachIndexed { i, url ->
+                    missing += refs.getOrNull(i)?.takeIf { it.isNotBlank() }
+                        ?: url.substringAfterLast('/').substringBefore('?')
+                }
+                for (i in line.urls.size until refs.size) {
+                    refs[i].takeIf { it.isNotBlank() }?.let { missing += it }
+                }
+            }
+            return PromptAttachments(emptyList(), missing.toList().takeLast(maxPromptImages))
+        }
         val images = mutableListOf<org.dlucxoket.lucatbot.bot.llm.PromptImage>()
         val missing = linkedSetOf<String>()
         for (line in sources) {

@@ -136,11 +136,18 @@ class OpenAIAPI: LLM {
      * `[图片 <ref>]`（与聊天记录占位符同名，供模型对应是哪条消息的图）→ 图片
      * （`image_url`，data URI）。空图片列表等价于两参 [ask]。
      *
-     * **降级保护**：端点不支持图片（4xx/内容类型拒绝等）时退回纯文本重试一次
-     * ——图片通道绝不让整条会话链路失败（warn 一次，行为等同接入前）。
+     * **能力记忆**（[VisionSupport]，进程级不持久化）：确认不支持识图后
+     * 直接走纯文本——不再每轮带图试探（一次运行失败一次就够）；带图成功则
+     * 记住支持。
+     *
+     * **降级保护**：带图请求失败一律退回纯文本重试一次——图片通道绝不让
+     * 整条会话链路失败；其中命中「不支持识图」类错误才记为 UNSUPPORTED，
+     * 网络超时/429/鉴权错误不误记。
      */
     override fun ask(systemPrompt: String, question: String, images: List<PromptImage>): String {
         if (images.isEmpty()) return ask(systemPrompt, question)
+        // 已确认模型不支持识图：不给图片内容，直接纯文本（省一次必败请求与重试延迟）
+        if (VisionSupport.unsupported()) return ask(systemPrompt, question)
         return try {
             val contents = userContents(question, images)
             val messages = if (systemPrompt.isNotBlank()) {
@@ -149,9 +156,16 @@ class OpenAIAPI: LLM {
                 listOf(UserMessage(contents))
             }
             val chatRequest = ChatRequest.builder().messages(messages).build()
-            createModel().chat(chatRequest).aiMessage().text()
+            val result = createModel().chat(chatRequest).aiMessage().text()
+            VisionSupport.markSupported()
+            result
         } catch (e: Exception) {
-            log.warn("带图片请求失败（{}），降级为纯文本重试", e.message)
+            if (VisionSupport.looksLikeVisionUnsupported(e.message)) {
+                VisionSupport.markUnsupported()
+                log.warn("模型不支持识图（{}）——本次运行已记住，后续请求不再携带图片", e.message)
+            } else {
+                log.warn("带图片请求失败（{}），降级为纯文本重试", e.message)
+            }
             ask(systemPrompt, question)
         }
     }

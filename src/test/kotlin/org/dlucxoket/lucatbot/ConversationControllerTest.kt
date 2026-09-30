@@ -891,6 +891,37 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `vision unsupported skips fetching images and reports refs as missing`() {
+        // 模型确认不支持识图（进程级记忆）→ 不给图片内容：不下载、不救援；
+        // 若跳过失效，本地存在的 png 会被 resolve/救援救回（llm.images 非空）→ 断言失败
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
+        val img = File.createTempFile("nosight", ".png").apply { writeBytes(png) }
+        val (controller, lucatBot, _) = buildController(
+            llm,
+            historyLines = listOf(
+                HistoryMessageItem(
+                    sender = "用户A", content = "看这个[图片 file=live.png]",
+                    timestamp = 1_000L, imageUrls = listOf(img.absolutePath)
+                )
+            ),
+            imageSource = { img.absolutePath }  // 救援替身同样可救回——跳过必须在取材之前
+        )
+        try {
+            org.dlucxoket.lucatbot.bot.llm.VisionSupport.markUnsupported()
+            controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        } finally {
+            org.dlucxoket.lucatbot.bot.llm.VisionSupport.reset()
+        }
+
+        assertTrue(llm.images.isEmpty(), "不支持识图时不携带任何图片内容")
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("图片加载失败") && prompt.contains("live.png"),
+            "refs 如实进缺失清单（复用现有约束链）：$prompt")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
+    }
+
+    @Test
     fun `memory reflect garbage does not affect exit flow`() {
         val decisionLLM = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val memoryLLM = FakeLLM(mutableListOf("totally not json"))
