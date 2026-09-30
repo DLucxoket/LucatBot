@@ -47,21 +47,25 @@ object VisionSupport {
      * 判断带图请求的失败是否属于「模型不支持识图」（纯函数）
      *
      * 两个条件同时满足才算：
-     * 1. 消息提到图片/多模态（image / multimodal / vision / 图片 / image_url…）
-     * 2. 带拒绝语义（not support / invalid / 400 / 422 / bad request / 不支持…）
+     * 1. 消息提到图片/多模态（image / multimodal / vision / vlm / 图片…）
+     * 2. 带拒绝语义（not support / not a vlm / text-only / invalid /
+     *    400 / 422 / bad request / 业务码 20041 / 不支持…）
      *
-     * 常见真实文案均覆盖：
-     * - `Invalid content type. image_url is not supported`
+     * 覆盖的真实文案：
+     * - 硅基流动：`{"code":20041,"message":"The model is not a VLM
+     *   (Vision Language Model). Please use text-only prompts."}`（实盘）
+     * - OpenAI 系：`Invalid content type. image_url is not supported`
      * - `This model does not support image input`
      * - `400 - multimodal content is not supported`
      */
     fun looksLikeVisionUnsupported(message: String?): Boolean {
         val m = message?.lowercase() ?: return false
-        val mentionsImage = listOf("image", "multimodal", "vision", "图片").any { m.contains(it) }
+        val mentionsImage = listOf("image", "multimodal", "vision", "vlm", "图片").any { m.contains(it) }
         if (!mentionsImage) return false
         return listOf(
-            "not support", "unsupported", "invalid", "bad request",
-            "400", "422", "not allowed", "不支持", "拒绝"
+            "not support", "unsupported", "not a vlm", "text-only", "text only",
+            "invalid", "bad request", "400", "422", "20041", "not allowed",
+            "不支持", "拒绝"
         ).any { m.contains(it) }
     }
 }

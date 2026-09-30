@@ -20,6 +20,10 @@ class VisionSupportTest {
 
     @Test
     fun `detects typical unsupported vision rejections`() {
+        // 实盘（硅基流动 Qwen3-8B，2026-09-30 日志原文）：业务码 20041、无 HTTP 码
+        assertTrue(VisionSupport.looksLikeVisionUnsupported(
+            """{"code":20041,"message":"The model is not a VLM (Vision Language Model). Please use text-only prompts.","data":null}"""),
+            "硅基流动实盘文案必须命中——漏了它会每轮白带图")
         assertTrue(VisionSupport.looksLikeVisionUnsupported(
             "Error code: 400 - {'error': {'message': 'Invalid content type. image_url is not supported'}}"),
             "OpenAI 系标准文案")
