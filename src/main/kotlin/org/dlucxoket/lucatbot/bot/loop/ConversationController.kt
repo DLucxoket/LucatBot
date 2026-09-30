@@ -63,6 +63,8 @@ class ConversationController(
     private val maxReadMoreWithInserts: Int = 3,
     /** 连续发送失败上限（病态护栏：如被禁言还反复试发，达上限强制收尾） */
     private val maxSendFailures: Int = 3,
+    /** 复读拦截的最短内容（字符）——短于它不拦（真人也连说「嗯嗯」「哈哈」） */
+    private val repeatGuardMinLength: Int = 6,
     /** 每轮 prompt 的图片附件上限（请求体体积闸；取最近的几张） */
     private val maxPromptImages: Int = 6
 ) {
@@ -275,6 +277,26 @@ class ConversationController(
 
                 ConversationAction.SEND -> {
                     val content = decision.content.orEmpty()
+                    if (isVerbatimRepeat(conversationId, content)) {
+                        // 复读拦截（代码护栏）：与上一条自己发言逐字相同 → 不发出。
+                        // 实盘 4 组 MD5 全同的重复发送全走这条路（hint 递原文 + 弱模型照抄），
+                        // 沿用连续计数：反复复读 3 次同样强制收尾，防死循环
+                        sendFailStreak++
+                        actionLog.append("拦截复读（与上一条发言相同，未发送）")
+                        log.info("拦截复读发送: {}", content.take(60))
+                        sendFailureNote = buildRepeatNote()
+                        mustIcebreak = false
+                        if (deferredRemember != null) {
+                            // 没发出去就不能记「我回复了…」——与发送失败同语义丢弃
+                            log.info("复读被拦截，丢弃随发送写入的记忆: {}", deferredRemember)
+                        }
+                        if (sendFailStreak >= maxSendFailures) {
+                            actionLog.append("连续发送被拦 $sendFailStreak 次，返回消息列表")
+                            log.warn("连续复读被拦 {} 次，强制离开会话", sendFailStreak)
+                            return
+                        }
+                        continue
+                    }
                     val sendResult = sendMessageTool.processObject(
                         SendMessageRequest(conversationId = conversationId, content = content)
                     )
@@ -546,11 +568,11 @@ class ConversationController(
         }
         if (justSent != null && newNotes.isEmpty()) {
             parts += if (noReplyRounds >= 2) {
-                "你已连续 $noReplyRounds 轮行动但始终没有任何新消息（最后发送：「$justSent」）。" +
+                "你已连续 $noReplyRounds 轮行动但始终没有任何新消息（最后发送：${quoteForHint(justSent)}）。" +
                     "继续自言自语会很奇怪：可以 return 离开、stay 继续等，或确有必要再发。" +
                     "当前心情：${lucatBot.mood.toPrompt()}"
             } else {
-                "你刚发送了「$justSent」，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
+                "你刚发送了${quoteForHint(justSent)}，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
             }
             // 实盘出过：停滞 12 分钟后凭记忆里的旧话题自发续话（编造对方没问过的内容）
             parts += "注意：没有新消息时不要凭记忆续话或自创话题——那不算「有必要再发」。"
@@ -564,6 +586,45 @@ class ConversationController(
             SessionPickType.PRIVATE, SessionPickType.PROACTIVE -> "private:${pick.targetId}"
         }
     }
+
+    /**
+     * hint 里引用「你刚发送了什么」的**截断形式**——只给前 20 字 +「…」
+     *
+     * 实盘（09-30）：hint 把整句原文（306 字）与历史行「我：…」同时喂给模型，
+     * 弱模型顺手复制重发——群聊 3~8 秒内逐字双发 3 组、睡眠唤醒后 8 小时逐字
+     * 重发 1 组（MD5 全同）。点到为止足以唤起记忆，整句喂回去就是递刀。
+     * 完整原文本来就在聊天记录「我」行里，模型要复述可自行回看。
+     */
+    private fun quoteForHint(sent: String): String =
+        if (sent.length <= 20) "「$sent」" else "「${sent.take(20)}…」"
+
+    /**
+     * 复读判定：[content] 是否与本会话**上一条自己的发言**逐字相同
+     *
+     * 归一化只做 trim——不做模糊匹配，避免误伤「哈哈哈」→「哈哈哈啊」这类
+     * 正常递进。短句（< [repeatGuardMinLength] 字）不拦：真人也会连说两句
+     * 「嗯嗯」「哈哈」，拦了反而假；实盘 4 组重复全是 ≥9 字的整段内容。
+     *
+     * 实盘证据（09-30）：群聊 3~8 秒内逐字双发 3 组、睡眠唤醒后 8 小时逐字
+     * 重发 1 组，MD5 全同——源头是 hint 把原文整句喂回模型。
+     *
+     * @return true = 判定为复读，调用方不得发送
+     */
+    private fun isVerbatimRepeat(conversationId: String, content: String): Boolean {
+        val mine = content.trim()
+        if (mine.length < repeatGuardMinLength) return false
+        val last = chatHistoryService.lastBotMessage(conversationId) ?: return false
+        return last.content.trim() == mine
+    }
+
+    /**
+     * 复读被拦截后的下一轮说明（复用 [sendFailureNote] 注入通道）：
+     * 点明「没发出」+「你刚想复读自己」+ 该做什么，防止模型下一轮换个皮再抄。
+     */
+    private fun buildRepeatNote(): String =
+        "你上一轮想发的内容与你上一条发言**完全相同**（复读），已拦截、没有发出去。" +
+            "自己发过的话不要原样再发——多数情况说明没有新内容可说，直接 return 离开或 stay；" +
+            "确实要重复强调就换个说法。"
 
     private fun pickName(conversationId: String): String {
         return sessionManager.getLastMessage(conversationId)?.sender

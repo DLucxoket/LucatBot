@@ -348,6 +348,100 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `verbatim repeat of own last message is blocked with repeat note`() {
+        // 实盘 4 组 MD5 全同的重复发送：与上一条自己发言逐字相同 → 代码拦截不发出，
+        // 下一轮 prompt 说明「复读被拦、没发出去」
+        val chatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-rpt", ".json").absolutePath)
+        )
+        chatHistoryService.recordBotReply("private:123", "蹲到了，快演示演示", 99L)
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"蹲到了，快演示演示"}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, lucatBot, sendTool) = buildController(llm, chatHistoryService = chatHistoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(sendTool.sent.isEmpty(), "逐字复读必须被拦截、不发送")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "拦截后照常走完循环")
+        val nextPrompt = llm.prompts[1]
+        assertTrue(nextPrompt.contains("完全相同"), "下一轮应点明复读被拦：$nextPrompt")
+        assertTrue(nextPrompt.contains("已拦截"), "应说明消息没发出去：$nextPrompt")
+    }
+
+    @Test
+    fun `short repeat of own message is allowed`() {
+        // 短句不拦：真人也会连说两句「嗯嗯」——拦了反而假
+        val chatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-rpt2", ".json").absolutePath)
+        )
+        chatHistoryService.recordBotReply("private:123", "嗯嗯", 99L)
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"嗯嗯"}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, sendTool) = buildController(llm, chatHistoryService = chatHistoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(listOf("嗯嗯"), sendTool.sent, "短句复读不拦")
+    }
+
+    @Test
+    fun `repeated blocked repeats hit cap and force return`() {
+        // 每轮都复读 → 拦截计数达 maxSendFailures(3) 强制收尾，防死循环烧 LLM
+        val chatHistoryService = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-rpt3", ".json").absolutePath)
+        )
+        chatHistoryService.recordBotReply("private:123", "这条消息会一直被复读", 99L)
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"这条消息会一直被复读"}}""",
+            """{"action":"send","params":{"content":"这条消息会一直被复读"}}""",
+            """{"action":"send","params":{"content":"这条消息会一直被复读"}}""",
+            """{"action":"send","params":{"content":"这条消息会一直被复读"}}"""
+        ))
+        val (controller, lucatBot, sendTool) = buildController(llm, chatHistoryService = chatHistoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(sendTool.sent.isEmpty(), "三次复读全被拦截")
+        assertEquals(3, llm.prompts.size, "拦截 3 次达上限强制返回，第 4 条脚本不消费")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
+    }
+
+    @Test
+    fun `prompt forbids verbatim repeat of own messages`() {
+        // 复读禁令进 system prompt（模型侧）+ 代码拦截（护栏侧）双保险
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        assertTrue(llm.prompts[0].contains("绝不原样复读自己发过的内容"), "复读禁令应进 prompt")
+        assertTrue(llm.prompts[0].contains("代码会直接拦截"), "应告知有代码护栏")
+    }
+
+    @Test
+    fun `justSent hint quotes only first 20 chars of long content`() {
+        // hint 递原文是复读根源：整句喂回去 → 弱模型照抄。截断到 20 字 + …
+        val longContent = "这是一条明显超过二十个字符的超长消息内容用来验证截断"
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"$longContent"}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val nextPrompt = llm.prompts[1]
+        val expectedQuote = "「${longContent.take(20)}…」"
+        assertTrue(nextPrompt.contains(expectedQuote), "hint 应只引用前 20 字：$nextPrompt")
+        assertTrue(
+            !nextPrompt.contains("你刚发送了「$longContent」"),
+            "hint 不应整句喂回原文"
+        )
+    }
+
+    @Test
     fun `conversation prompt injects global memory overview with subject labels`() {
         // 不再只注入当前会话：主体记忆 + 其他会话记忆（带主体标签）+ 搜索引导
         val memoryService = MemoryService(
