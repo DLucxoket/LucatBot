@@ -3,6 +3,9 @@ package org.dlucxoket.lucatbot.bot.loop
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
 import org.springframework.stereotype.Component
 
 /**
@@ -10,6 +13,14 @@ import org.springframework.stereotype.Component
  *
  * 状态流转：消息列表 → 选会话/空闲；会话中 → 返回消息列表。
  * 固定脚本调专用 Agent + Tool（SessionPickerAgent / ConversationAgent），无自由调度链路。
+ *
+ * **启动时机**：Spring 容器就绪即启动（[startOnReady]），不再等首条消息——
+ * 原设计由 MainPlugin.onAnyMessage 首次触发，WS 连接后若一直无消息主循环
+ * 永不启动，ProactiveScheduler（依赖 isIdleSleeping）也叫不醒它，主动找人
+ * 在安静时段完全失效（实盘：connected 与主循环启动隔 86 秒）。
+ * 冷启动通常无未读 → 首轮 pick 后直接 idle；shiroBot 未绑定时发送有
+ * 「Bot 未绑定」护栏。`mainloop.auto-start=false` 可关闭（Spring 冒烟测试用，
+ * 避免测试上下文里真起循环打 LLM）。
  */
 @Component
 class MainLoopController(
@@ -19,6 +30,10 @@ class MainLoopController(
     private val actionLog: ActionLog
 ) {
     private val log = LoggerFactory.getLogger(MainLoopController::class.java)
+
+    /** 就绪自启开关（yaml `mainloop.auto-start`，默认 true；测试上下文关闭） */
+    @Value("\${mainloop.auto-start:true}")
+    private var autoStart: Boolean = true
 
     private val lock = Object()
     @Volatile private var wakeRequested = false
@@ -31,7 +46,20 @@ class MainLoopController(
         get() = lucatBot.state is LucatBot.State.Idle && running
 
     /**
-     * 启动主循环（幂等；由 MainPlugin 首次绑定 Bot 时调用）
+     * Spring 容器就绪即启动主循环（幂等；[MainPlugin] 首条消息处的调用保留作双保险）
+     */
+    @EventListener(ApplicationReadyEvent::class)
+    fun startOnReady() {
+        if (!autoStart) {
+            log.debug("mainloop.auto-start=false，跳过就绪自启")
+            return
+        }
+        log.info("Spring 就绪，启动主循环（不等首条消息）")
+        startIfNeeded()
+    }
+
+    /**
+     * 启动主循环（幂等；由 MainPlugin 首条消息处调用作双保险）
      */
     @Synchronized
     fun startIfNeeded() {
