@@ -180,6 +180,22 @@ class MySqlStorageSmokeTest {
     }
 
     @Test
+    fun `read state watermark roundtrip`() = withDbOrSkip {
+        // 第六张表 read_state：建表（init 清单）+ upsert 覆盖 + 全量读
+        val storage = initOrSkip()
+        val repo = org.dlucxoket.lucatbot.bot.storage.mysql.MySqlReadStateRepository(storage)
+
+        repo.markRead("private:9911", 5_000L)
+        assertEquals(5_000L, repo.lastReadAt("private:9911"), "水位写入（DATETIME(3) 毫秒往返）")
+        repo.markRead("private:9911", 9_000L)
+        assertEquals(9_000L, repo.lastReadAt("private:9911"), "upsert 覆盖旧水位")
+        assertTrue(repo.allLastRead().containsKey("private:9911"), "全量读含该会话")
+        assertNull(repo.lastReadAt("private:0000"), "无记录 → null")
+
+        storage.update("DELETE FROM read_state WHERE conversation_id = ?", "private:9911")
+    }
+
+    @Test
     fun `todo roundtrip`() = withDbOrSkip {
         val storage = initOrSkip()
         clean(storage)

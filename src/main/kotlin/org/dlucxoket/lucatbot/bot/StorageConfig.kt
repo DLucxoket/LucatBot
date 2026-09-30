@@ -76,6 +76,15 @@ class StorageConfig(
     fun todoRepository(): TodoRepository =
         if (useMySql) MySqlTodoRepository(mysql) else JsonFileTodoRepository()
 
+    /** 已读水位（第六张表/data/read-state.json）——重启后据此重建未读 */
+    @Bean(destroyMethod = "shutdown")
+    fun readStateRepository(): org.dlucxoket.lucatbot.bot.chathistory.ReadStateRepository =
+        if (useMySql) {
+            org.dlucxoket.lucatbot.bot.storage.mysql.MySqlReadStateRepository(mysql)
+        } else {
+            org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository()
+        }
+
     /**
      * 启动清理：把聊天记录存储层的孪生双份行合并为一条（仅 mysql 模式）
      *

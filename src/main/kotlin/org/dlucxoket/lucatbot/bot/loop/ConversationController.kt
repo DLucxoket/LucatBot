@@ -77,6 +77,17 @@ class ConversationController(
      * 测试注入内联执行器（`Executor { it.run() }`）变同步，断言无竞态
      */
     private val reflectExecutor: java.util.concurrent.Executor = MemoryReflector.asyncExecutor(),
+    /**
+     * 已读水位——进会话即标已读（消费未读后写水位，重启据此重建未读）；
+     * 默认 temp 文件（测试不污染 data/），生产由 LoopConfig 显式注入真 bean
+     */
+    private val readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService =
+        org.dlucxoket.lucatbot.bot.readstate.ReadStateService(
+            chatHistoryService,
+            org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
+                java.io.File.createTempFile("read-state", ".json").apply { delete() }.absolutePath
+            )
+        ),
     /** 连续 read_more 且一直有新消息插入的打断轮数 */
     private val maxReadMoreWithInserts: Int = 3,
     /** 连续发送失败上限（病态护栏：如被禁言还反复试发，达上限强制收尾） */
@@ -122,8 +133,9 @@ class ConversationController(
         log.info("进入会话 {}（{}{}）", conversationId,
             if (isGroup) "群聊" else "私聊", if (proactive) "，主动发起" else "")
 
-        // 进入会话即消费未读并标已读
+        // 进入会话即消费未读并标已读（水位推进 → 重启后未读=水位之后的消息）
         lucatBot.consumeUnread(conversationId)
+        readStateService.markRead(conversationId)
 
         try {
             loop(conversationId, isGroup, proactive)
@@ -133,7 +145,8 @@ class ConversationController(
             // loop() 抛异常则跳过整理，直接走 finally
             reflector.reflectAsync(conversationId)
         } finally {
-            actionLog.append("返回消息列表")
+            // 「返回消息列表」由 RETURN 分支带 reason 记入（本处不再重复）；
+            // 中断/异常退出路径各自在中断点补记，异常有 log.error 兜底
             lucatBot.backToConversationList()
         }
     }
@@ -293,7 +306,6 @@ class ConversationController(
             // 防病态值资源护栏：连续工具步达硬上限 → 强制收尾（与 stay 钳制同性质，
             // 不限制正常工具使用，只兜底「无限烧 token」的病态路径）
             if (isToolStep && toolNotes.exceeded()) {
-                actionLog.append("连续工具步超限，返回消息列表")
                 decision = ConversationDecision.forceReturn("连续工具步已达上限，先结束本轮工具使用")
             }
             // 非工具决策（含被强制的 return/send）→ 重置连续工具步计数
@@ -302,6 +314,11 @@ class ConversationController(
             ) {
                 toolNotes.resetStreak()
             }
+
+            // 本轮决策的简短动机（reason ≤30 字）——**挂进操作日志的动作行**：
+            // 「操作本身 + 内心动机」同一条进全局 ActionLog（跨会话、滚动窗口、
+            // 持久化），LLM 下一轮能看到自己刚做了什么、为什么做；不额外加行省 token
+            val why = decision.reason?.trim()?.take(30)?.let { "（$it）" }.orEmpty()
 
             val hadInserts = newNotes.isNotEmpty()
 
@@ -314,7 +331,7 @@ class ConversationController(
                     if (!hadInserts) {
                         lucatBot.mood = lucatBot.mood.decay()
                     }
-                    actionLog.append("爬楼 $count 条")
+                    actionLog.append("爬楼 $count 条$why")
                     log.info("read_more → 累计读取 {}", historyCount)
                 }
 
@@ -340,6 +357,7 @@ class ConversationController(
                                 } catch (e: InterruptedException) {
                                     Thread.currentThread().interrupt()
                                     log.info("分段发送延迟被中断，退出会话")
+                                    actionLog.append("发送延迟被中断，退出")
                                     interrupted = true
                                     break
                                 }
@@ -401,7 +419,7 @@ class ConversationController(
                                 )
                             }
                         }
-                        actionLog.append("回复：$sentText")
+                        actionLog.append("回复：$sentText$why")
                         log.info("发送成功 {} 条：{}", sentContents.size, sentText.take(80))
                         lucatBot.mood = lucatBot.mood.boost()
                         mustIcebreak = false
@@ -416,7 +434,7 @@ class ConversationController(
                             // LLM 输出的 content 空/全是无效条目——如实告知重发；
                             // 属输出格式问题（非通道失败），不计 sendFailStreak
                             log.warn("send 的 content 无有效消息，未发出")
-                            actionLog.append("发送内容无效")
+                            actionLog.append("发送内容无效$why")
                             sendFailureNote = "上一轮你 send 的 content 为空或无法识别任何有效消息，" +
                                 "没有发出任何内容——按 send 动作说明重新组织（JSON 数组，每条含 members）再发。"
                             mustIcebreak = false
@@ -432,8 +450,8 @@ class ConversationController(
                             }
                             log.warn("发送失败: {}", detail)
                             actionLog.append(
-                                if (sentContents.isEmpty()) "发送失败"
-                                else "发送部分失败（已发 ${sentContents.size}/${outgoing.size}）"
+                                (if (sentContents.isEmpty()) "发送失败"
+                                else "发送部分失败（已发 ${sentContents.size}/${outgoing.size}）") + why
                             )
                             sendFailureNote = buildSendFailureNote(detail, isGroup)
                             // 疑似禁言打点：会话列表渲染【疑似禁言 MM-dd】（发送成功自动清除）
@@ -463,14 +481,15 @@ class ConversationController(
                         val wokenByMessage = lucatBot.awaitPendingInsert(conversationId, sec * 1000L)
                         if (wokenByMessage) {
                             log.info("停留计划 {}s，被新消息提前唤醒", sec)
-                            actionLog.append("停留 ${sec}s（新消息提前唤醒）")
+                            actionLog.append("停留 ${sec}s（新消息提前唤醒）$why")
                         } else {
-                            actionLog.append("停留 ${sec}s")
+                            actionLog.append("停留 ${sec}s$why")
                         }
                         false
                     } catch (e: InterruptedException) {
                         Thread.currentThread().interrupt()
                         log.info("停留 {}s 被中断，退出会话", sec)
+                        actionLog.append("停留被中断，退出")
                         true
                     }
                     if (interrupted) return
@@ -479,13 +498,14 @@ class ConversationController(
 
                 ConversationAction.RETURN -> {
                     log.info("决策 return，离开会话")
+                    actionLog.append("返回消息列表$why")
                     return
                 }
 
                 ConversationAction.LIST_TOOLS -> {
                     val query = decision.toolQuery
                     toolNotes.recordCatalog(query, toolCatalog.catalog(query))
-                    actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）")
+                    actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）$why")
                     log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
                 }
 
@@ -493,7 +513,7 @@ class ConversationController(
                     val toolName = decision.toolName.orEmpty()
                     val result = toolCatalog.invoke(toolName, decision.toolInput)
                     toolNotes.recordResult(toolName, result)
-                    actionLog.append("调用工具 $toolName")
+                    actionLog.append("调用工具 $toolName$why")
                     log.info("tool {} → {} 字符", toolName, result.length)
                 }
 
@@ -503,8 +523,8 @@ class ConversationController(
                     val att = gatherImagesForRefs(imageSources, refs)
                     pendingViewImages = att
                     actionLog.append(
-                        if (att.missing.isEmpty()) "看图 ${att.images.size} 张"
-                        else "看图 ${att.images.size} 张（${att.missing.size} 张没拿到）"
+                        (if (att.missing.isEmpty()) "看图 ${att.images.size} 张"
+                        else "看图 ${att.images.size} 张（${att.missing.size} 张没拿到）") + why
                     )
                     log.info("view_images 请求 {} 张 → 附件 {}、缺失 {}", refs.size, att.images.size, att.missing)
                 }

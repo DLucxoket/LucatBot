@@ -42,6 +42,18 @@ interface ChatHistoryRepository {
     fun lastBotSpeakTime(conversationId: String): Long?
 
     /**
+     * 该会话最后一条消息的时间（epoch ms；无记录 → null）——
+     * **已读水位写入源**：进会话即把水位推到 max(sent_at)（进会话=看到全部历史）
+     */
+    fun maxTimestamp(conversationId: String): Long?
+
+    /**
+     * 该会话在 [since]（不含）之后的消息（按时间升序）——
+     * **已读水位重建未读**：重启后把水位之后的消息灌回未读队列
+     */
+    fun findByConversationSince(conversationId: String, since: Long): List<ChatMessageRecord>
+
+    /**
      * 删除一条记录（启动清理时移除被并掉的孪生行；不存在则为无操作）
      */
     fun delete(id: String)

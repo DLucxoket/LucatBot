@@ -524,6 +524,12 @@ class MySqlStorage(private val config: MySqlConfig) {
                 done BOOLEAN NOT NULL DEFAULT FALSE,
                 conversation_id VARCHAR(64) NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS read_state (
+                conversation_id VARCHAR(64) NOT NULL PRIMARY KEY,
+                last_read_at DATETIME(3) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent()
         )
     }

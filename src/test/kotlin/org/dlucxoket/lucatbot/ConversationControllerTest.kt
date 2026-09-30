@@ -148,7 +148,17 @@ class ConversationControllerTest {
          * 分段发送条间延迟替身——记录每次等待时长（测试断言「只在条间计时、
          * 第一条不等」而无需真睡）；返回 false = 未被新消息提前唤醒
          */
-        segmentDelayWait: (conversationId: String, ms: Long) -> Boolean = { _, _ -> false }
+        segmentDelayWait: (conversationId: String, ms: Long) -> Boolean = { _, _ -> false },
+        /**
+         * 已读水位服务——默认 temp 仓库（测试不污染 data/）；水位用例显式传自己的实例
+         */
+        readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService =
+            org.dlucxoket.lucatbot.bot.readstate.ReadStateService(
+                chatHistoryService,
+                org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
+                    File.createTempFile("read-state-t", ".json").apply { delete() }.absolutePath
+                )
+            )
     ): Triple<ConversationController, LucatBot, FakeSendMessageTool> {
         val lucatBot = LucatBot()
         val sessionManager = SessionManager()
@@ -171,7 +181,8 @@ class ConversationControllerTest {
             imageSource = imageSource,
             initialHistoryCount = 3,
             reflectExecutor = reflectExecutor,
-            segmentDelayWait = segmentDelayWait
+            segmentDelayWait = segmentDelayWait,
+            readStateService = readStateService
         )
         return Triple(controller, lucatBot, sendTool)
     }
@@ -569,6 +580,47 @@ class ConversationControllerTest {
             "点名无新消息约束不适用于待办任务：$prompt")
         assertTrue(prompt.contains("这类委托**必须**写"),
             "受托类任务必须 todo_add（否则任务只留记忆、转身就忘）：$prompt")
+    }
+
+    @Test
+    fun `decision reason rides action log line into next prompt`() {
+        // 调用链进全局操作日志：操作本身 + 简短动机**同一条**（不额外加行省 token），
+        // 下一轮 prompt 的「你最近的操作」可见自己刚做了什么、为什么
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"在吗"},"reason":"先打个招呼试探"}""",
+            """{"action":"return","reason":"他没回，先撤"}"""
+        ))
+        val (controller, _, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        // 第二轮 prompt 注入的操作日志含第一轮的「操作+动机」
+        assertTrue(llm.prompts[1].contains("回复：在吗（先打个招呼试探）"),
+            "操作与 reason 同行注入：${llm.prompts[1]}")
+        // return 的 reason 随「返回消息列表（…）」入日志，下一次列表/会话 prompt 可见
+        //（本会话已结束无下一轮 prompt，由持久化+下轮注入覆盖，此处不重复断言）
+    }
+
+    @Test
+    fun `entering conversation advances read watermark`() {
+        // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
+        val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
+            File.createTempFile("read-state-int", ".json").apply { delete() }.absolutePath
+        )
+        val chat = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-wm", ".json").absolutePath)
+        )
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(
+            llm,
+            chatHistoryService = chat,
+            readStateService = org.dlucxoket.lucatbot.bot.readstate.ReadStateService(chat, repo)
+        )
+
+        chat.recordHistoryMessage("private:123", 5L, "用户A", "hi", timestamp = 7_000L, isFromBot = false)
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(7_000L, repo.lastReadAt("private:123"), "水位推进到会话最后一条消息时间")
     }
 
     @Test

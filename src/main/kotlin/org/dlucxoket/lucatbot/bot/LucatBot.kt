@@ -241,6 +241,18 @@ class LucatBot {
         return messages
     }
 
+    /**
+     * 重启后灌回持久化的未读（ReadStateService 按已读水位重建）——
+     * 仅当队列为空时写入，不覆盖运行中实时积累的未读
+     */
+    fun restoreUnread(messages: List<UnreadMessage>) {
+        if (messages.isEmpty()) return
+        if (unreadQueue.isNotEmpty()) {
+            return  // 已有实时未读，重建结果丢弃（幂等重建本身由 Service 管）
+        }
+        unreadQueue.addAll(messages)
+    }
+
     /** 窥视未读消息（不清除） */
     fun peekUnread(conversationId: String): List<UnreadMessage> {
         return unreadQueue.filter { it.conversationId == conversationId }

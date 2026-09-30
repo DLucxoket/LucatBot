@@ -27,8 +27,12 @@ import org.springframework.context.annotation.Configuration
 @Configuration
 class LoopConfig {
 
-    @Bean
-    fun actionLog(): ActionLog = ActionLog()
+    /**
+     * 全局滚动操作日志——**持久化**（重启后仍记得干过什么）；
+     * 纯内存参数版（filePath=null）供测试构造
+     */
+    @Bean(destroyMethod = "shutdown")
+    fun actionLog(): ActionLog = ActionLog(filePath = "data/action-log.json")
 
     /**
      * 图片取材器——**全上下文共享的单例**（图片通道）。
@@ -83,7 +87,8 @@ class LoopConfig {
         todoService: TodoService,
         actionLog: ActionLog,
         toolCatalog: ToolCatalog,
-        imageResolver: ImageResolver
+        imageResolver: ImageResolver,
+        readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService
     ): ConversationController = ConversationController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
@@ -95,7 +100,8 @@ class LoopConfig {
         chatHistoryTool = ChatHistoryTool as Tool<ChatHistoryRequest, ChatHistoryResult>,
         sendMessageTool = SendMessageTool as Tool<SendMessageRequest, SendMessageResult>,
         toolCatalog = toolCatalog,
-        imageResolver = imageResolver
+        imageResolver = imageResolver,
+        readStateService = readStateService
     )
 
     /**

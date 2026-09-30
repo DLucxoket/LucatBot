@@ -54,6 +54,10 @@ internal class MainPlugin: BotPlugin() {
     @Autowired
     private lateinit var notificationDispatcher: org.dlucxoket.lucatbot.bot.loop.NotificationDispatcher
 
+    /** 已读水位——首条消息（selfId 已知）时按水位重建重启前的未读 */
+    @Autowired
+    private lateinit var readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService
+
     /** 戳一戳旁路直接用的会话内决策智能体 */
     private val conversationAgent = ConversationAgent()
 
@@ -63,6 +67,8 @@ internal class MainPlugin: BotPlugin() {
             lucatBot.shiroBot = bot
             bindTools(bot)
             mainLoopController.startIfNeeded()
+            // 重启后首次拿到 selfId：按已读水位把重启前没看的消息灌回未读（幂等）
+            readStateService.rebuildUnread(lucatBot, bot.selfId)
 
             // 戳一戳检测（模拟真人被戳了会戳回去）
             if (isPoke(event)) {

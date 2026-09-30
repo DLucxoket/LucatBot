@@ -239,6 +239,13 @@ class ChatHistoryService(
         repository.lastBotSpeakTime(conversationId)
 
     /**
+     * 该会话在 [since]（不含）之后的消息（按时间升序）——
+     * **已读水位重建未读**（ReadStateService 用）：重启后水位之后的即未读
+     */
+    fun findSince(conversationId: String, since: Long): List<ChatMessageRecord> =
+        repository.findByConversationSince(conversationId, since)
+
+    /**
      * 持久化
      */
     fun flush() {
