@@ -139,6 +139,9 @@ class ConversationController(
         // 发送失败状态（注入下一轮 prompt 通知 LLM，由它决定去留；连续失败达上限强制收尾）
         var sendFailureNote: String? = null
         var sendFailStreak = 0
+        // 按需供图：上一轮 view_images 的取图成果——仅附到紧跟的下一轮然后丢弃
+        //（每轮全新请求、图内容看过即在当轮决策里消化，不重复携带省 token）
+        var pendingViewImages: PromptAttachments? = null
         // 工具上下文（本会话内累积：状态计数/目录/执行结果，随每轮注入 prompt）
         val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 12)
         // 会话身份：群名进会话时查一次（网络调用不每轮打）；私聊每轮现算（见 buildIdentity）
@@ -199,14 +202,14 @@ class ConversationController(
                 "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]$idTag：${resolveRef(it.content)}"
             }
 
-            // 图片通道：窗口记录 + 本轮新消息 → data URI 附件 + 「未能附上」清单
-            // （上限内取最近的；同址缓存、4xx 负缓存、过期地址用 get_msg 刷新重试一次
-            //  ——QQ 图片地址短效；附件失败绝不影响会话链路。
-            //  缺失清单把附件失败的事实如实交给 LLM——防「一张没收到却装看过图」的幻觉）
-            val attachments = gatherPromptImages(
-                historyResult.messages.map { ImageLine(it.content, it.imageUrls.orEmpty(), it.messageId) } +
-                    inserts.map { ImageLine(it.content, it.imageUrls.orEmpty(), it.messageId) }
-            )
+            // 图片通道（**按需供图**）：默认不取材、不附内容——只有上一轮
+            // view_images 请求过才把成果附到本轮（一次性）；未请求时附件与
+            // 缺失清单皆空，省下载也省 token
+            val imageSources = historyResult.messages.map {
+                ImageLine(it.content, it.imageUrls.orEmpty(), it.messageId)
+            } + inserts.map { ImageLine(it.content, it.imageUrls.orEmpty(), it.messageId) }
+            val attachments = pendingViewImages ?: PromptAttachments(emptyList(), emptyList())
+            pendingViewImages = null
 
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）
             val reachedHistoryStart = historyResult.messages.size < historyCount
@@ -242,10 +245,11 @@ class ConversationController(
             // send 动作的 remember 延后到发送成功才写（防「没发出去却记了『我回复了』」）
             val deferredRemember = applyDecisionSideEffects(decision, conversationId)
 
-            // proactive 破冰：首条必须 send（查目录/调工具是前置动作，不视为破冰失败）
+            // proactive 破冰：首条必须 send（查目录/调工具/看图是前置动作，不视为破冰失败）
             val isToolStep = decision.action == ConversationAction.LIST_TOOLS ||
                 decision.action == ConversationAction.CALL_TOOL
-            if (mustIcebreak && decision.action != ConversationAction.SEND && !isToolStep) {
+            val isPrepStep = isToolStep || decision.action == ConversationAction.VIEW_IMAGES
+            if (mustIcebreak && decision.action != ConversationAction.SEND && !isPrepStep) {
                 decision = ConversationDecision(
                     action = ConversationAction.SEND,
                     params = mapOf("content" to "在吗"),
@@ -389,6 +393,18 @@ class ConversationController(
                     actionLog.append("调用工具 $toolName")
                     log.info("tool {} → {} 字符", toolName, result.length)
                 }
+
+                ConversationAction.VIEW_IMAGES -> {
+                    // 按需供图：当轮取图（下载/救援/失败清单），附到**下一轮**请求
+                    val refs = decision.viewRefs.take(maxPromptImages)
+                    val att = gatherImagesForRefs(imageSources, refs)
+                    pendingViewImages = att
+                    actionLog.append(
+                        if (att.missing.isEmpty()) "看图 ${att.images.size} 张"
+                        else "看图 ${att.images.size} 张（${att.missing.size} 张没拿到）"
+                    )
+                    log.info("view_images 请求 {} 张 → 附件 {}、缺失 {}", refs.size, att.images.size, att.missing)
+                }
             }
         }
     }
@@ -477,41 +493,38 @@ class ConversationController(
     )
 
     /**
-     * 收集本轮 prompt 的图片附件（图片通道）
+     * 按需取图（**只处理 LLM view_images 请求的文件标签**）
      *
      * @param sources 每条消息的正文 + 图片地址——地址与正文里
      *   `[图片 file=x]` 占位符按下标对应（入档时同序收集）
+     * @param requested LLM 请求查看的文件标签（占位符里的 x）
      *
-     * 规则：逐条解析（同地址缓存复用、拿不到就跳过），整体去重后
-     * **只取最近的 [maxPromptImages] 张**；拿不到的（含旧数据无地址的
-     * 占位符）进「未能附上」清单——清单进 prompt，LLM 才不会把
-     * 没收到的图当成看过（实盘出过：零附件却声称「盯着图看了半天」）。
+     * 规则：
+     * - 只匹配 requested 的占位符才下载/救援（同址缓存复用）；**没请求的图
+     *   一律不碰**——按需供图省下载也省 token
+     * - 拿不到的（下载失败/旧数据无地址/请求了但查无此 ref）进缺失清单——
+     *   下一轮 prompt 如实告知，LLM 才不会把没收到的图当成看过
+     * - [VisionSupport] 确认模型不支持识图 → 全部直接进缺失清单（不下载）
+     * - 整体去重后**只取最近的 [maxPromptImages] 张**；取材失败绝不中断决策轮
      */
-    private fun gatherPromptImages(sources: List<ImageLine>): PromptAttachments {
+    private fun gatherImagesForRefs(sources: List<ImageLine>, requested: List<String>): PromptAttachments {
+        val wanted = requested.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        if (wanted.isEmpty()) return PromptAttachments(emptyList(), emptyList())
         // 模型已确认不支持识图（进程级记忆，不持久化）→ 不给图片内容：
         // 跳过下载与救援（省资源），refs 如实进缺失清单，交给 prompt 现有约束链
-        // （「加载失败你确实没看到 → 按上下文回应」）
         if (org.dlucxoket.lucatbot.bot.llm.VisionSupport.unsupported()) {
-            val missing = linkedSetOf<String>()
-            for (line in sources) {
-                val refs = org.dlucxoket.lucatbot.model.message.AssetMarkers.refs(line.content)
-                line.urls.forEachIndexed { i, url ->
-                    missing += refs.getOrNull(i)?.takeIf { it.isNotBlank() }
-                        ?: url.substringAfterLast('/').substringBefore('?')
-                }
-                for (i in line.urls.size until refs.size) {
-                    refs[i].takeIf { it.isNotBlank() }?.let { missing += it }
-                }
-            }
-            return PromptAttachments(emptyList(), missing.toList().takeLast(maxPromptImages))
+            return PromptAttachments(emptyList(), wanted.toList().takeLast(maxPromptImages))
         }
         val images = mutableListOf<org.dlucxoket.lucatbot.bot.llm.PromptImage>()
         val missing = linkedSetOf<String>()
+        val matched = linkedSetOf<String>()
         for (line in sources) {
             val refs = org.dlucxoket.lucatbot.model.message.AssetMarkers.refs(line.content)
             line.urls.forEachIndexed { i, url ->
                 val ref = refs.getOrNull(i)?.takeIf { it.isNotBlank() }
                     ?: url.substringAfterLast('/').substringBefore('?')
+                if (ref !in wanted) return@forEachIndexed
+                matched += ref
                 // 兜底 runCatching：ImageResolver 契约是失败即 null，但取材
                 // 绝不允许中断决策轮（图片通道不背会话链路的锅）
                 val img = runCatching {
@@ -519,14 +532,18 @@ class ConversationController(
                 }.getOrNull()
                 if (img != null) images += img else missing += ref
             }
-            // 占位符有、地址没有（旧数据/收集不全）→ 先走协议侧 get_image 救，救不回才算未能附上
+            // 占位符有、地址没有（旧数据/收集不全）→ 先走协议侧 get_image 救，救不回才算缺失
             for (i in line.urls.size until refs.size) {
                 val ref = refs[i].takeIf { it.isNotBlank() } ?: continue
+                if (ref !in wanted) continue
+                matched += ref
                 val img = runCatching { imageSource(ref) }.getOrNull()
                     ?.let { runCatching { imageResolver.resolve(it, ref) }.getOrNull() }
                 if (img != null) images += img else missing += ref
             }
         }
+        // 请求了但当前窗口查无此 ref（LLM 编的标签/图已滚出窗口）→ 如实报缺失
+        (wanted - matched).forEach { missing += it }
         return PromptAttachments(
             images = images.distinct().takeLast(maxPromptImages),
             missing = missing.toList().takeLast(maxPromptImages)

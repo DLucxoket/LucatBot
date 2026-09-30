@@ -274,12 +274,15 @@ class ConversationControllerTest {
 
     @Test
     fun `image attachments gathered from history and new messages`() {
-        // 图片通道：窗口记录 + 本轮新消息的图片地址 → data URI 附件随请求走
+        // 按需供图：LLM 显式 view_images 后，窗口记录 + 本轮新消息的指定图成为下一轮附件
         val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
         val histImg = File.createTempFile("hist-img", ".tmp").apply { writeBytes(png) }
         val liveImg = File.createTempFile("live-img", ".tmp").apply { writeBytes(png) }
 
-        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"view_images","params":{"refs":["hist.png","live.png"]}}""",
+            """{"action":"return"}"""
+        ))
         val (controller, lucatBot, _) = buildController(
             llm,
             historyLines = listOf(
@@ -296,9 +299,32 @@ class ConversationControllerTest {
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        assertEquals(2, llm.images.size, "窗口记录与新消息的图片都应成为附件：${llm.images}")
+        assertEquals(2, llm.images.size, "请求的窗口记录与新消息图片都应成为附件：${llm.images}")
         assertEquals(listOf("hist.png", "live.png"), llm.images.map { it.ref }, "附件与占位符标签对应")
         assertTrue(llm.images.all { it.dataUri.startsWith("data:image/png;base64,") })
+    }
+
+    @Test
+    fun `images are not attached unless explicitly requested`() {
+        // 按需供图核心：未请求 view_images 的轮次不附任何图、不报缺失清单（省 token）
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
+        val img = File.createTempFile("no-req", ".png").apply { writeBytes(png) }
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(
+            llm,
+            historyLines = listOf(
+                HistoryMessageItem(
+                    sender = "用户A", content = "看这个[图片 file=x.png]", timestamp = 1_000L,
+                    imageUrls = listOf(img.absolutePath)  // 地址可用——没请求就不该碰
+                )
+            )
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(llm.images.isEmpty(), "未请求不附内容")
+        assertFalse(llm.prompts[0].contains("（以下图片加载失败"),
+            "未请求也不出缺失清单（system 约束字样除外）：${llm.prompts[0]}")
     }
 
     @Test
@@ -307,7 +333,10 @@ class ConversationControllerTest {
         // 主地址 4xx（本地不存在文件即 404）→ 刷新链首站 imageSource → 本地路径直读
         val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
         val rescued = File.createTempFile("rescued", ".png").apply { writeBytes(png) }
-        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"view_images","params":{"refs":["dead.png"]}}""",
+            """{"action":"return"}"""
+        ))
         val (controller, _, _) = buildController(
             llm,
             historyLines = listOf(
@@ -324,7 +353,7 @@ class ConversationControllerTest {
 
         assertEquals(1, llm.images.size, "协议侧救援成功的图应成为附件：${llm.images}")
         assertEquals("dead.png", llm.images[0].ref)
-        assertFalse(llm.prompts[0].contains("（以下图片加载失败"), "救援成功就不该进缺失清单")
+        assertFalse(llm.prompts[1].contains("（以下图片加载失败"), "救援成功就不该进缺失清单")
     }
 
     @Test
@@ -332,7 +361,10 @@ class ConversationControllerTest {
         // 旧数据只有占位符没有地址 → 直接走协议侧取图，救不回才算加载失败
         val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
         val rescued = File.createTempFile("rescued2", ".png").apply { writeBytes(png) }
-        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"view_images","params":{"refs":["old.png"]}}""",
+            """{"action":"return"}"""
+        ))
         val (controller, _, _) = buildController(
             llm,
             historyLines = listOf(
@@ -347,13 +379,16 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertEquals(1, llm.images.size, "无地址占位符应经协议侧救回：${llm.images}")
-        assertFalse(llm.prompts[0].contains("（以下图片加载失败"), "救回后不进缺失清单")
+        assertFalse(llm.prompts[1].contains("（以下图片加载失败"), "救回后不进缺失清单")
     }
 
     @Test
     fun `protocol side failure degrades to missing list without breaking loop`() {
         // 协议侧也救不回 → 如实进「图片加载失败」，会话链路照常（绝不因图片失败）
-        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"view_images","params":{"refs":["gone.png"]}}""",
+            """{"action":"return"}"""
+        ))
         val (controller, lucatBot, _) = buildController(
             llm,
             historyLines = listOf(
@@ -367,14 +402,17 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertTrue(llm.images.isEmpty())
-        assertTrue(llm.prompts[0].contains("（以下图片加载失败，你没能看到内容）：gone.png"), "救不回如实标注")
+        assertTrue(llm.prompts[1].contains("（以下图片加载失败，你没能看到内容）：gone.png"), "救不回如实标注")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
     }
 
     @Test
     fun `image gathering never breaks the loop when unresolvable`() {
         // 地址拿不到（文件不存在）→ 附件为空但事实如实进 prompt，会话照常走
-        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"view_images","params":{"refs":["gone.png"]}}""",
+            """{"action":"return"}"""
+        ))
         val (controller, lucatBot, _) = buildController(llm)
         lucatBot.enqueuePendingInsert(
             "private:123", 456L, "用户B", "看这个[图片 file=gone.png]",
@@ -384,7 +422,7 @@ class ConversationControllerTest {
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         assertTrue(llm.images.isEmpty(), "拿不到的图跳过附件")
-        val prompt = llm.prompts[0]
+        val prompt = llm.prompts[1]
         assertTrue(prompt.contains("图片加载失败"), "附件缺失的事实要如实进 prompt：$prompt")
         assertTrue(prompt.contains("gone.png"), "缺失清单带文件标签：$prompt")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
@@ -894,7 +932,10 @@ class ConversationControllerTest {
     fun `vision unsupported skips fetching images and reports refs as missing`() {
         // 模型确认不支持识图（进程级记忆）→ 不给图片内容：不下载、不救援；
         // 若跳过失效，本地存在的 png 会被 resolve/救援救回（llm.images 非空）→ 断言失败
-        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"view_images","params":{"refs":["live.png"]}}""",
+            """{"action":"return"}"""
+        ))
         val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) + ByteArray(16) { 1 }
         val img = File.createTempFile("nosight", ".png").apply { writeBytes(png) }
         val (controller, lucatBot, _) = buildController(
@@ -915,7 +956,7 @@ class ConversationControllerTest {
         }
 
         assertTrue(llm.images.isEmpty(), "不支持识图时不携带任何图片内容")
-        val prompt = llm.prompts[0]
+        val prompt = llm.prompts[1]
         assertTrue(prompt.contains("图片加载失败") && prompt.contains("live.png"),
             "refs 如实进缺失清单（复用现有约束链）：$prompt")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")

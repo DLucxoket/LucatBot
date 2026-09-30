@@ -25,7 +25,14 @@ enum class ConversationAction {
     LIST_TOOLS,
 
     /** 调用一个工具（params.name + params.input） */
-    CALL_TOOL
+    CALL_TOOL,
+
+    /**
+     * 查看图片内容（params.refs = 占位符里的文件标签）——**按需供图**：
+     * 图片默认不附内容（省 token），LLM 显式声明要看哪几张，
+     * 编排层取图后附到**下一轮**请求（与 list_tools 的「结果进下一轮」对称）
+     */
+    VIEW_IMAGES
 }
 
 /**
@@ -69,6 +76,13 @@ data class ConversationDecision(
     @Suppress("UNCHECKED_CAST")
     val toolInput: Map<String, Any?> get() = params["input"] as? Map<String, Any?> ?: emptyMap()
 
+    /** view_images 要查看的文件标签列表（params.refs；parse 已校验非空） */
+    @Suppress("UNCHECKED_CAST")
+    val viewRefs: List<String>
+        get() = (params["refs"] as? List<Any?>)
+            ?.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+            ?: emptyList()
+
     companion object {
         /** 解析失败兜底：RETURN，避免卡死在会话里 */
         val FALLBACK = ConversationDecision(
@@ -95,12 +109,19 @@ data class ConversationDecision(
                 "return" -> ConversationAction.RETURN
                 "list_tools", "tools" -> ConversationAction.LIST_TOOLS
                 "tool", "call_tool" -> ConversationAction.CALL_TOOL
+                "view_images", "view", "view_image" -> ConversationAction.VIEW_IMAGES
                 else -> return FALLBACK
             }
             val params = LlmJson.paramsOf(node)
             // tool 调用必须带工具名，否则视为无效决策兜底退出（与 send 缺正文同规则）
             if (action == ConversationAction.CALL_TOOL &&
                 (params["name"]?.toString()?.trim().isNullOrEmpty())
+            ) {
+                return FALLBACK
+            }
+            // view_images 必须带 refs（看图请求没对象 = 无效决策）
+            if (action == ConversationAction.VIEW_IMAGES &&
+                (params["refs"] as? List<*>)?.isNotEmpty() != true
             ) {
                 return FALLBACK
             }

@@ -105,6 +105,24 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `view_images with refs`() {
+        val d = ConversationDecision.parse(
+            """{"action":"view_images","params":{"refs":["a.png","b.jpg"]}}"""
+        )
+        assertEquals(ConversationAction.VIEW_IMAGES, d.action)
+        assertEquals(listOf("a.png", "b.jpg"), d.viewRefs, "看图请求解析出文件标签")
+    }
+
+    @Test
+    fun `view_images without refs falls back to RETURN`() {
+        // 看图请求没对象 = 无效决策（与 send 缺正文同规则）
+        assertEquals(ConversationAction.RETURN,
+            ConversationDecision.parse("""{"action":"view_images","params":{"refs":[]}}""").action)
+        assertEquals(ConversationAction.RETURN,
+            ConversationDecision.parse("""{"action":"view_images"}""").action)
+    }
+
+    @Test
     fun `invalid falls back to RETURN`() {
         assertEquals(ConversationAction.RETURN, ConversationDecision.parse("garbage").action)
         assertEquals(ConversationAction.RETURN, ConversationDecision.parse("""{"action":"dance"}""").action)
