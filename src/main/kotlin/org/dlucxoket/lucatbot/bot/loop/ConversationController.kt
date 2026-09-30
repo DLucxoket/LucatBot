@@ -119,6 +119,8 @@ class ConversationController(
         actionLog.append(
             "进入${if (isGroup) "群聊" else "私聊"} ${pick.targetId}" + if (proactive) "（主动找人）" else ""
         )
+        log.info("进入会话 {}（{}{}）", conversationId,
+            if (isGroup) "群聊" else "私聊", if (proactive) "，主动发起" else "")
 
         // 进入会话即消费未读并标已读
         lucatBot.consumeUnread(conversationId)
@@ -155,6 +157,10 @@ class ConversationController(
         val cachedGroupName = if (isGroup) fetchGroupName(conversationId) else null
         // 机器人自己的 QQ 号（LLM 判断「@的是不是我」的依据；未连接 → 0）
         val selfQq = lucatBot.shiroBot?.selfId ?: 0L
+
+        // 决策轮次（可观测性：每轮 LLM 调用前后都打日志——此前调用完全静默，
+        // 实盘怀疑「没调决策智能体」其实是日志盲区）
+        var round = 0
 
         while (true) {
             // 1) 把待插入的新消息以系统注释形式合并
@@ -248,7 +254,14 @@ class ConversationController(
                 missingImages = attachments.missing
             )
 
+            round++
+            log.info("第 {} 轮决策：调用会话智能体（历史 {} 条、新消息 {} 条、图片 {} 张）",
+                round, historyCount, inserts.size, attachments.images.size)
+            val decisionStartMs = System.currentTimeMillis()
             var decision = conversationAgent.processObject(request)
+            log.info("第 {} 轮决策 → {}（{}ms）{}", round, decision.action,
+                System.currentTimeMillis() - decisionStartMs,
+                decision.reason?.let { "：$it" } ?: "")
             // send 动作的 remember 延后到发送成功才写（防「没发出去却记了『我回复了』」）；
             // 上一轮发送仍失败（sendFailureNote 未清）期间，非 send 动作的 remember
             // 一律忽略——失败现场 LLM 补记的多与没发出的消息相关，防假记忆
@@ -262,6 +275,7 @@ class ConversationController(
                 decision.action == ConversationAction.CALL_TOOL
             val isPrepStep = isToolStep || decision.action == ConversationAction.VIEW_IMAGES
             if (mustIcebreak && decision.action != ConversationAction.SEND && !isPrepStep) {
+                log.info("主动发起的会话尚未破冰，强制首条 send（原动作 {}）", decision.action)
                 decision = ConversationDecision(
                     action = ConversationAction.SEND,
                     params = mapOf("content" to "在吗"),
@@ -272,6 +286,7 @@ class ConversationController(
             if (readMoreWithInsertStreak >= maxReadMoreWithInserts &&
                 decision.action == ConversationAction.READ_MORE
             ) {
+                log.info("连续爬楼 {} 轮且一直有新消息，强制打断", readMoreWithInsertStreak)
                 decision = ConversationDecision.forceReturn("连续爬楼期间一直有新消息，强制回应或离开")
             }
 
@@ -387,6 +402,7 @@ class ConversationController(
                             }
                         }
                         actionLog.append("回复：$sentText")
+                        log.info("发送成功 {} 条：{}", sentContents.size, sentText.take(80))
                         lucatBot.mood = lucatBot.mood.boost()
                         mustIcebreak = false
                         readMoreWithInsertStreak = 0
