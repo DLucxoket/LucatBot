@@ -335,6 +335,19 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `late arriving image attachment is not treated as new message`() {
+        // 实盘 04:00/04:18：图片迟到几轮才附上，LLM 把它当"值得汇报的新内容"自发发言两次
+        // （两条之间对方零消息）——系统侧变化必须被点名为「不算新消息」
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("图片附件这轮才成功附上"), "迟到附件不算新消息：$prompt")
+        assertTrue(prompt.contains("都不是新消息") || prompt.contains("不是新消息"), "点明系统侧变化非新消息：$prompt")
+        assertTrue(prompt.contains("对方不说话你就不说话"), "给出行为准则：$prompt")
+    }
+
+    @Test
     fun `conversation prompt injects global memory overview with subject labels`() {
         // 不再只注入当前会话：主体记忆 + 其他会话记忆（带主体标签）+ 搜索引导
         val memoryService = MemoryService(
