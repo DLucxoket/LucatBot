@@ -239,18 +239,6 @@ class ChatHistoryService(
         repository.lastBotSpeakTime(conversationId)
 
     /**
-     * 本会话机器人**最近一条发言**（复读拦截用，取最近 [limit] 条窗口内）
-     *
-     * 实盘（09-30）：LLM 从 justSent hint / 历史行「我」里看到自己刚发的原文后
-     * 直接复制重发——群聊 3~8 秒内逐字双发 3 组、私聊睡眠唤醒后 8 小时逐字重发
-     * 1 组（MD5 全同）。发送前比对这条即可拦住。
-     *
-     * @return 最近一条 [ChatMessageRecord.isFromBot] 的记录；窗口内没发过 → null
-     */
-    fun lastBotMessage(conversationId: String, limit: Int = 20): ChatMessageRecord? =
-        getHistory(conversationId, limit).lastOrNull { it.isFromBot }
-
-    /**
      * 持久化
      */
     fun flush() {

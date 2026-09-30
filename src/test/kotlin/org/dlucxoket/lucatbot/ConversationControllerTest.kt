@@ -348,76 +348,25 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `verbatim repeat of own last message is blocked with repeat note`() {
-        // 实盘 4 组 MD5 全同的重复发送：与上一条自己发言逐字相同 → 代码拦截不发出，
-        // 下一轮 prompt 说明「复读被拦、没发出去」
-        val chatHistoryService = ChatHistoryService(
-            JsonFileChatHistoryRepository(File.createTempFile("hist-rpt", ".json").absolutePath)
-        )
-        chatHistoryService.recordBotReply("private:123", "蹲到了，快演示演示", 99L)
+    fun `prompt clarifies resend means new content not verbatim repeat`() {
+        // 实盘 4 组 MD5 全同的重复发送：prompt 侧双保险——system 禁令 + hint 语义引导，
+        // 点明「再发」是新内容而非原样重发
         val llm = FakeLLM(mutableListOf(
             """{"action":"send","params":{"content":"蹲到了，快演示演示"}}""",
             """{"action":"return"}"""
         ))
-        val (controller, lucatBot, sendTool) = buildController(llm, chatHistoryService = chatHistoryService)
+        val (controller, lucatBot, sendTool) = buildController(llm)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        assertTrue(sendTool.sent.isEmpty(), "逐字复读必须被拦截、不发送")
-        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "拦截后照常走完循环")
-        val nextPrompt = llm.prompts[1]
-        assertTrue(nextPrompt.contains("完全相同"), "下一轮应点明复读被拦：$nextPrompt")
-        assertTrue(nextPrompt.contains("已拦截"), "应说明消息没发出去：$nextPrompt")
-    }
-
-    @Test
-    fun `short repeat of own message is allowed`() {
-        // 短句不拦：真人也会连说两句「嗯嗯」——拦了反而假
-        val chatHistoryService = ChatHistoryService(
-            JsonFileChatHistoryRepository(File.createTempFile("hist-rpt2", ".json").absolutePath)
-        )
-        chatHistoryService.recordBotReply("private:123", "嗯嗯", 99L)
-        val llm = FakeLLM(mutableListOf(
-            """{"action":"send","params":{"content":"嗯嗯"}}""",
-            """{"action":"return"}"""
-        ))
-        val (controller, _, sendTool) = buildController(llm, chatHistoryService = chatHistoryService)
-
-        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
-
-        assertEquals(listOf("嗯嗯"), sendTool.sent, "短句复读不拦")
-    }
-
-    @Test
-    fun `repeated blocked repeats hit cap and force return`() {
-        // 每轮都复读 → 拦截计数达 maxSendFailures(3) 强制收尾，防死循环烧 LLM
-        val chatHistoryService = ChatHistoryService(
-            JsonFileChatHistoryRepository(File.createTempFile("hist-rpt3", ".json").absolutePath)
-        )
-        chatHistoryService.recordBotReply("private:123", "这条消息会一直被复读", 99L)
-        val llm = FakeLLM(mutableListOf(
-            """{"action":"send","params":{"content":"这条消息会一直被复读"}}""",
-            """{"action":"send","params":{"content":"这条消息会一直被复读"}}""",
-            """{"action":"send","params":{"content":"这条消息会一直被复读"}}""",
-            """{"action":"send","params":{"content":"这条消息会一直被复读"}}"""
-        ))
-        val (controller, lucatBot, sendTool) = buildController(llm, chatHistoryService = chatHistoryService)
-
-        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
-
-        assertTrue(sendTool.sent.isEmpty(), "三次复读全被拦截")
-        assertEquals(3, llm.prompts.size, "拦截 3 次达上限强制返回，第 4 条脚本不消费")
+        assertEquals(listOf("蹲到了，快演示演示"), sendTool.sent, "正常发送不受影响")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations)
-    }
-
-    @Test
-    fun `prompt forbids verbatim repeat of own messages`() {
-        // 复读禁令进 system prompt（模型侧）+ 代码拦截（护栏侧）双保险
-        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
-        val (controller, _, _) = buildController(llm)
-        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
-        assertTrue(llm.prompts[0].contains("绝不原样复读自己发过的内容"), "复读禁令应进 prompt")
-        assertTrue(llm.prompts[0].contains("代码会直接拦截"), "应告知有代码护栏")
+        // system prompt 禁令：说清「再发」= 新内容
+        assertTrue(llm.prompts[0].contains("「再发」= 发一条新内容"), "system 应界定再发语义：${llm.prompts[0]}")
+        assertTrue(llm.prompts[0].contains("绝不是把上一条消息原样复制重发"), "system 应点名不许原样重发")
+        // hint 引导：send 后无新消息那轮同样点明
+        assertTrue(llm.prompts[1].contains("指的是**新内容**"), "hint 应引导发新内容：${llm.prompts[1]}")
+        assertTrue(llm.prompts[1].contains("原样重发一遍"), "hint 应点名不许原样重发")
     }
 
     @Test
