@@ -43,6 +43,8 @@ class ActionLog(
 ) {
     private val log = LoggerFactory.getLogger(ActionLog::class.java)
     private val entries = CopyOnWriteArrayList<ActionLogEntry>()
+    /** 自上次成功 flush 以来新增的条目（**只送增量**——历史不重写、不删） */
+    private val pendingAdds = CopyOnWriteArrayList<ActionLogEntry>()
     private val zone = ZoneId.of("Asia/Shanghai")
     private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 
@@ -70,14 +72,14 @@ class ActionLog(
      * @param conversationId 发生时所处会话（null = 消息列表/空闲态）
      */
     fun append(action: String, reason: String? = null, conversationId: String? = null) {
-        entries.add(
-            ActionLogEntry(
-                timestamp = System.currentTimeMillis(),
-                conversationId = conversationId?.takeIf { it.isNotBlank() },
-                action = action,
-                reason = reason?.trim()?.take(30)?.takeIf { it.isNotEmpty() }
-            )
+        val entry = ActionLogEntry(
+            timestamp = System.currentTimeMillis(),
+            conversationId = conversationId?.takeIf { it.isNotBlank() },
+            action = action,
+            reason = reason?.trim()?.take(30)?.takeIf { it.isNotEmpty() }
         )
+        entries.add(entry)
+        pendingAdds.add(entry) // 排队等增量 flush（历史不重写）
         while (entries.size > maxLines) {
             entries.removeAt(0)
         }
@@ -104,6 +106,7 @@ class ActionLog(
 
     fun clear() {
         entries.clear()
+        pendingAdds.clear()
         flusher?.markDirty()
     }
 
@@ -113,9 +116,18 @@ class ActionLog(
         flusher?.shutdown()
     }
 
+    /**
+     * 防抖落盘的实际动作：**只送自上次成功 flush 之后的新增条目**
+     *
+     * 历史不在这里重写（持久层不删行、也不重复插入）；本批写失败则保留在
+     * pending 里等下一次 flush，不丢。
+     */
     private fun doFlush() {
         val repo = repository ?: return
-        runCatching { repo.saveEntries(entries.toList()) }
+        val batch = pendingAdds.toList()
+        if (batch.isEmpty()) return
+        runCatching { repo.appendEntries(batch) }
+            .onSuccess { pendingAdds.removeAll(batch.toSet()) }
             .onFailure { e -> log.error("操作日志持久化失败: {}", e.message) }
     }
 }

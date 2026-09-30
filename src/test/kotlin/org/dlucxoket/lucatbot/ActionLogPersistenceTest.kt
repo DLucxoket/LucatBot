@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot
 
 import org.dlucxoket.lucatbot.bot.loop.ActionLog
 import org.dlucxoket.lucatbot.bot.loop.ActionLogEntry
+import org.dlucxoket.lucatbot.bot.loop.ActionLogRepository
 import org.dlucxoket.lucatbot.bot.loop.JsonFileActionLogRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -43,6 +44,37 @@ class ActionLogPersistenceTest {
         // 恢复后继续滚动追加
         restored.append("第三行")
         assertTrue(restored.dump().contains("第三行"), "恢复后可继续追加")
+    }
+
+    @Test
+    fun `flush sends only new entries and never deletes history`() {
+        // 增量持久化：只送上次 flush 之后的新条目；已落库的历史一动不动
+        val batches = mutableListOf<List<ActionLogEntry>>()
+        val repo = object : ActionLogRepository {
+            val stored = mutableListOf<ActionLogEntry>()
+            override fun loadEntries(): List<ActionLogEntry> = stored.toList()
+            override fun appendEntries(newEntries: List<ActionLogEntry>) {
+                batches += newEntries
+                stored += newEntries
+            }
+        }
+
+        ActionLog(repository = repo).let { first ->
+            first.append("动作A")
+            first.shutdown()                       // 第一次 flush
+        }
+        ActionLog(repository = repo).let { second -> // 重启恢复（历史已在库）
+            second.append("动作B")
+            second.append("动作C")
+            second.shutdown()                      // 第二次 flush
+        }
+
+        assertEquals(2, batches.size, "两次 flush 两批")
+        assertEquals(listOf("动作A"), batches[0].map { it.action }, "首批只有新增")
+        assertEquals(listOf("动作B", "动作C"), batches[1].map { it.action },
+            "重启后只送增量，不重送已落库的历史")
+        assertEquals(listOf("动作A", "动作B", "动作C"), repo.stored.map { it.action },
+            "历史只增不删")
     }
 
     @Test
