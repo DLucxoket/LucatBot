@@ -557,6 +557,21 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `todo task drives action instead of idle return`() {
+        // 实盘：受托「去群里看看」——任务只进了记忆没进 todo 驱动，机器人
+        // 进群 8 秒就 return、之后反复查工具空转。prompt 必须给出任务行动路径
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("待办里有与当前会话相关的未完成事项"),
+            "会话内待办行动引导：$prompt")
+        assertTrue(prompt.contains("不要因为「没有新消息」就把受托的事一丢了之"),
+            "点名无新消息约束不适用于待办任务：$prompt")
+        assertTrue(prompt.contains("这类委托**必须**写"),
+            "受托类任务必须 todo_add（否则任务只留记忆、转身就忘）：$prompt")
+    }
+
+    @Test
     fun `no new message constraint and anti recite are in prompt`() {
         // 实盘：停滞 12 分钟后凭记忆旧话题自发发了一条（还概括了自己的人设内容）
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))

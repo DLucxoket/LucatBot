@@ -77,5 +77,6 @@ class SessionListSpokeAgoTest {
         assertTrue(prompt.contains("选会话优先级"), "优先级规则：$prompt")
         assertTrue(prompt.contains("且还有未读"), "点明『刚发过言+有未读』优先：$prompt")
         assertTrue(prompt.contains("MemoryQueryTool"), "记忆关键词搜索引导：$prompt")
+        assertTrue(prompt.contains("待办驱动"), "待办指向的会话优先打开（实盘：受托去群里看却反复空转）：$prompt")
     }
 }

@@ -345,6 +345,30 @@ class MemoryDedupeTest {
             items[MemoryItem.MemoryType.EVENT]!!.tags.toSet(), "event 同样带关键词")
     }
 
+    @Test
+    fun `review feeds back at most maxReviewHits newest matches`() {
+        // 关键词扩容后实盘命中曾达 77 条，全量回喂会把复核 prompt 撑爆——
+        // 截取最新 30 条（search 按写入时间倒序）
+        val s = service()
+        repeat(40) { s.rememberFact(MemorySubject.user(50L), "他养猫第 $it 只")
+
+        }
+        val llm = FakeLLM(mutableListOf(
+            """{"memories":[{"kind":"fact","content":"他又养了一只猫","keywords":["猫"]}]}""",
+            """{"memories":[]}"""
+        ))
+        reflectorWith(s, llm).reflect("private:50")
+
+        assertEquals(2, llm.prompts.size, "有命中 → 触发复核")
+        // FakeLLM 记录 system+user 拼接，且 system 文案里也含同名段头——
+        // 先定位 user 段再取命中清单，只数真实命中行
+        val reviewPrompt = llm.prompts[1]
+            .substringAfter("\n=====USER=====\n")
+            .substringAfter("【关键词命中的已有记忆】")
+        val hitLines = reviewPrompt.lines().count { it.startsWith("- ") }
+        assertTrue(hitLines in 1..30, "命中回喂截断到最新 30 条（实际 $hitLines）：复核 prompt 不被撑爆")
+    }
+
     // ------------------------------------------------------------------
     // 异步整理（不阻塞主循环下一步）
     // ------------------------------------------------------------------

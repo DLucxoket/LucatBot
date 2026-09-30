@@ -39,6 +39,11 @@ class MemoryReflector(
     /** 退出时记忆整理读取的聊天记录条数 */
     private val reflectHistoryCount: Int = 30,
     /**
+     * 关键词复核的命中回喂上限（最新优先）——关键词扩容后实盘命中曾达 77 条，
+     * 全量回喂会把复核 prompt 撑爆；判重只需最近的相似记忆
+     */
+    private val maxReviewHits: Int = 30,
+    /**
      * 整理任务执行器——默认单线程 daemon（[asyncExecutor]，串行 + 不阻塞主循环）；
      * 测试注入内联执行器（`Executor { it.run() }`）即变同步，断言无竞态
      */
@@ -193,6 +198,9 @@ class MemoryReflector(
      * 写入前关键词复核：候选的关键词查库 → 命中回喂智能体过滤一轮
      *
      * - 零命中直接放行（省一次 LLM 调用）
+     * - **命中截断到最新 [maxReviewHits] 条**：关键词扩容（5~10 个/条）后
+     *   实盘命中曾达 77 条，全量回喂就是把复核 prompt 撑爆——复核要的是
+     *   「最近的相似记忆」，最新优先足够判重
      * - 复核返回 [org.dlucxoket.lucatbot.bot.agent.data.MemoryReflectResult.degraded]
      *   （LLM 异常/解析失败）→ **保守放行**候选：复核环节故障绝不允许吞掉记忆，
      *   写入侧还有 [MemoryService] 精确判重兜底
@@ -206,19 +214,23 @@ class MemoryReflector(
             // 关键词缺失时退化用 content 整句查（等价包含匹配，无害）
             val query = item.keywords.joinToString(" ").ifBlank { item.content }
             if (query.isBlank()) continue
-            memoryService.search(query, subject).forEach { hits += it.content }
+            // search 按写入时间倒序 → 插入序即最新在前，取满即止（截最新 N 条）
+            memoryService.search(query, subject)
+                .take((maxReviewHits - hits.size).coerceAtLeast(0))
+                .forEach { hits += it.content }
+            if (hits.size >= maxReviewHits) break
         }
         if (hits.isEmpty()) return candidates
-
+        val topHits = hits.take(maxReviewHits)
         val reviewed = memoryAgent.processObject(
-            MemoryReflectRequest(candidates = candidates, matchedMemories = hits.toList())
+            MemoryReflectRequest(candidates = candidates, matchedMemories = topHits)
         )
         if (reviewed.degraded) {
             log.warn("记忆关键词复核失败（保守放行 {} 条候选）", candidates.size)
             return candidates
         }
-        log.debug("关键词复核：候选 {} 条 → 保留 {} 条（命中已有记忆 {} 条）",
-            candidates.size, reviewed.memories.size, hits.size)
+        log.debug("关键词复核：候选 {} 条 → 保留 {} 条（命中 {} 条，截取最新 {}）",
+            candidates.size, reviewed.memories.size, hits.size, topHits.size)
         return reviewed.memories
     }
 
