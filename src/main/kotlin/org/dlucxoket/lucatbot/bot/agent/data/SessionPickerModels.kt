@@ -182,7 +182,9 @@ object SessionDecisionParser {
     }
 
     fun parse(llmOutput: String): SessionDecision {
-        val node = LlmJson.parseTree(llmOutput)
+        // 模型偶发把输出包成「函数调用」标记 → 先翻译回纯 JSON 信封（同会话内决策）
+        val normalized = LlmJson.toolCallEnvelope(llmOutput) ?: llmOutput
+        val node = LlmJson.parseTree(normalized)
             ?: return idleLogged(llmOutput, "非 JSON 或无可提取 JSON，兜底空闲")
         val actionText = node.get("action")?.asText()?.trim()?.lowercase()
             ?: return idleLogged(llmOutput, "缺 action 字段，兜底空闲")
@@ -192,7 +194,7 @@ object SessionDecisionParser {
 
         return when (actionText) {
             "open_conversation" -> {
-                val pick = SessionPickParser.parse(llmOutput)
+                val pick = SessionPickParser.parse(normalized)
                     ?: return idleLogged(llmOutput, "open_conversation 参数无效，兜底空闲", todoAdd, todoDone)
                 SessionDecision(
                     SessionAction.OPEN_CONVERSATION, pick = pick,

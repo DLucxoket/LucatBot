@@ -114,11 +114,15 @@ data class ConversationDecision(
      *
      * 发送成功后原地等新消息：期间来消息（或让位请求）立即唤醒进下一轮处理，
      * 等满仍无任何新消息 = 没人接话 → 编排层直接退出会话。执行侧钳 1~300。
-     * 兼容 camelCase 写法（LLM 偶尔不按 snake_case 输出）。
+     * 兼容 camelCase 与**写进 content 条目里**的错位写法（模型偶发放错层级）。
      */
     val waitMessageSeconds: Int
         get() {
-            val raw = params["wait_message"] ?: params["waitMessage"] ?: return 0
+            val raw = params["wait_message"] ?: params["waitMessage"]
+                ?: (params["content"] as? List<*>)?.firstNotNullOfOrNull { item ->
+                    (item as? Map<*, *>)?.let { m -> m["wait_message"] ?: m["waitMessage"] }
+                }
+                ?: return 0
             return when (raw) {
                 is Number -> raw.toInt()
                 is String -> raw.trim().toIntOrNull() ?: 0
@@ -179,7 +183,9 @@ data class ConversationDecision(
          * 从 LLM 输出的统一信封解析
          */
         fun parse(llmOutput: String): ConversationDecision {
-            val node = LlmJson.parseTree(llmOutput)
+            // 模型偶发把输出包成「函数调用」标记 → 先翻译回纯 JSON 信封
+            val normalized = LlmJson.toolCallEnvelope(llmOutput) ?: llmOutput
+            val node = LlmJson.parseTree(normalized)
                 ?: return fail(llmOutput, "非 JSON（或 markdown 包裹外无可提取的 JSON）")
             val actionText = node.get("action")?.asText()?.trim()?.lowercase()
                 ?: return fail(llmOutput, "缺 action 字段")

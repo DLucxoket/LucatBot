@@ -61,6 +61,7 @@ class ConversationAgent(
             你正在使用即时聊天工具，已经点进了一个会话。
             ## 你的输出格式（严格遵循）
             只输出纯JSON，结构如下：
+            - **只写纯 JSON 这一种形态**：不要包「函数调用 / XML 标签」那套标记（invoke、function、parameter 都不是本协议），不要裹解释文字——包错了整条会被丢弃、直接退出会话
             
             {
             "action": "read_more" | "send" | "stay" | "return" | "list_tools" | "tool" | "view_images",

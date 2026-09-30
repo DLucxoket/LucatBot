@@ -252,6 +252,36 @@ class ConversationDecisionParseTest {
         assertEquals(ConversationAction.CALL_TOOL, d.action)
         assertTrue(d.toolInput.isEmpty())
     }
+
+    @Test
+    fun `parse accepts tool-call style envelope with truncated params tail`() {
+        // 实盘 02:30：模型把 send 包成「函数调用」标记，且 params JSON 少了尾巴（] }）——
+        // 内容其实是好的，翻译 + 补尾后照常解析，不再整轮兜底退出
+        val lt = "<"
+        val raw = lt + "function=send>" +
+            lt + "parameter name=\"params\">" +
+            "{\"content\": [{\"reply\": \"#123\", \"members\": [{\"type\": \"text\", \"text\": \"在吗\"}], " +
+            "\"wait_message\": 120}" +   // ← 少了 ] }
+            lt + "/parameter>" +
+            lt + "parameter name=\"reason\">俏皮回一句并催他去睡" + lt + "/parameter>" +
+            lt + "/function>"
+
+        val d = ConversationDecision.parse(raw)
+
+        assertEquals(ConversationAction.SEND, d.action, "函数调用形态翻译成 send")
+        assertEquals("俏皮回一句并催他去睡", d.reason, "reason 原样取出")
+        val out = d.resolveOutgoing()
+        assertEquals(1, out.size, "params 缺尾被修复，条目可用")
+        assertTrue(out.single().summarize().contains("在吗"), "正文可用：${out.single().summarize()}")
+        assertEquals(120, d.waitMessageSeconds, "错位写进 content 条目的 wait_message 也取到")
+    }
+
+    @Test
+    fun `plain json is not mistaken for tool-call envelope`() {
+        val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
+        assertEquals(ConversationAction.RETURN, d.action)
+        assertEquals("累了", d.reason)
+    }
 }
 
 /** SessionDecisionParser：消息列表信封的四种动作与垃圾输出兜底 */
@@ -386,6 +416,27 @@ class LlmJsonTest {
         val p = LlmJson.paramsOf(node)
         assertEquals("hi", p["content"])
         assertEquals(3, p["count"])
+    }
+
+    @Test
+    fun `parseTree repairs truncated json tail`() {
+        // 实盘：模型把 JSON 尾巴写丢（少 ] }）——补尾后照常解析，别整轮作废
+        val node = LlmJson.parseTree("""{"content": [{"text": "在吗"}""")
+        assertNotNull(node, "缺尾应能修复")
+        assertTrue(node!!.has("content"), "修复后字段完整：$node")
+        assertEquals("在吗", node.get("content")[0].get("text").asText())
+    }
+
+    @Test
+    fun `repairJson keeps intact json unchanged`() {
+        val ok = """{"a":[1,2]}"""
+        assertEquals(ok, LlmJson.repairJson(ok), "本来就好不动它")
+    }
+
+    @Test
+    fun `toolCallEnvelope returns null for plain output`() {
+        assertNull(LlmJson.toolCallEnvelope("""{"action":"return"}"""), "纯 JSON 不误判")
+        assertNull(LlmJson.toolCallEnvelope("随便一句话"), "无标记不误判")
     }
 }
 
