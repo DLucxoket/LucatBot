@@ -33,8 +33,9 @@ class LoopConfig {
     /**
      * 图片取材器——**全上下文共享的单例**（图片通道）。
      *
-     * 必须是同一个实例：ImagePrefetcher（消息到达即下载）预热的缓存要被
-     * ConversationController（prompt 组装取材）命中，两处各建一份就白下了。
+     * 必须是同一个实例：多处取材（会话决策轮、协议侧救援）共享同一份
+     * 成功/负缓存，各建一份就重复下载。（到达即预取已停用：实盘地址到达
+     * 时已过期，预取 100% 400，见 MainPlugin 注释。）
      */
     @Bean
     fun imageResolver(): ImageResolver = ImageResolver()

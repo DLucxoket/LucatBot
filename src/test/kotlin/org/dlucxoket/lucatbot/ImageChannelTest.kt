@@ -3,7 +3,6 @@ package org.dlucxoket.lucatbot
 import dev.langchain4j.data.message.ImageContent
 import dev.langchain4j.data.message.TextContent
 import org.dlucxoket.lucatbot.bot.llm.ImageResolver
-import org.dlucxoket.lucatbot.bot.llm.ImagePrefetcher
 import org.dlucxoket.lucatbot.bot.llm.OpenAIAPI
 import org.dlucxoket.lucatbot.bot.llm.PromptImage
 import org.dlucxoket.lucatbot.model.message.AssetMarkers
@@ -306,42 +305,6 @@ class ImageChannelTest {
             "单图兜底：file 标签来源不同时仍取唯一那张")
         assertNull(CqParser.imageUrlOf("纯文本没有图", "x"))
         assertNull(CqParser.imageUrlOf("[CQ:image,file=z.png]", "z.png"), "没带 url → null")
-    }
-
-    // ------------------------------------------------------------------
-    // 到达即预取（QQ 地址秒级过期——唯一窗口是消息刚到达的几秒）
-    // ------------------------------------------------------------------
-
-    @Test
-    fun `prefetch at arrival warms cache before prompt resolves`() {
-        var calls = 0
-        val resolver = ImageResolver(fetchHttp = { _ -> calls++; pngBytes })
-        val pre = ImagePrefetcher(resolver)
-        val msg = ChatMessage(listOf(
-            TextMessageMember("看图"),
-            ImageMessageMember("https://x/a.png", "a.png"),
-            MemeMessageMember("https://x/b.webp", "b.webp")
-        ))
-
-        pre.prefetchNow(msg)  // 到达时刻（异步版的同步等价，测试绕开线程竞态）
-
-        // 决策轮 prompt 取材 → 全部命中预取缓存，不再打网络
-        assertNotNull(resolver.resolve("https://x/a.png", "a.png"))
-        assertNotNull(resolver.resolve("https://x/b.webp", "b.webp"))
-        assertEquals(2, calls, "图片+表情包各预取一次，prompt 取材零网络请求")
-    }
-
-    @Test
-    fun `prefetch skips unresolvable sources`() {
-        var calls = 0
-        val resolver = ImageResolver(fetchHttp = { _ -> calls++; pngBytes })
-        val pre = ImagePrefetcher(resolver)
-        pre.prefetchNow(ChatMessage(listOf(
-            ImageMessageMember("base64://xxxx", "x.png"),
-            ImageMessageMember("   ", "y.png"),
-            ImageMessageMember("", null)
-        )))
-        assertEquals(0, calls, "base64/空白地址不入预取")
     }
 
     // ------------------------------------------------------------------
