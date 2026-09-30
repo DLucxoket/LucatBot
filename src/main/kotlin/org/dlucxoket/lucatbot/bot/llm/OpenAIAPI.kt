@@ -126,7 +126,11 @@ class OpenAIAPI: LLM {
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         val response = model.chat(chatRequest)
-        return response.aiMessage().text()
+        val text = response.aiMessage().text()
+        if (text.isNullOrBlank()) {
+            log.warn("LLM 返回空文本（端点异常/输出被吞/finish_reason 截断），调用方会按解析失败兜底")
+        }
+        return text
     }
 
     /**
@@ -157,6 +161,9 @@ class OpenAIAPI: LLM {
             }
             val chatRequest = ChatRequest.builder().messages(messages).build()
             val result = createModel().chat(chatRequest).aiMessage().text()
+            if (result.isNullOrBlank()) {
+                log.warn("LLM 返回空文本（带图请求），调用方会按解析失败兜底")
+            }
             VisionSupport.markSupported()
             result
         } catch (e: Exception) {

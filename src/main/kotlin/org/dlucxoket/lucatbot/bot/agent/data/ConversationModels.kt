@@ -158,7 +158,14 @@ data class ConversationDecision(
          * 「解析失败兜底退出」却无从知道 LLM 到底说了什么，诊断全靠猜
          */
         private fun fail(raw: String, why: String): ConversationDecision {
-            log.warn("决策解析失败（{}）——LLM 原文: {}", why, raw.take(500))
+            // 原文记**首尾 + 总长度**：截断型失败（JSON 没写完、`}` 缺失）只有尾部
+            // 能看出来，只记前 500 字恰恰看不到结尾——定位「为什么解析失败」全靠它
+            val shown = if (raw.length <= 900) {
+                raw
+            } else {
+                raw.take(600) + "\n……（共 ${raw.length} 字，以下是尾部）……\n" + raw.takeLast(300)
+            }
+            log.warn("决策解析失败（{}）——LLM 原文（{} 字）: {}", why, raw.length, shown)
             return FALLBACK
         }
 
