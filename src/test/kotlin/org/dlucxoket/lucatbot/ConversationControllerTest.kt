@@ -669,6 +669,18 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `system prompt prefers wait_message over stay when waiting for replies`() {
+        // 要求：想等别人说话就别 stay，改用 send + wait_message，且给能接受的最大等待
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("想等待别人说话就别用 stay"), "约束点名等回应别用 stay：$prompt")
+        assertTrue(prompt.contains("\"wait_message\": 300"), "给最大可接受等待 300 秒：$prompt")
+        assertTrue(prompt.contains("别拿 stay 等别人说话"), "stay 动作说明同步点名：$prompt")
+        assertTrue(prompt.contains("stay 只留给"), "保留 stay 的正当用途（不等回应）：$prompt")
+    }
+
+    @Test
     fun `entering conversation advances read watermark`() {
         // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
         val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
