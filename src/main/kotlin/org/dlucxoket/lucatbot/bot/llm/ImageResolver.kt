@@ -21,9 +21,10 @@ private class BoundedLru<K, V>(private val maxSize: Int) : LinkedHashMap<K, V>(1
  *
  * - 来源：http(s) 下载（NapCat 的图片 url）或本地文件路径兜底
  * - **成功缓存**：同一地址只下载一次（有界 LRU，防反复拉同一张图烧带宽/内存）
- * - **负缓存**：HTTP 4xx（确定性拒绝）记入失败表、同一地址不再重试——
+ * - **负缓存**：HTTP 4xx（确定性拒绝）记入失败表、同一地址不再重复下载——
  *   否则每轮 prompt 都会打一次必败请求刷日志；网络抖动/5xx **不**进失败表，
- *   下轮照常重试
+ *   下轮照常重试。负缓存只封「下载这个 URL」：带刷新器的取材仍会做一次
+ *   救援（**URL 死了 ≠ 救援试过**），救援结局确定（[rescueTried]）后才彻底跳过
  * - **请求头**：QQ 多媒体 CDN（multimedia.nt.qq.com.cn）缺 Referer/UA 直接 400，
  *   下载带浏览器 UA + `Referer: https://qq.com/`
  * - **体积闸**：超过 [maxBytes] 的图放弃（避免 data URI 撑爆请求体）
@@ -54,6 +55,16 @@ class ImageResolver(
     private val rejected = BoundedLru<String, Boolean>(rejectedCapacity)
 
     /**
+     * 救援已**结局确定**的主地址（负缓存的配套表）。
+     *
+     * 「URL 死了」不等于「救援试过了」：预取链不带刷新器，它写入的负缓存
+     * 不得短路决策轮的必达救援；只有救援给出确定结论（刷新给不出新鲜地址 /
+     * 新地址同样被拒）才记这里，后续轮次静默跳过。刷新调用本身瞬时失败
+     * （ws 断、get_msg 异常）**不标记**，下轮照常再试。
+     */
+    private val rescueTried = BoundedLru<String, Boolean>(rejectedCapacity)
+
+    /**
      * 解析图片地址为 [PromptImage]
      *
      * @param source 图片地址（http/https 或本地路径——入档时从消息段 url 收集）
@@ -68,11 +79,20 @@ class ImageResolver(
     fun resolve(source: String, ref: String, refresh: (() -> String?)? = null): PromptImage? {
         val key = source.trim()
         if (key.isEmpty() || key.startsWith("base64")) return null
-        if (rejected.containsKey(key)) return null  // 负缓存命中：静默跳过，不重试
+        // 负缓存只封「下载这个 URL」：地址已死但救援（refresh）还没结局确定时，
+        // 带刷新器的取材仍走一次救援——否则预取链（不带 refresh）写入的负缓存
+        // 会把决策轮的必达救援短路掉，图片通道形同虚设（第四轮 OOP 审查 P1-2）
+        val dead = rejected.containsKey(key)
+        if (dead && (refresh == null || rescueTried.containsKey(key))) return null
 
         cache[key]?.let { return it }
 
-        val bytes = fetchOrRefresh(key, ref, refresh) ?: return null
+        val fetched = if (dead && refresh != null) {
+            rescue(key, ref, refresh)
+        } else {
+            fetchOrRefresh(key, ref, refresh)
+        }
+        val bytes = fetched ?: return null
         if (bytes.isEmpty()) return null
         if (bytes.size > maxBytes) {
             log.debug("图片超限跳过（{} > {} 字节）: {}", bytes.size, maxBytes, ref)
@@ -92,9 +112,9 @@ class ImageResolver(
     }
 
     /**
-     * 下载主地址；4xx 时经 [refresh] 刷新一次重试
+     * 下载主地址；4xx（确定性拒绝）进负缓存后经 [rescue] 救援
      *
-     * 失败分类：4xx = 确定性拒绝（进失败表；刷新也救不回就放弃）、
+     * 失败分类：4xx = 确定性拒绝（进失败表，救援接手）；
      * 其余（超时/5xx/异常）= 瞬时（不进失败表，下轮重试）。
      */
     private fun fetchOrRefresh(key: String, ref: String, refresh: (() -> String?)?): ByteArray? {
@@ -111,29 +131,57 @@ class ImageResolver(
                 "图片地址确定性失败（{}），记入失败表: {} body: {}",
                 e.code, ref, e.body?.take(300)
             )
-            if (refresh == null) return null
-            val fresh = runCatching { refresh() }.getOrNull()?.trim()
-            if (fresh.isNullOrEmpty() || fresh == key) {
-                log.debug("图片地址刷新无果（get_msg 未给出新鲜地址）: {}", ref)
-                return null
-            }
-            if (rejected.containsKey(fresh)) return null
-            try {
-                val bytes = download(fresh).also { log.debug("图片地址刷新成功，重新下载: {}", ref) }
-                rejected.remove(key)  // 刷新救回：撤销主地址负缓存（否则下轮短路在缓存查询之前）
-                return bytes
-            } catch (e2: HttpStatusException) {
-                if (e2.code in 400..499) {
-                    rejected[fresh] = true
-                    log.debug("刷新后的地址仍被拒（{}）: {} body: {}", e2.code, ref, e2.body?.take(300))
-                } else {
-                    log.debug("刷新后下载失败（瞬时）status={} ref={}", e2.code, ref)
-                }
-                return null
-            }
+            return if (refresh == null) null else rescue(key, ref, refresh)
         } catch (e: Exception) {
             log.debug("图片取材失败（瞬时，下轮可重试）source={}: {}", key, e.message)
             return null
+        }
+    }
+
+    /**
+     * 救援：主地址确定性失效后经 [refresh] 拿新鲜地址（或本地路径）重试一次
+     *
+     * **结局语义**：只有救援「结局已确定」（刷新给不出新鲜地址 / 新地址同样被拒）
+     * 才记 [rescueTried]，后续轮次不再救援；刷新调用本身瞬时失败**不标记**，
+     * 下轮照常再试——与「瞬时故障下轮重试」的负缓存哲学一致。
+     *
+     * **失败即 null**：本方法捕获一切异常（含内层下载的 IO/传输层错误），
+     * 绝不冒泡——图片救援不允许中断调用方的决策轮（第四轮 OOP 审查 P1-3）。
+     */
+    private fun rescue(key: String, ref: String, refresh: () -> String?): ByteArray? {
+        val fresh = try {
+            refresh()
+        } catch (e: Exception) {
+            log.debug("图片救援调用瞬时失败（下轮再试）ref={}: {}", ref, e.message)
+            return null
+        }?.trim()
+        if (fresh.isNullOrEmpty() || fresh == key) {
+            rescueTried[key] = true
+            log.debug("图片地址刷新无果（刷新器未给出新鲜地址）: {}", ref)
+            return null
+        }
+        if (rejected.containsKey(fresh)) {
+            rescueTried[key] = true
+            return null
+        }
+        return try {
+            val bytes = download(fresh)
+            log.debug("图片地址刷新成功，重新下载: {}", ref)
+            rejected.remove(key)  // 救回：撤销主地址负缓存（否则下轮短路在救援之前）
+            bytes
+        } catch (e: HttpStatusException) {
+            if (e.code in 400..499) {
+                rejected[fresh] = true
+                rescueTried[key] = true
+                log.debug("刷新后的地址仍被拒（{}）: {} body: {}", e.code, ref, e.body?.take(300))
+            } else {
+                log.debug("刷新后下载失败（瞬时，下轮可重试）status={} ref={}", e.code, ref)
+            }
+            null
+        } catch (e: Exception) {
+            // IO/传输层异常：吞掉返回 null，绝不从中断调用方决策轮
+            log.debug("刷新后下载瞬时失败（下轮再试）ref={}: {}", ref, e.message)
+            null
         }
     }
 

@@ -208,6 +208,87 @@ class ImageChannelTest {
         assertEquals(1, calls)
     }
 
+    // ------------------------------------------------------------------
+    // 负缓存 × 救援（第四轮 OOP 审查 P1-2 / P1-3）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `negative cached url still gets one rescue attempt when refresh provided`() {
+        // 实盘断链：预取链不带 refresh，4xx 写负缓存；决策轮带 refresh 却在
+        // 负缓存检查处短路——必达救援一次都执行不到。URL 死了 ≠ 救援试过
+        val fresh = "https://x/rescued.png"
+        var primary = 0
+        var freshCalls = 0
+        val resolver = ImageResolver(fetchHttp = { url ->
+            if (url == fresh) {
+                freshCalls++
+                pngBytes
+            } else {
+                primary++
+                throw ImageResolver.HttpStatusException(400, "download url has expired")
+            }
+        })
+
+        // 预取（无 refresh）：4xx 进负缓存
+        assertNull(resolver.resolve("https://x/prefetched.png", "p.png"))
+        assertEquals(1, primary, "主地址已确定性拒绝")
+
+        // 决策轮（带 refresh）：负缓存不得短路救援
+        val img = resolver.resolve("https://x/prefetched.png", "p.png", refresh = { fresh })
+        assertNotNull(img, "负缓存只封 URL 下载，救援没试过就要试")
+        assertEquals(1, freshCalls, "救援应恰好执行一次")
+        assertEquals(1, primary, "负缓存仍保证主地址只下载一次")
+    }
+
+    @Test
+    fun `rescue stops after terminal outcome without looping`() {
+        // 救援结局确定（刷新给不出新鲜地址）→ 只试一次，后续轮彻底静默
+        var refreshCalls = 0
+        var primary = 0
+        val resolver = ImageResolver(fetchHttp = { _ ->
+            primary++
+            throw ImageResolver.HttpStatusException(400)
+        })
+
+        assertNull(resolver.resolve("https://x/once.png", "o.png", refresh = { refreshCalls++; null }))
+        assertNull(resolver.resolve("https://x/once.png", "o.png",
+            refresh = { refreshCalls++; throw AssertionError("救援结局已确定不应再调用刷新器") }))
+
+        assertEquals(1, refreshCalls, "救援终局后不再触发刷新")
+        assertEquals(1, primary, "主地址负缓存仍只下载一次")
+    }
+
+    @Test
+    fun `transient refresh failure is retried next round not permanently blacklisted`() {
+        // 瞬时失败（ws 断）不该把主地址连带永久拉黑——下轮救援应重试
+        val fresh = "https://x/later.png"
+        var refreshCalls = 0
+        val resolver = ImageResolver(fetchHttp = { url ->
+            if (url == fresh) pngBytes else throw ImageResolver.HttpStatusException(400)
+        })
+
+        assertNull(resolver.resolve("https://x/t.png", "t.png",
+            refresh = { refreshCalls++; if (refreshCalls == 1) throw RuntimeException("ws down") else fresh }),
+            "第一轮救援瞬时失败")
+
+        val img = resolver.resolve("https://x/t.png", "t.png",
+            refresh = { refreshCalls++; if (refreshCalls == 1) throw RuntimeException("ws down") else fresh })
+        assertNotNull(img, "瞬时救援失败下轮应重试并成功：refreshCalls=$refreshCalls")
+    }
+
+    @Test
+    fun `io failure on refreshed url is swallowed as null`() {
+        // 内层下载异常只 catch HttpStatusException 会从 catch 块逃逸，
+        // 冒泡到 gatherPromptImages 中断决策轮并跳过退出记忆整理（P1-3）
+        val resolver = ImageResolver(fetchHttp = { url ->
+            if (url.contains("fresh")) throw RuntimeException("connection reset")
+            throw ImageResolver.HttpStatusException(400)
+        })
+
+        val img = resolver.resolve("https://x/x.png", "x.png", refresh = { "https://x/fresh.png" })
+        assertNull(img, "拿不到即 null，绝不冒泡")
+    }
+
     @Test
     fun `cq parser extracts image url by file tag`() {
         val cq = "[CQ:image,file=90A5.jpg,url=https://x/a.jpg?appid=1&fileid=2]" +

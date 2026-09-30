@@ -480,14 +480,18 @@ class ConversationController(
             line.urls.forEachIndexed { i, url ->
                 val ref = refs.getOrNull(i)?.takeIf { it.isNotBlank() }
                     ?: url.substringAfterLast('/').substringBefore('?')
-                val img = imageResolver.resolve(url, ref, refreshSupplier(line.messageId, ref))
+                // 兜底 runCatching：ImageResolver 契约是失败即 null，但取材
+                // 绝不允许中断决策轮（图片通道不背会话链路的锅）
+                val img = runCatching {
+                    imageResolver.resolve(url, ref, refreshSupplier(line.messageId, ref))
+                }.getOrNull()
                 if (img != null) images += img else missing += ref
             }
             // 占位符有、地址没有（旧数据/收集不全）→ 先走协议侧 get_image 救，救不回才算未能附上
             for (i in line.urls.size until refs.size) {
                 val ref = refs[i].takeIf { it.isNotBlank() } ?: continue
                 val img = runCatching { imageSource(ref) }.getOrNull()
-                    ?.let { imageResolver.resolve(it, ref) }
+                    ?.let { runCatching { imageResolver.resolve(it, ref) }.getOrNull() }
                 if (img != null) images += img else missing += ref
             }
         }
