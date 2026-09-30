@@ -1392,7 +1392,11 @@ class ConversationAgentFallbackTest {
         assertTrue(prompt.contains("回复 #id"), "引用回复语法：$prompt")
         assertTrue(prompt.contains("图片/表情包发不了"), "应声明图片发不了")
         assertTrue(prompt.contains("不要原样发出去"), "应提醒行 id 标记不入正文")
-        assertTrue(prompt.contains("自己 send 时也用同样的标记"), "标记说明应覆盖自发场景")
+        // 读侧：聊天记录标记的语义说明（回复/艾特/表情怎么读、怎么回）
+        assertTrue(prompt.contains("读懂它们才能接上语境"), "标记阅读说明：$prompt")
+        assertTrue(prompt.contains("在**引用**某人之前说的话"), "回复标记语义：$prompt")
+        assertTrue(prompt.contains("[表情:14]` = 对方发了 QQ 表情"), "表情标记语义：$prompt")
+        assertTrue(prompt.contains("用 send 的 reply/at/face 字段"), "读→写对应（结构化回法）：$prompt")
     }
 
     @Test
