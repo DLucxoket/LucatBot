@@ -165,7 +165,8 @@ class MessageListController(
                 isAtMe = lucatBot.hasUnreadAtMe(convId),
                 isAtAll = lucatBot.hasUnreadAtAll(convId),
                 botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) },
-                suspectedBanDate = lucatBot.suspectedBanSince(convId)?.let { formatBanDate(it) }
+                suspectedBanDate = lucatBot.suspectedBanSince(convId)?.let { formatBanDate(it) },
+                memoryBrief = briefFor(convId)
             )
         }
 
@@ -183,10 +184,35 @@ class MessageListController(
                 unreadCount = 0,
                 lastMessage = entry.content,
                 botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) },
-                suspectedBanDate = lucatBot.suspectedBanSince(convId)?.let { formatBanDate(it) }
+                suspectedBanDate = lucatBot.suspectedBanSince(convId)?.let { formatBanDate(it) },
+                memoryBrief = briefFor(convId)
             )
         }
         return lines
+    }
+
+    /**
+     * 会话主体的记忆摘要（挂行尾）——**最新优先**：[MemoryService.getMemoriesOf]
+     * 按写入时间倒序，take([briefMax]) 即最新几条；单条截 [briefMaxChars] 字
+     *
+     * 泛概览（### 短期记忆）对得上「有什么记忆」但对不上「哪条属于哪个会话」；
+     * 行挂摘要让待办/记忆驱动直接与目标会话关联（实盘：记忆里有任务却选不中
+     * 对应会话）。空主体返回 null 不渲染。
+     */
+    private fun briefFor(conversationId: String): String? {
+        val items = memoryService.getMemoriesOf(
+            org.dlucxoket.lucatbot.bot.memory.MemorySubject.fromConversation(conversationId)
+        ).take(briefMax)
+        if (items.isEmpty()) return null
+        return items.joinToString("；") { item ->
+            val c = item.content
+            if (c.length > briefMaxChars) c.take(briefMaxChars) + "…" else c
+        }.ifBlank { null }
+    }
+
+    private companion object {
+        const val briefMax = 3
+        const val briefMaxChars = 40
     }
 
     /** 疑似禁言标记日期（MMdd；跨年 yyyy-MM-dd） */

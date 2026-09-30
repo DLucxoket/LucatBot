@@ -54,7 +54,14 @@ data class SessionSummaryLine(
      * 疑似被禁言的标记日期（MMdd，跨年 yyyy-MM-dd；null = 无记录）——
      * 发送失败 retCode 判禁言时打点、发送成功清除（见 LucatBot.markSuspectedBan）
      */
-    val suspectedBanDate: String? = null
+    val suspectedBanDate: String? = null,
+
+    /**
+     * 该会话主体的**记忆摘要**（最新几条拼成单行；null = 无记忆）——
+     * 挂在行尾让选会话 LLM 直接看到「关于这个人/群我记得什么」，
+     * 待办/记忆驱动才能与具体会话对上（泛概览对不上行是实盘缺口）
+     */
+    val memoryBrief: String? = null
 )
 
 /**
