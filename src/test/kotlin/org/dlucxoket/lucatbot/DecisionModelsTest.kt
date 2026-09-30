@@ -123,6 +123,56 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `send content array resolves into outgoing messages`() {
+        // 分段发送：数组成员 → OOP（条级 reply/delay + 结构化 members）
+        val d = ConversationDecision.parse("""{"action":"send","params":{"content":[
+            {"reply": 1683970346, "delay": 2.5, "members":[
+                {"type":"text","text":"哈哈"},
+                {"type":"at","qq":2402567904},
+                {"type":"face","id":14}
+            ]},
+            {"members":[{"type":"text","text":"补一句"}]}
+        ]}}""")
+        assertEquals(ConversationAction.SEND, d.action, "数组 content 也过 SEND 校验")
+
+        val out = d.resolveOutgoing()
+        assertEquals(2, out.size, "两条消息")
+        assertEquals(1683970346L, out[0].replyToId, "条级 reply 解析为 Long")
+        assertEquals(2.5, out[0].delaySeconds, "延迟秒数解析")
+        assertEquals(3, out[0].members.size, "结构化段全解析")
+        assertEquals("text", out[0].members[0].type)
+        assertEquals("哈哈", out[0].members[0].text)
+        assertEquals("2402567904", out[0].members[1].qq, "数字 qq 统一转字符串")
+        assertEquals("14", out[0].members[2].id)
+        assertNull(out[1].replyToId, "可选字段缺省 → null")
+        assertEquals(0.0, out[1].delaySeconds, "缺省延迟为 0")
+    }
+
+    @Test
+    fun `send string content stays compatible as single message`() {
+        // 旧字符串写法兼容：LLM 惯性输出不炸
+        val d = ConversationDecision.parse("""{"action":"send","params":{"content":"在吗"}}""")
+        val out = d.resolveOutgoing()
+        assertEquals(1, out.size, "字符串 → 单条")
+        assertEquals("在吗", out[0].text)
+        assertNull(out[0].replyToId)
+        assertTrue(out[0].members.isEmpty())
+    }
+
+    @Test
+    fun `send invalid array entries are dropped`() {
+        // 空数组 / 无 members 无 reply 的条目 / 坏元素 → 丢弃（编排层走「无效发送」提示）
+        assertEquals(0, ConversationDecision.parse(
+            """{"action":"send","params":{"content":[]}}""").resolveOutgoing().size)
+        assertEquals(0, ConversationDecision.parse(
+            """{"action":"send","params":{"content":[{"delay":1}]}}""").resolveOutgoing().size,
+            "既无成员也无 reply 的条目丢弃")
+        assertEquals(1, ConversationDecision.parse(
+            """{"action":"send","params":{"content":["坏元素",{"members":[{"type":"text","text":"ok"}]}]}}"""
+        ).resolveOutgoing().size, "坏元素跳过、有效条目保留")
+    }
+
+    @Test
     fun `invalid falls back to RETURN`() {
         assertEquals(ConversationAction.RETURN, ConversationDecision.parse("garbage").action)
         assertEquals(ConversationAction.RETURN, ConversationDecision.parse("""{"action":"dance"}""").action)

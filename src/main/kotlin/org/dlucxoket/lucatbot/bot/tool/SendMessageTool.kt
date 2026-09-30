@@ -48,8 +48,13 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
             val type = parts[0]
             val id = parts[1].toLongOrNull() ?: return SendMessageResult(success = false, error = "无效ID")
 
-            // 富标记 → 消息段；解析为空（空内容或全是丢弃型标记）按失败返回
-            val segments = toWire(SendContentParser.parse(input.content))
+            // 富标记 → 消息段：结构化（reply+members，分段发送的单条）优先；
+            // 否则旧 content 走富标记解析。解析为空（空内容或全是丢弃型标记）按失败返回
+            val segments = if (input.members.isNotEmpty() || input.replyToId != null) {
+                buildSegments(input.replyToId, input.members)
+            } else {
+                toWire(SendContentParser.parse(input.content))
+            }
             if (segments.isEmpty()) {
                 return SendMessageResult(success = false, error = "消息内容为空（或只含无法发送的标记，如 [图片]）")
             }
@@ -82,6 +87,46 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
         } catch (e: Exception) {
             SendMessageResult(success = false, error = e.message)
         }
+    }
+
+    /**
+     * 结构化消息段 → OneBot 数组消息（reply 段统一提到头部——与富标记路径同规则）
+     *
+     * - [replyToId] → 引用段（一条消息最多一个回复）
+     * - `text` 仍过 [SendContentParser]（老标记 @昵称(QQ) / [表情:14] / 回复 #id：
+     *   兼容生效）；顶层已有 reply 时丢弃 text 内解析出的回复段，保证不重复
+     * - `at`：qq=`all` → @全体成员，否则按 QQ 号；`face`：数字表情 id
+     * - 未知 type 丢弃（图片/表情包没有发送通道）
+     */
+    internal fun buildSegments(
+        replyToId: Long?,
+        members: List<org.dlucxoket.lucatbot.model.message.OutgoingMember>
+    ): List<ArrayMsg> {
+        val out = mutableListOf<ArrayMsg>()
+        replyToId?.let {
+            out += ArrayMsg().setType(MsgTypeEnum.reply).setData(mapOf("id" to it.toString()))
+        }
+        for (m in members) {
+            when (m.type) {
+                "text" -> {
+                    val parsed = SendContentParser.parse(m.text.orEmpty())
+                        .filter { replyToId == null || it !is ReplyMessageMember }
+                    out += toWire(parsed)
+                }
+                "at" -> {
+                    val qq = m.qq.orEmpty()
+                    if (qq.isNotEmpty()) {
+                        out += ArrayMsg().setType(MsgTypeEnum.at)
+                            .setData(mapOf("qq" to if (qq.equals("all", ignoreCase = true)) "all" else qq))
+                    }
+                }
+                "face" -> m.id?.toIntOrNull()?.let { fid ->
+                    out += ArrayMsg().setType(MsgTypeEnum.face).setData(mapOf("id" to fid.toString()))
+                }
+                else -> Unit  // 未知类型丢弃（图片/表情包无发送通道）
+            }
+        }
+        return out
     }
 
     /**

@@ -75,18 +75,26 @@ class FakeChatHistoryTool(
     }
 }
 
-/** 假发送工具：记录发送内容 */
+/** 假发送工具（记录每次请求；支持第 N 次调用失败——分段发送部分失败用） */
 class FakeSendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
     val sent = mutableListOf<String>()
+    val requests = mutableListOf<SendMessageRequest>()
     var fail = false
     /** 失败时返回的错误文案（默认通用失败；可配 retCode 等细节验证失败提示） */
     var error = "mock fail"
+    /** 第 N 次 handle 调用返回失败（1 起）；null = 由 [fail] 控制 */
+    var failOnCall: Int? = null
+    private var calls = 0
     override val name = "FakeSendMessageTool"
     override val description = ""
     override val parameterHint = ""
     override val inputClass = SendMessageRequest::class.java
     override fun handle(input: SendMessageRequest): SendMessageResult {
-        if (fail) return SendMessageResult(success = false, error = error)
+        calls++
+        requests += input
+        if (fail || (failOnCall != null && calls == failOnCall)) {
+            return SendMessageResult(success = false, error = error)
+        }
         sent += input.content
         return SendMessageResult(success = true)
     }
@@ -426,6 +434,75 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("图片加载失败"), "附件缺失的事实要如实进 prompt：$prompt")
         assertTrue(prompt.contains("gone.png"), "缺失清单带文件标签：$prompt")
         assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "会话流程不受影响")
+    }
+
+    @Test
+    fun `send content array dispatches segments sequentially`() {
+        // 分段发送：数组逐条发（条级 reply 传递），全部成功后进入下一轮
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":[
+                {"reply": 99, "members":[{"type":"text","text":"第一条"}]},
+                {"delay": 0, "members":[{"type":"text","text":"第二条"},{"type":"at","qq":"all"}]}
+            ]}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, lucatBot, sendTool) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(2, sendTool.requests.size, "数组两条应逐条发送")
+        assertEquals(99L, sendTool.requests[0].replyToId, "条级 reply 传递到工具")
+        assertEquals("text", sendTool.requests[0].members[0].type, "结构化段传递")
+        assertEquals("第一条", sendTool.requests[0].members[0].text)
+        assertNull(sendTool.requests[1].replyToId, "第二条无 reply")
+        assertEquals(2, sendTool.requests[1].members.size, "多段成员保留")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "发送后按脚本 return")
+        // 操作日志汇总两条
+        assertTrue(llm.prompts[1].contains("第一条") || llm.prompts[1].contains("回复："),
+            "记账文本进下一轮 prompt：${llm.prompts[1]}")
+    }
+
+    @Test
+    fun `segmented send stops at failure and reports segment position`() {
+        // 部分失败：第 2/3 条失败即停（第 3 条不发），已发第 1 条照常记账，提示带第 k/N
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":[
+                {"members":[{"type":"text","text":"第一"}]},
+                {"members":[{"type":"text","text":"第二"}]},
+                {"members":[{"type":"text","text":"第三"}]}
+            ]}}""",
+            """{"action":"return"}"""
+        ))
+        val sendTool = FakeSendMessageTool().apply { failOnCall = 2; error = "发送失败 status=failed retCode=1200（可能被禁言）" }
+        val (controller, _, _) = buildController(llm, sendTool = sendTool)
+
+        controller.run(SessionPick(SessionPickType.GROUP, "42"))
+
+        assertEquals(2, sendTool.requests.size, "失败即停——第三条不发")
+        val secondPrompt = llm.prompts[1]
+        assertTrue(secondPrompt.contains("第 2/3 条失败"), "失败提示带第 k/N 条：$secondPrompt")
+        assertTrue(secondPrompt.contains("被禁言了"), "禁言判定照常（retCode 仍在 detail 里）：$secondPrompt")
+        assertEquals("", sendTool.sent.lastOrNull() ?: "", "失败条不入 sent")
+        // 已发第 1 条的记账在操作日志里
+        assertTrue(secondPrompt.contains("已发 1/3") || secondPrompt.contains("第一"),
+            "部分成功要如实记账：$secondPrompt")
+    }
+
+    @Test
+    fun `send with invalid content array notifies without burning failure streak`() {
+        // LLM 输出空数组/无效条目 → 如实提示重发，不计通道失败（不碰护栏）
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":[]}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, sendTool) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(sendTool.requests.isEmpty(), "无效内容不发")
+        val secondPrompt = llm.prompts[1]
+        assertTrue(secondPrompt.contains("无法识别任何有效消息"), "无效发送如实告知：$secondPrompt")
+        assertTrue(secondPrompt.contains("重新组织"), "引导按格式重发：$secondPrompt")
     }
 
     @Test
@@ -1302,13 +1379,17 @@ class ConversationAgentFallbackTest {
     }
 
     @Test
-    fun `send rule documents rich message markers`() {
+    fun `send rule documents segmented array format and legacy markers`() {
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         ConversationAgent(llm).processObject(ConversationRequest())
         val prompt = llm.prompts.single()
-        assertTrue(prompt.contains("回复 #消息id"), "send 规则应含引用回复语法：$prompt")
+        assertTrue(prompt.contains("JSON 数组"), "send 应声明 content 为 JSON 数组（分段发送）：$prompt")
+        assertTrue(prompt.contains("\"delay\""), "应教条级打字延迟：$prompt")
+        assertTrue(prompt.contains("\"reply\""), "应教条级回复：$prompt")
+        assertTrue(prompt.contains("\"members\""), "应教结构化 members：$prompt")
         assertTrue(prompt.contains("@全体成员"), "send 规则应含 @全体成员")
-        assertTrue(prompt.contains("[表情:14]"), "send 规则应含 QQ 表情语法")
+        assertTrue(prompt.contains("[表情:14]"), "send 规则应含 QQ 表情语法（老标记兼容）")
+        assertTrue(prompt.contains("回复 #id"), "引用回复语法：$prompt")
         assertTrue(prompt.contains("图片/表情包发不了"), "应声明图片发不了")
         assertTrue(prompt.contains("不要原样发出去"), "应提醒行 id 标记不入正文")
         assertTrue(prompt.contains("自己 send 时也用同样的标记"), "标记说明应覆盖自发场景")

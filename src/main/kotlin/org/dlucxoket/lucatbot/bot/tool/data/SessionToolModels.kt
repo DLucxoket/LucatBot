@@ -75,14 +75,22 @@ data class SessionMessage(
     val timestamp: Long = 0L
 )
 
-/** 发送消息请求 */
+/** 发送消息请求（两种形态：旧 content 富标记字符串 / 新 reply+members 结构化段） */
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class SendMessageRequest(
     @JsonProperty("conversationId")
     val conversationId: String = "",
 
     @JsonProperty("content")
-    val content: String = ""
+    val content: String = "",
+
+    /** 条级回复目标消息 id（结构化发送；一条消息最多一个回复） */
+    @JsonProperty("replyToId")
+    val replyToId: Long? = null,
+
+    /** 结构化消息段（非空 = 结构化发送，忽略 content） */
+    @JsonProperty("members")
+    val members: List<org.dlucxoket.lucatbot.model.message.OutgoingMember> = emptyList()
 )
 
 /** 发送消息响应 */

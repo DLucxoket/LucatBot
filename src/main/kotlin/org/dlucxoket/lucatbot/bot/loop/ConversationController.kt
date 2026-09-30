@@ -292,38 +292,53 @@ class ConversationController(
                 }
 
                 ConversationAction.SEND -> {
-                    val content = decision.content.orEmpty()
-                    val sendResult = sendMessageTool.processObject(
-                        SendMessageRequest(conversationId = conversationId, content = content)
-                    )
-                    if (!sendResult.success) {
-                        // 失败消息不入档（SendMessageTool 仅 ok 后写记录；短期记忆/正则提取
-                        // 也只走成功分支）——LLM 下一轮看到失败通知后自行决定去留
-                        sendFailStreak++
-                        val detail = sendResult.error.orEmpty()
-                        log.warn("发送失败: {}", detail)
-                        actionLog.append("发送失败")
-                        sendFailureNote = buildSendFailureNote(detail, isGroup)
-                        mustIcebreak = false // 破冰已尝试——失败后去留交给 LLM，不许再强制重发
-                        if (deferredRemember != null) {
-                            // 没发出去就不能记「我回复了…」——丢弃（LLM 可下轮重新 decide）
-                            log.info("发送失败，丢弃随发送写入的记忆: {}", deferredRemember)
+                    // 分段发送：content 数组逐条发（delay 模拟打字、可被新消息唤醒）；
+                    // 中途失败即停剩余（已发的照常记账——对方看得见），提示带第 k/N 条
+                    val outgoing = decision.resolveOutgoing()
+                    val sentContents = mutableListOf<String>()
+                    var failDetail: String? = null
+                    var failIndex = 0
+                    var interrupted = false
+                    for ((idx, msg) in outgoing.withIndex()) {
+                        val delayMs = (msg.delaySeconds * 1000).toLong().coerceIn(0L, 30_000L)
+                        if (delayMs > 0) {
+                            try {
+                                if (lucatBot.awaitPendingInsert(conversationId, delayMs)) {
+                                    log.info("第 {} 条发送前延迟被新消息提前唤醒（{}ms）", idx + 1, delayMs)
+                                }
+                            } catch (e: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                log.info("分段发送延迟被中断，退出会话")
+                                interrupted = true
+                                break
+                            }
                         }
-                        if (sendFailStreak >= maxSendFailures) {
-                            // 病态护栏：连续失败达上限（如一直被禁言还反复试发）强制收尾
-                            actionLog.append("连续发送失败 $sendFailStreak 次，返回消息列表")
-                            log.warn("连续发送失败 {} 次，强制离开会话", sendFailStreak)
-                            return
+                        val sendResult = sendMessageTool.processObject(
+                            SendMessageRequest(
+                                conversationId = conversationId,
+                                content = msg.text.orEmpty(),
+                                replyToId = msg.replyToId,
+                                members = msg.members
+                            )
+                        )
+                        if (!sendResult.success) {
+                            failDetail = sendResult.error.orEmpty()
+                            failIndex = idx + 1
+                            break
                         }
-                    } else {
+                        sentContents += msg.summarize()
+                    }
+
+                    // 已发部分统一记账（部分成功也算发出去了——Tool 已写聊天记录，
+                    // 这里补短期记忆/正则提取/操作日志/justSent）
+                    if (sentContents.isNotEmpty()) {
+                        val sentText = sentContents.joinToString(" ")
                         sendFailStreak = 0
                         sendFailureNote = null
                         // 发送成功 → 才写延后的 remember（「我回复了xxx」此时才属实）
                         deferredRemember?.let { writeRemember(it, conversationId) }
-                        // 发出后：SendMessageTool 已写聊天记录（isBot=true）；这里补短期记忆
                         sessionManager.addMessage(
-                            conversationId, lucatBot.persona.name, content,
-                            isBot = true
+                            conversationId, lucatBot.persona.name, sentText, isBot = true
                         )
                         // 只从「对方最后一条消息」提取记忆：recentLines 末尾可能是
                         // 机器人自己的回复，把 bot 的话喂给正则会误记成用户的长期 FACT
@@ -342,13 +357,52 @@ class ConversationController(
                                 )
                             }
                         }
-                        actionLog.append("回复：$content")
+                        actionLog.append("回复：$sentText")
                         lucatBot.mood = lucatBot.mood.boost()
-
                         mustIcebreak = false
                         readMoreWithInsertStreak = 0
                         // 发完不等待，立即进入下一轮决策；连发由 hint 约束
-                        justSent = content
+                        justSent = sentText
+                    }
+                    if (interrupted) return
+
+                    when {
+                        outgoing.isEmpty() -> {
+                            // LLM 输出的 content 空/全是无效条目——如实告知重发；
+                            // 属输出格式问题（非通道失败），不计 sendFailStreak
+                            log.warn("send 的 content 无有效消息，未发出")
+                            actionLog.append("发送内容无效")
+                            sendFailureNote = "上一轮你 send 的 content 为空或无法识别任何有效消息，" +
+                                "没有发出任何内容——按 send 动作说明重新组织（JSON 数组，每条含 members）再发。"
+                            mustIcebreak = false
+                        }
+                        failDetail != null -> {
+                            // 失败消息不入档（SendMessageTool 仅 ok 后写记录）——
+                            // LLM 下一轮看到失败通知后自行决定去留
+                            sendFailStreak++
+                            val detail = if (outgoing.size > 1) {
+                                "第 $failIndex/${outgoing.size} 条失败：$failDetail"
+                            } else {
+                                failDetail
+                            }
+                            log.warn("发送失败: {}", detail)
+                            actionLog.append(
+                                if (sentContents.isEmpty()) "发送失败"
+                                else "发送部分失败（已发 ${sentContents.size}/${outgoing.size}）"
+                            )
+                            sendFailureNote = buildSendFailureNote(detail, isGroup)
+                            mustIcebreak = false // 破冰已尝试——失败后去留交给 LLM，不许再强制重发
+                            if (sentContents.isEmpty() && deferredRemember != null) {
+                                // 一条都没发出去就不能记「我回复了…」——丢弃（LLM 可下轮重新 decide）
+                                log.info("发送失败，丢弃随发送写入的记忆: {}", deferredRemember)
+                            }
+                            if (sendFailStreak >= maxSendFailures) {
+                                // 病态护栏：连续失败达上限（如一直被禁言还反复试发）强制收尾
+                                actionLog.append("连续发送失败 $sendFailStreak 次，返回消息列表")
+                                log.warn("连续发送失败 {} 次，强制离开会话", sendFailStreak)
+                                return
+                            }
+                        }
                     }
                 }
 

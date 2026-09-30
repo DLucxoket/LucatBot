@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.BotPersona
+import org.dlucxoket.lucatbot.model.message.OutgoingMember
 
 /**
  * 会话内动作
@@ -56,8 +57,51 @@ data class ConversationDecision(
     @JsonProperty("todo_done")
     val todo_done: String? = null
 ) {
-    /** send 的正文（params.content） */
+    /** send 的正文——仅旧字符串写法（`"content": "纯文本"`）时非 null；数组写法为 null */
     val content: String? get() = params["content"] as? String
+
+    /**
+     * send 的分段解析（**JSON → OOP 映射**，LLM 边界的延伸）
+     *
+     * 两种写法：
+     * - 旧：`"content": "纯文本"` → 单条（text 走富标记兼容路径）
+     * - 新：`"content": [消息对象…]` → 逐条映射（条级 reply/delay + members 结构化段）
+     *
+     * 坏值容错：缺字段/类型不符按可选处理（reply 解析不出 → null、delay 非数 → 0、
+     * 未知 member type 保留交 Tool 丢弃）；完全无法识别的条目丢弃。
+     * 全部丢光返回空列表——编排层发空会被 Tool 判「消息内容为空」失败，自然兜底。
+     */
+    fun resolveOutgoing(): List<OutgoingMessage> {
+        return when (val c = params["content"]) {
+            is String -> if (c.isBlank()) emptyList() else listOf(OutgoingMessage(text = c))
+            is List<*> -> c.mapNotNull { element ->
+                val m = element as? Map<*, *> ?: return@mapNotNull null
+                val members = (m["members"] as? List<*>)?.mapNotNull { raw ->
+                    val mm = raw as? Map<*, *> ?: return@mapNotNull null
+                    OutgoingMember(
+                        type = mm["type"]?.toString()?.trim()?.lowercase(),
+                        text = mm["text"]?.toString(),
+                        qq = mm["qq"]?.toString()?.trim(),
+                        id = mm["id"]?.toString()?.trim()
+                    ).takeIf { it.type != null }
+                } ?: emptyList()
+                OutgoingMessage(
+                    replyToId = when (val r = m["reply"]) {
+                        is Number -> r.toLong()
+                        is String -> r.trim().toLongOrNull()
+                        else -> null
+                    },
+                    delaySeconds = when (val d = m["delay"]) {
+                        is Number -> d.toDouble()
+                        is String -> d.trim().toDoubleOrNull() ?: 0.0
+                        else -> 0.0
+                    },
+                    members = members
+                ).takeIf { it.members.isNotEmpty() || it.replyToId != null }
+            }
+            else -> emptyList()
+        }
+    }
 
     /** read_more 的条数（params.count，默认 10） */
     val readCount: Int get() = (params["count"] as? Number)?.toInt() ?: 10
@@ -143,6 +187,34 @@ data class ConversationDecision(
             )
         }
     }
+}
+
+/**
+ * send 的一条待发消息（content 数组成员——**分段发送**，像真人分段打字）
+ *
+ * @param text 旧字符串写法的正文（结构化写法为 null）；结构化时用 [members]
+ * @param replyToId 条级回复的目标消息 id（聊天记录行上的 #数字；一条消息最多一个）
+ * @param delaySeconds 本条发送前的延迟（秒，模拟打字；编排层钳制并可被新消息唤醒）
+ * @param members 结构化消息段（text / at / face，见 [OutgoingMember]）
+ */
+data class OutgoingMessage(
+    val text: String? = null,
+    val replyToId: Long? = null,
+    val delaySeconds: Double = 0.0,
+    val members: List<OutgoingMember> = emptyList()
+) {
+    /** 记账/提示用的可读摘要（text 优先；结构化则拼接段） */
+    fun summarize(): String = text ?: buildString {
+        replyToId?.let { append("回复 #$it：") }
+        members.forEach { m ->
+            when (m.type) {
+                "text" -> append(m.text.orEmpty())
+                "at" -> append("@${m.qq} ")
+                "face" -> append("[表情:${m.id}]")
+                else -> Unit
+            }
+        }
+    }.trim()
 }
 
 /**
