@@ -47,6 +47,47 @@ class MemoryAgentTest {
     }
 
     @Test
+    fun `parse extracts done_todos even when memories section is broken`() {
+        // 待办结算结论不因 memories 段损坏被连带丢掉（LLM 给了合法 done_todos 就可信）
+        val ok = MemoryReflectResult.parse("""{"memories":[],"done_todos":["去群里看看"]}""")
+        assertEquals(listOf("去群里看看"), ok.doneTodos)
+        assertFalse(ok.degraded)
+
+        val broken = MemoryReflectResult.parse("""{"done_todos":["去群里看看"]}""")
+        assertTrue(broken.degraded, "memories 缺失仍是降级结果")
+        assertEquals(listOf("去群里看看"), broken.doneTodos, "结算结论照取")
+
+        assertTrue(MemoryReflectResult.parse("""{"memories":[]}""").doneTodos.isEmpty(), "没给就是空")
+    }
+
+    @Test
+    fun `stage1 prompt carries pending todos and settlement rule`() {
+        // 兜底结算：未完成待办要进整理 prompt，且输出契约/判断标准写明
+        val llm = FakeLLM(mutableListOf("""{"memories":[]}"""))
+        MemoryAgent(llm).processObject(
+            MemoryReflectRequest(
+                conversationContent = "对话",
+                pendingTodos = "- [ ] (ab12) 去黄皮耗子群看看谁在找我"
+            )
+        )
+        val prompt = llm.prompts.single()
+        val user = prompt.substringAfter("\n=====USER=====\n")
+        assertTrue(user.contains("【未完成待办】"), "待办独立成段（user 消息）：$user")
+        assertTrue(user.contains("去黄皮耗子群看看谁在找我"), "未完成待办进 prompt：$user")
+        assertTrue(prompt.contains("done_todos"), "输出契约含结算字段")
+        assertTrue(prompt.contains("确实已经办完"), "结算判断标准（拿不准不写）")
+    }
+
+    @Test
+    fun `stage1 prompt omits todos section when no pending todo`() {
+        val llm = FakeLLM(mutableListOf("""{"memories":[]}"""))
+        MemoryAgent(llm).processObject(MemoryReflectRequest(conversationContent = "对话"))
+        // system 里本就写着结算规则（含【未完成待办】字样）——只看 user 段
+        val user = llm.prompts.single().substringAfter("\n=====USER=====\n")
+        assertFalse(user.contains("【未完成待办】"), "没有待办不占篇幅：$user")
+    }
+
+    @Test
     fun `handle returns empty on llm garbage without throwing`() {
         val agent = MemoryAgent(FakeLLM(mutableListOf("totally not json")))
         val result = agent.processObject(MemoryReflectRequest(conversationContent = "对话内容"))

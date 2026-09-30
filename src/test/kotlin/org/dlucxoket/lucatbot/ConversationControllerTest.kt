@@ -1219,6 +1219,48 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `todo_done settles and writes trace memory`() {
+        // 完成即留痕：标完成 + 「已办：…」写进来源会话主体的记忆——跨会话被问
+        // 「你不是办过了吗」时两头都看得见（不再只靠 LLM 自觉输出 todo_done）
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos-done", ".json").apply { delete() }.absolutePath)
+        )
+        todoService.add("帮他取快递", "private:123")
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-done", ".json").absolutePath)
+        )
+        val llm = FakeLLM(mutableListOf("""{"action":"return","todo_done":"帮他取快递","reason":"办完了"}"""))
+        val (controller, _, _) = buildController(
+            llm, todoService = todoService, memoryService = memoryService
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(todoService.pending().isEmpty(), "todo_done 标完成")
+        assertTrue(todoService.summaryForPrompt().contains("- [x]"), "完成项进待办摘要")
+        val trace = memoryService.getMemoriesOf(MemorySubject.user(123L))
+            .any { it.content == "已办：帮他取快递" }
+        assertTrue(trace, "完成留痕写进记忆：$trace")
+    }
+
+    @Test
+    fun `decision prompt shows recently completed todos`() {
+        val todoService = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todos-shown", ".json").apply { delete() }.absolutePath)
+        )
+        val item = todoService.add("去黄皮耗子群看看谁在找我", "private:123")
+        todoService.complete(item.id)
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, todoService = todoService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts.first()
+        assertTrue(prompt.contains("最近已完成"), "完成段进决策 prompt：$prompt")
+        assertTrue(prompt.contains("去黄皮耗子群看看谁在找我"), "办完的事可见：$prompt")
+    }
+
+    @Test
     fun `exit reflect writes fact and opinion into memory service`() {
         val decisionLLM = FakeLLM(mutableListOf("""{"action":"return","reason":"聊完了"}"""))
         val memoryLLM = FakeLLM(mutableListOf(

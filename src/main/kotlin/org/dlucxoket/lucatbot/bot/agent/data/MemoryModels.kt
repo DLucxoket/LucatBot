@@ -15,6 +15,9 @@ import com.fasterxml.jackson.annotation.JsonProperty
  * @param conversationContent 本次会话内容（多行文本，来自聊天记录摘要）
  * @param existingMemory 该对象的现有记忆摘要（读取参考，用于去重/避免矛盾；可空串）
  * @param timeHint 当前时间提示（可选）
+ * @param pendingTodos 阶段1：未完成待办清单（`- [ ] (id前4位) 内容` 多行；
+ *   空 = 没有待办，此时不提示待办结算）——本轮 LLM 顺带判断哪些**已经办完**，
+ *   输出到结果的 [MemoryReflectResult.doneTodos]
  * @param candidates 二阶段：待复核的候选记忆（非空 = 复核模式）
  * @param matchedMemories 二阶段：用候选关键词查库命中的已有记忆正文
  */
@@ -28,6 +31,9 @@ data class MemoryReflectRequest(
 
     @JsonProperty("timeHint")
     val timeHint: String = "",
+
+    @JsonProperty("pendingTodos")
+    val pendingTodos: String = "",
 
     @JsonProperty("candidates")
     val candidates: List<MemoryReflectItem> = emptyList(),
@@ -59,9 +65,14 @@ data class MemoryReflectItem(
  * 空列表 + [degraded]=false 表示「复核后确实没有要记的」；
  * [degraded]=true 表示解析/LLM 失败的兜底结果（内容不可信）——
  * 阶段2 复核失败时据此**保守放行**候选，绝不因复核环节故障吞掉记忆。
+ *
+ * @param doneTodos 阶段1 顺带产出的**待办结算**：本次对话确实办完的待办引用
+ *   （id / id 前 4 位 / 内容片段；空 = 没办完的）——编排层据此标完成 + 留痕，
+ *   不依赖 LLM 在会话里自觉输出 todo_done
  */
 data class MemoryReflectResult(
     val memories: List<MemoryReflectItem> = emptyList(),
+    val doneTodos: List<String> = emptyList(),
     val degraded: Boolean = false
 ) {
     companion object {
@@ -72,14 +83,18 @@ data class MemoryReflectResult(
         val EMPTY = MemoryReflectResult()
 
         /**
-         * 从 LLM 输出解析记忆列表
+         * 从 LLM 输出解析记忆列表 + 待办结算
          *
-         * 期望纯 JSON：`{"memories": [{"kind": ..., "content": ..., "tags": [...], "keywords": [...]}]}`。
-         * 解析失败、memories 缺失或非数组 → [DEGRADED]；content 空白的条目丢弃。
+         * 期望纯 JSON：`{"memories": [...], "done_todos": ["引用"]}`。
+         * memories 解析失败/缺失/非数组 → [DEGRADED]；content 空白的条目丢弃。
+         * **done_todos 只要有合法数组就取**——即使 memories 段坏了也不连带丢掉
+         * 结算结论（LLM 明确给出的 done_todos 是可信的）。
          */
         fun parse(llmOutput: String): MemoryReflectResult {
             val node = LlmJson.parseTree(llmOutput) ?: return DEGRADED
-            val array = node.get("memories")?.takeIf { it.isArray } ?: return DEGRADED
+            val doneTodos = node.stringList("done_todos")
+            val array = node.get("memories")?.takeIf { it.isArray }
+                ?: return MemoryReflectResult(doneTodos = doneTodos, degraded = true)
             val items = array.mapNotNull { entry ->
                 if (!entry.isObject) return@mapNotNull null
                 val content = entry.get("content")
@@ -95,7 +110,7 @@ data class MemoryReflectResult(
                 val keywords = entry.stringList("keywords")
                 MemoryReflectItem(kind = kind, content = content, tags = tags, keywords = keywords)
             }
-            return MemoryReflectResult(items)
+            return MemoryReflectResult(items, doneTodos)
         }
 
         /** 读取字符串数组字段（空缺/非数组/含 null → 空列表） */

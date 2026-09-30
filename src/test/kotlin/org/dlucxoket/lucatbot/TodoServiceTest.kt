@@ -94,6 +94,33 @@ class TodoServiceTest {
     }
 
     @Test
+    fun `complete by id prefix and summaryForPrompt shows recent done`() {
+        // 实盘：只展示 id 前 4 位 → LLM 照抄前缀；且办完的事必须在 prompt 里看得见
+        val repo = JsonFileTodoRepository(tempPath())
+        val service = TodoService(repo)
+
+        val item = service.add("帮他看群")
+        assertTrue(service.complete(item.id.take(4)), "按 id 前缀应能匹配完成")
+        assertTrue(service.pending().isEmpty())
+
+        val summary = service.summaryForPrompt()
+        assertTrue(summary.contains("（无待办）"), "未完成段空占位：$summary")
+        assertTrue(summary.contains("最近已完成"), "完成段标题：$summary")
+        assertTrue(summary.contains("- [x]") && summary.contains("帮他看群"),
+            "完成的事也看得见：$summary")
+        repo.shutdown()
+    }
+
+    @Test
+    fun `summaryForPrompt is pendingSummary when nothing done`() {
+        val repo = JsonFileTodoRepository(tempPath())
+        val service = TodoService(repo)
+        service.add("帮他看群")
+        assertEquals(service.pendingSummary(), service.summaryForPrompt(), "没有完成项时不加尾巴")
+        repo.shutdown()
+    }
+
+    @Test
     fun `json repo write flush and reload in new instance`() {
         val path = tempPath()
 

@@ -14,6 +14,7 @@ import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
+import org.dlucxoket.lucatbot.bot.todo.TodoSettlement
 import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.bot.tool.ToolNotes
 import org.dlucxoket.lucatbot.model.session.SessionManager
@@ -40,6 +41,9 @@ class MessageListController(
     private val toolCatalog: ToolCatalog = ToolCatalog()
 ) {
     private val log = LoggerFactory.getLogger(MessageListController::class.java)
+
+    /** 待办结算（todo_done 路径）：标完成 + 「已办」记忆留痕 + 操作日志 */
+    private val todoSettlement = TodoSettlement(todoService, memoryService, actionLog)
 
     /**
      * 走一轮「看消息列表」决策（可含多步工具调用）
@@ -129,17 +133,8 @@ class MessageListController(
             }
         }
         decision.todoDone?.let { ref ->
-            try {
-                if (todoService.complete(ref)) {
-                    actionLog.append("待办完成：$ref")
-                } else {
-                    log.warn("todo_done 未匹配到待办: {}", ref)
-                    actionLog.append("待办未匹配：$ref")
-                }
-            } catch (e: Exception) {
-                log.warn("todo_done 处理失败: {}", e.message)
-                actionLog.append("待办完成失败")
-            }
+            // 结算统一收口（与会话内同语义）：标完成 + 「已办」记忆留痕 + 操作日志
+            todoSettlement.settle(ref, conversationId = null)
         }
     }
 

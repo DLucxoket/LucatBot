@@ -81,7 +81,7 @@ class NotificationDispatcher(
                 messageContent = content,
                 isAtAll = isAtAll,
                 isAtMe = isAtMe,
-                todos = todoService.pendingSummary(),
+                todos = todoService.summaryForPrompt(),
                 shortTermMemory = memoryService.getMemoryOverview(primary = null)
             )
 

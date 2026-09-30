@@ -56,12 +56,17 @@ class MemoryAgent(
             【现有记忆】是读取参考，避免重复或矛盾。
             ## 输出（严格遵循）
             只输出纯JSON（不裹代码块），结构如下：
-            {"memories": [{"kind": "fact|opinion|event", "content": "一句话", "tags": ["标签"], "keywords": ["关键词"]}]}
+            {"memories": [{"kind": "fact|opinion|event", "content": "一句话", "tags": ["标签"], "keywords": ["关键词"]}], "done_todos": ["办完的待办引用"]}
             - kind：fact=客观事实（名字/喜好/重要情况等）、opinion=你对这个人的主观看法/印象、event=发生过的事/约定
             - content：一句话，简明扼要
             - tags：检索标签，可省略——keywords 会一并**落库**成为这条记忆的检索关键词，两者给一个就够
             - keywords：**尽量写全**（建议 5~10 个：content 里的核心名词/专名，外加同义词、别名、口语说法、相关词——如人名/外号/地名/爱好名/事件名）——**每条必给**：写入前会拿这些词逐个查该对象的已有记忆核对重复（覆盖面越广查库命中越准，命中会再复核一轮），写入成功后它们就成为该记忆的关键词
             - 没有要记的输出 {"memories": []}
+            
+            待办结算（user 消息里有【未完成待办】时才需要）：
+            - 对照【本次会话内容】逐条判断哪些**确实已经办完**（去某群看了并回了话、查到了结果、当面回复汇报过）→ 原样照抄清单里的写法（id 片段或内容片段）放进 done_todos
+            - 只是开了头、没办完、或拿不准 → 不要写（办完会标完成并留痕，写错会把没办的事记成办过）
+            - 都没办完 → 省略 done_todos 或输出 "done_todos": []
             
             只记值得长期保留的：
             - 对人的事实（名字、喜好、重要情况）、对人的看法/印象、重要事件/约定
@@ -80,10 +85,15 @@ class MemoryAgent(
         """.trimIndent()
     }
 
-    /** 剧情数据（现有记忆 + 本次会话内容 + 时间）→ user 消息；纯数据 */
+    /** 剧情数据（现有记忆 + 本次会话内容 + 未完成待办 + 时间）→ user 消息；纯数据 */
     private fun buildUserContent(input: MemoryReflectRequest): String {
         val existing = input.existingMemory.ifBlank { "（暂无）" }
         val content = input.conversationContent.ifBlank { "（无）" }
+        val todosText = if (input.pendingTodos.isBlank()) {
+            ""
+        } else {
+            "\n【未完成待办】\n${input.pendingTodos}"
+        }
         val timeLine = if (input.timeHint.isNotBlank()) {
             "\n当前时间（北京时间）：${input.timeHint}"
         } else {
@@ -93,7 +103,7 @@ class MemoryAgent(
             【现有记忆】
             $existing
             【本次会话内容】
-            $content$timeLine
+            $content$todosText$timeLine
         """.trimIndent()
     }
 

@@ -17,6 +17,7 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
+import org.dlucxoket.lucatbot.bot.todo.TodoSettlement
 import org.dlucxoket.lucatbot.bot.tool.NapCatImageAction
 import org.dlucxoket.lucatbot.bot.tool.SendMessageRequest
 import org.dlucxoket.lucatbot.bot.tool.SendMessageResult
@@ -120,8 +121,13 @@ class ConversationController(
         chatHistoryService = chatHistoryService,
         actionLog = actionLog,
         reflectHistoryCount = reflectHistoryCount,
-        executor = reflectExecutor
+        executor = reflectExecutor,
+        // 待办兜底结算：退出整理那轮 LLM 顺带核对「本次对话把哪些待办办完了」
+        todoService = todoService
     )
+
+    /** 待办结算（todo_done 路径）：标完成 + 「已办」记忆留痕 + 操作日志 */
+    private val todoSettlement = TodoSettlement(todoService, memoryService, actionLog)
 
     /**
      * 跑完整的会话内循环，直到离开
@@ -289,7 +295,7 @@ class ConversationController(
                 shortTermMemory = memoryService.getMemoryOverview(
                     primary = MemorySubject.fromConversation(conversationId)
                 ) + sessionManager.getFatigueHint(conversationId),
-                todos = todoService.pendingSummary(),
+                todos = todoService.summaryForPrompt(),
                 actionLog = actionLog.dump(),
                 recentMessages = recentLines,
                 newMessageNotes = newNotes,
@@ -672,17 +678,8 @@ class ConversationController(
             }
         }
         decision.todo_done?.let { ref ->
-            try {
-                if (todoService.complete(ref)) {
-                    actionLog.append("待办完成：$ref", conversationId = conversationId)
-                } else {
-                    log.warn("todo_done 未匹配到待办: {}", ref)
-                    actionLog.append("待办未匹配：$ref", conversationId = conversationId)
-                }
-            } catch (e: Exception) {
-                log.warn("todo_done 处理失败: {}", e.message)
-                actionLog.append("待办完成失败", conversationId = conversationId)
-            }
+            // 结算统一收口：标完成 + 写「已办：…」记忆留痕 + 操作日志（失败只 log）
+            todoSettlement.settle(ref, conversationId)
         }
         return deferredRemember
     }

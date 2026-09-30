@@ -12,11 +12,14 @@ package org.dlucxoket.lucatbot.bot.todo
  * @param createdAt 创建时间
  * @param done 是否已完成
  * @param conversationId 可选关联会话（group:xxx / private:xxx）
+ * @param completedAt 完成时间（epoch 毫秒；未完成 = null）——prompt 展示
+ *   「最近已完成」时按它排序，也让人一眼看到办完的时间
  */
 data class TodoItem(
     val id: String = java.util.UUID.randomUUID().toString(),
     val content: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val done: Boolean = false,
-    val conversationId: String? = null
+    val conversationId: String? = null,
+    val completedAt: Long? = null
 )

@@ -42,19 +42,31 @@ class TodoService(
     }
 
     /**
+     * 找未完成待办（[complete] 与待办结算共用的匹配）
+     *
+     * 先按 id 精确匹配（**id 前缀也算**——prompt 里只展示 id 前 4 位，LLM 照抄
+     * 的就是前缀）；否则按内容包含匹配。
+     *
+     * @return 匹配到的未完成条目；无匹配 / 引用空白 → null
+     */
+    fun findPending(idOrContent: String): TodoItem? {
+        if (idOrContent.isBlank()) return null
+        val pending = repository.findAll().filter { !it.done }
+        return pending.firstOrNull {
+            it.id == idOrContent || (idOrContent.length >= 4 && it.id.startsWith(idOrContent))
+        } ?: pending.firstOrNull { it.content.contains(idOrContent) }
+    }
+
+    /**
      * 标记完成
      *
-     * 先按 id 精确匹配；否则按 pending 中 content 包含匹配。
+     * 先按 id 精确匹配；否则按 pending 中 content 包含匹配（见 [findPending]）。
      *
      * @return 是否找到并标完成
      */
     fun complete(idOrContent: String): Boolean {
-        if (idOrContent.isBlank()) return false
-        val todos = repository.findAll()
-        val target = todos.firstOrNull { !it.done && it.id == idOrContent }
-            ?: todos.firstOrNull { !it.done && it.content.contains(idOrContent) }
-            ?: return false
-        repository.save(target.copy(done = true))
+        val target = findPending(idOrContent) ?: return false
+        repository.save(target.copy(done = true, completedAt = System.currentTimeMillis()))
         log.info("完成待办: ${target.id.take(4)} ${target.content}")
         return true
     }
@@ -77,6 +89,24 @@ class TodoService(
         val items = pending()
         if (items.isEmpty()) return "（无待办）"
         return items.joinToString("\n") { "- [ ] (${it.id.take(4)}) ${it.content}" }
+    }
+
+    /**
+     * 注入 prompt 的待办摘要：未完成清单 + **最近完成的几条**（`- [x] …`）
+     *
+     * 「办完的事也看得见」——此前只注入未完成项，`todo_done` 一漏标（实盘：
+     * 在群里看完就解析失败兜底退出，根本没机会输出），机器人被问「你不是去
+     * 看过了吗」时仍一脸没办过的样子。完成项按 [TodoItem.completedAt] 倒序取
+     * 最近 [doneLimit] 条（历史完成不删，保留痕迹）。
+     */
+    fun summaryForPrompt(doneLimit: Int = 5): String {
+        val pending = pendingSummary()
+        val done = repository.findAll().filter { it.done }
+            .sortedByDescending { it.completedAt ?: it.createdAt }
+            .take(doneLimit)
+        if (done.isEmpty()) return pending
+        val doneLines = done.joinToString("\n") { "- [x] (${it.id.take(4)}) ${it.content}" }
+        return pending + "\n最近已完成（办过的事，别再当成没做）：\n" + doneLines
     }
 
     /**

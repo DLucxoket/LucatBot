@@ -7,6 +7,8 @@ import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
+import org.dlucxoket.lucatbot.bot.todo.TodoService
+import org.dlucxoket.lucatbot.bot.todo.TodoSettlement
 import org.slf4j.LoggerFactory
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -47,9 +49,19 @@ class MemoryReflector(
      * 整理任务执行器——默认单线程 daemon（[asyncExecutor]，串行 + 不阻塞主循环）；
      * 测试注入内联执行器（`Executor { it.run() }`）即变同步，断言无竞态
      */
-    private val executor: Executor = asyncExecutor()
+    private val executor: Executor = asyncExecutor(),
+    /**
+     * 待办服务（可空 = 不做待办结算）——阶段1 复盘顺带核对「本次对话把哪些
+     * 未完成待办办完了」，输出 done_todos → [TodoSettlement] 标完成 + 留痕。
+     * 实盘根因：`todo_done` 全靠 LLM 在会话里自觉输出，漏标后待办永远挂着，
+     * 机器人被问「你不是去过了吗」时仍以为没办
+     */
+    private val todoService: TodoService? = null
 ) {
     private val log = LoggerFactory.getLogger(MemoryReflector::class.java)
+
+    /** 待办结算（兜底路径）：标完成 + 「已办」记忆留痕 + 操作日志 */
+    private val settlement = todoService?.let { TodoSettlement(it, memoryService, actionLog) }
 
     /** 幂等保护锁：正常退出与停机收尾对同一会话只整理一次 */
     private val reflectLock = Any()
@@ -133,8 +145,14 @@ class MemoryReflector(
         try {
             val subject = MemorySubject.fromConversation(conversationId)
 
-            // 阶段1：复盘产出候选（每条带检索关键词）
-            val candidates = memoryAgent.processObject(
+            // 阶段1：复盘产出候选（每条带检索关键词）+ 待办结算结论（done_todos）
+            val pendingTodos = try {
+                todoService?.pending() ?: emptyList()
+            } catch (e: Exception) {
+                log.warn("读取未完成待办失败（跳过待办结算）: {}", e.message)
+                emptyList()
+            }
+            val result = memoryAgent.processObject(
                 MemoryReflectRequest(
                     conversationContent = chatHistoryService.getHistorySummary(
                         conversationId, reflectHistoryCount
@@ -145,9 +163,25 @@ class MemoryReflector(
                         subject,
                         factLimit = 50, opinionLimit = 30, eventLimit = 50, relationLimit = 20
                     ),
-                    timeHint = TimeAwareness.timeHint()
+                    timeHint = TimeAwareness.timeHint(),
+                    pendingTodos = pendingTodos.joinToString("\n") {
+                        "- [ ] (${it.id.take(4)}) ${it.content}"
+                    }
                 )
-            ).memories
+            )
+
+            // 待办结算（兜底，**必须在「无候选就 return」之前**——办完待办却没别的
+            // 可记是常态）：本次对话确实办完的待办 → 标完成 + 写「已办」记忆留痕
+            val settle = settlement
+            if (settle != null && result.doneTodos.isNotEmpty() && pendingTodos.isNotEmpty()) {
+                result.doneTodos.forEach { ref ->
+                    if (settle.settle(ref, conversationId)) {
+                        actionLog.append("退出结算办完待办：$ref", conversationId = conversationId)
+                    }
+                }
+            }
+
+            val candidates = result.memories
             if (candidates.isEmpty()) {
                 log.debug("退出时记忆整理：无值得记录的内容")
                 return

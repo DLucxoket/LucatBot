@@ -30,4 +30,8 @@ object MySqlTime {
      */
     fun toEpochMs(rs: ResultSet, column: String, fallback: Long = 0L): Long =
         rs.getTimestamp(column)?.time ?: fallback
+
+    /** DATETIME 列 → epoch 毫秒（**可空列**；NULL → null，如 todos.completed_at） */
+    fun toEpochMsOrNull(rs: ResultSet, column: String): Long? =
+        rs.getTimestamp(column)?.time
 }

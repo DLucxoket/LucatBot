@@ -9,6 +9,8 @@ import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
+import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
+import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -201,6 +203,65 @@ class MemoryDedupeTest {
             f.chat.getHistorySummary("private:7", 10).contains("（已记忆）"),
             "写入成功后窗口行打标：${f.chat.getHistorySummary("private:7", 10)}"
         )
+    }
+
+    // ------------------------------------------------------------------
+    // 待办兜底结算：退出整理那轮顺带核对「本次对话把哪些待办办完了」
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `reflector settles pending todo and writes trace memory`() {
+        // 实盘：受托「去群里看看」，办完了却没输出 todo_done（解析失败兜底退出）
+        // → 待办永远挂着 `- [ ]`，主人再发消息时机器人以为没办
+        val chat = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-settle", ".json").absolutePath)
+        )
+        chat.recordHistoryMessage(
+            "private:7", 7L, "甲", "帮我看看黄皮耗子群谁在找我",
+            timestamp = 1_000L, isFromBot = false
+        )
+        val memSvc = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-settle", ".json").absolutePath)
+        )
+        val todos = TodoService(
+            JsonFileTodoRepository(File.createTempFile("todo-settle", ".json").apply { delete() }.absolutePath)
+        )
+        todos.add("去黄皮耗子群看看谁在找我", "private:7")
+        val llm = FakeLLM(mutableListOf("""{"memories":[],"done_todos":["黄皮耗子群"]}"""))
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = memSvc,
+            chatHistoryService = chat,
+            actionLog = ActionLog(),
+            todoService = todos
+        )
+
+        reflector.reflect("private:7")
+
+        assertTrue(todos.pending().isEmpty(), "兜底结算把待办标完成")
+        val overview = memSvc.getMemoryOverview(primary = MemorySubject.user(7L))
+        assertTrue(overview.contains("已办：去黄皮耗子群看看谁在找我"),
+            "完成留痕进来源会话主体的记忆：$overview")
+        assertTrue(llm.prompts.single().contains("去黄皮耗子群看看谁在找我"),
+            "未完成待办进结算 prompt：${llm.prompts.single()}")
+    }
+
+    @Test
+    fun `reflector without todoService skips settlement`() {
+        val memSvc = service()
+        val llm = FakeLLM(mutableListOf("""{"memories":[],"done_todos":["随便什么"]}"""))
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = memSvc,
+            chatHistoryService = ChatHistoryService(
+                JsonFileChatHistoryRepository(File.createTempFile("hist-nt", ".json").absolutePath)
+            ),
+            actionLog = ActionLog()
+        )
+        reflector.reflect("private:7")
+        // system 里本就写着结算规则（含【未完成待办】字样）——只看 user 段
+        val user = llm.prompts.single().substringAfter("\n=====USER=====\n")
+        assertFalse(user.contains("【未完成待办】"), "没注入待办服务就不提结算：$user")
     }
 
     // ------------------------------------------------------------------
