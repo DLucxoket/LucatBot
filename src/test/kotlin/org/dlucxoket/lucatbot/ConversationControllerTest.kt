@@ -2018,6 +2018,8 @@ class ConversationAgentFallbackTest {
         val prompt = llm.prompts.single()
         assertTrue(prompt.contains("JSON 数组"), "send 应声明 content 为 JSON 数组（分段发送）：$prompt")
         assertTrue(prompt.contains("\"delay\""), "应教条级打字延迟：$prompt")
+        assertTrue(prompt.contains("每一条都必须带 `delay`"), "delay 必填规则：$prompt")
+        assertTrue(prompt.contains("别全写 0"), "要求给真实节奏值：$prompt")
         assertTrue(prompt.contains("\"reply\""), "应教条级回复：$prompt")
         assertTrue(prompt.contains("\"members\""), "应教结构化 members：$prompt")
         assertTrue(prompt.contains("@全体成员"), "send 规则应含 @全体成员")
