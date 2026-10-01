@@ -13,10 +13,12 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
+import org.dlucxoket.lucatbot.bot.persona.TimeFormat
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.todo.TodoSettlement
 import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.bot.tool.ToolNotes
+import org.dlucxoket.lucatbot.model.session.ConversationId
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 
@@ -130,10 +132,15 @@ class MessageListController(
 
                 SessionAction.CALL_TOOL -> {
                     val toolName = decision.toolName.orEmpty()
-                    val result = toolCatalog.invoke(toolName, decision.toolInput)
-                    toolNotes.recordResult(toolName, result)
+                    // 结构化结果（与会话内 CALL_TOOL 同款）：isError 由 ToolCatalog 按
+                    // JSON 结构判定，失败打进日志便于排障
+                    val call = toolCatalog.invokeDetailed(toolName, decision.toolInput)
+                    toolNotes.recordResult(toolName, call.output)
                     actionLog.append("调用工具 $toolName")
-                    log.info("tool {} → {} 字符", toolName, result.length)
+                    log.info("tool {} → {} 字符", toolName, call.output.length)
+                    if (call.isError) {
+                        log.warn("工具 {} 返回错误：{}", toolName, call.output.take(300))
+                    }
                 }
             }
         }
@@ -170,11 +177,11 @@ class MessageListController(
         for ((convId, count) in unread) {
             val msgs = lucatBot.peekUnread(convId)
             val last = msgs.lastOrNull()
-            val isGroup = convId.startsWith("group:")
-            val id = convId.substringAfter(":")
+            val cid = ConversationId.parse(convId)
+            val id = cid.targetId
             val name = last?.senderName?.ifBlank { id } ?: id
             lines += SessionSummaryLine(
-                conversationType = if (isGroup) "群聊" else "私聊",
+                conversationType = if (cid.isGroup) "群聊" else "私聊",
                 name = name,
                 id = id,
                 time = formatTime(last?.timestamp ?: 0L),
@@ -193,11 +200,11 @@ class MessageListController(
             .filter { it !in unread.keys }
         for (convId in recent.take(5)) {
             val entry = sessionManager.getLastMessage(convId) ?: continue
-            val isGroup = convId.startsWith("group:")
+            val cid = ConversationId.parse(convId)
             lines += SessionSummaryLine(
-                conversationType = if (isGroup) "群聊" else "私聊",
-                name = entry.sender.ifBlank { convId.substringAfter(":") },
-                id = convId.substringAfter(":"),
+                conversationType = if (cid.isGroup) "群聊" else "私聊",
+                name = entry.sender.ifBlank { cid.targetId },
+                id = cid.targetId,
                 time = formatTime(entry.timestamp),
                 unreadCount = 0,
                 lastMessage = entry.content,
@@ -233,21 +240,11 @@ class MessageListController(
         const val briefMaxChars = 40
     }
 
-    /** 疑似禁言标记日期（MMdd；跨年 yyyy-MM-dd） */
-    private fun formatBanDate(epochMs: Long): String {
-        val zone = java.time.ZoneId.of("Asia/Shanghai")
-        val date = java.time.Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
-        val pattern = if (date.year == java.time.LocalDate.now(zone).year) "MM-dd" else "yyyy-MM-dd"
-        return date.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
-    }
+    /** 疑似禁言标记日期（MMdd；跨年 yyyy-MM-dd）——渲染收口 [TimeFormat.banDate] */
+    private fun formatBanDate(epochMs: Long): String = TimeFormat.banDate(epochMs)
 
-    /** 相对时长（「我上次发言 X 前」用）：刚刚 / X 分钟前 / X 小时前 / X 天前 */
-    private fun formatDuration(ms: Long): String = when {
-        ms < 60_000L -> "刚刚"
-        ms < 3_600_000L -> "${ms / 60_000L} 分钟前"
-        ms < 86_400_000L -> "${ms / 3_600_000L} 小时前"
-        else -> "${ms / 86_400_000L} 天前"
-    }
+    /** 相对时长（「我上次发言 X 前」用）——渲染收口 [TimeFormat.duration] */
+    private fun formatDuration(ms: Long): String = TimeFormat.duration(ms)
 
     /** 可主动找的人：最近 24h 聊过的私聊对象，最多 3 个；心情很差/很困时少拼或不拼 */
     private fun collectProactiveCandidates(): List<ProactiveCandidate> {
@@ -260,10 +257,11 @@ class MessageListController(
         if (cap == 0) return emptyList()
 
         return sessionManager.recentConversationIds(withinMinutes = 24 * 60)
-            .filter { it.startsWith("private:") }
+            .filter { it.startsWith(ConversationId.PRIVATE_PREFIX) } // 严格前缀判断（无前缀的野键不算私聊候选）
             .take(cap)
             .map { convId ->
                 val subject = MemorySubject.fromConversation(convId)
+                val cid = ConversationId.parse(convId)
                 // 取第一条真实记忆行（跳过「关于此人的记忆：」「事实：」等标题行——
                 // 旧行为 firstOrNull() 拿到的永远是标题，hint 恒为废话）
                 val memory = memoryService.getMemorySummary(subject).lineSequence()
@@ -274,8 +272,8 @@ class MessageListController(
                     else -> "这个点他可能在"
                 }
                 ProactiveCandidate(
-                    name = sessionManager.getLastMessage(convId)?.sender ?: convId.substringAfter(":"),
-                    id = convId.substringAfter(":"),
+                    name = sessionManager.getLastMessage(convId)?.sender ?: cid.targetId,
+                    id = cid.targetId,
                     hint = hint
                 )
             }
@@ -290,16 +288,12 @@ class MessageListController(
     private fun buildShortTermMemory(): String =
         memoryService.getMemoryOverview(primary = null, otherLimit = 12)
 
-    private fun formatTime(ts: Long): String {
-        if (ts <= 0L) return ""
-        val t = java.time.Instant.ofEpochMilli(ts)
-            .atZone(java.time.ZoneId.of("Asia/Shanghai"))
-            .toLocalDateTime()
-        val today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"))
-        return if (t.toLocalDate() == today) {
-            t.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-        } else {
-            t.format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
-        }
-    }
+    /**
+     * 列表行时间——今日 `HH:mm`、跨天 `MM-dd HH:mm`（紧凑）。
+     *
+     * 渲染收口 [TimeFormat.listLine]（与会话窗口的 [TimeFormat.chatLine] 是两种
+     * 具名格式：此处行短省 token，彼处带年月日让 LLM 判断隔天——此前两份
+     * 私有拷贝各自演化导致格式分叉，故显式区分而非合并）。
+     */
+    private fun formatTime(ts: Long): String = TimeFormat.listLine(ts)
 }

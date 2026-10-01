@@ -665,6 +665,54 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `search pause stays do not count as idle stays`() {
+        // searchPause 的 stay 等的是自己的搜索结果，不是「没人接话的干等」：
+        // 不进 stayStreak → 不出「已连续停留」hint、不被 stayStreak 护栏强制退出；
+        // 独立的 searchPauseStreak 在 ≥上限-1 时点名「该行动了」（第 3 轮提示）
+        val synthesized = """{"action":"memory_queries","memory_queries":["可乐"]}""" // 合成 stay 2s
+        val realSearchStay = """{"action":"stay","params":{"seconds":1},"memory_queries":["白鸽"]}"""
+        val llm = FakeLLM(mutableListOf(synthesized, realSearchStay, """{"action":"return","reason":"搜完了"}"""))
+        val (controller, lucatBot, sendTool) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(3, llm.prompts.size, "搜索型停留不触发强制退出，return 正常收尾：实际 ${llm.prompts.size} 轮")
+        assertTrue(sendTool.sent.isEmpty(), "纯搜索轮不发消息")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "正常回到消息列表")
+        llm.prompts.forEachIndexed { i, p ->
+            // 用 hint 专属前缀「你已连续停留」——system prompt 里有「已连续停留 N 次」的
+            // 约束原文（ConversationAgent），直接查「已连续停留」会误命中
+            assertFalse(p.contains("你已连续停留"), "第 ${i + 1} 轮不该出现「没人接话」停留升级提示：$p")
+        }
+        // 两轮搜索后（第 3 轮 prompt 时 searchPauseStreak=2 ≥ 上限-1）→ 搜索连击升级点名
+        assertTrue(
+            llm.prompts[2].contains("该行动了") && llm.prompts[2].contains("搜索结果已经在"),
+            "搜索连击升级提示点名「结果已在、该行动了」：${llm.prompts[2]}"
+        )
+    }
+
+    @Test
+    fun `search pause streak limit forces exit with search wording not idle wording`() {
+        // 连搜达上限（复用 maxIdleStays=3）→ 第 4 轮决策前强制收尾；
+        // 文案必须是「只搜不行动」而非「没人接话」——两条护栏各管各的病态路径
+        val searchStay = """{"action":"stay","params":{"seconds":1},"memory_queries":["可乐"]}"""
+        val llm = FakeLLM(mutableListOf(searchStay, searchStay, searchStay, searchStay))
+        val (controller, lucatBot, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(4, llm.prompts.size,
+            "3 次搜索停留后第 4 轮强制退出（第 4 次停留不执行）：实际 ${llm.prompts.size} 轮")
+        val lastPrompt = llm.prompts[3]
+        assertTrue(
+            lastPrompt.contains("只查记忆不行动") && lastPrompt.contains("强制退出"),
+            "第 4 轮提示点名连搜不行动将被强制退出：$lastPrompt"
+        )
+        assertFalse(lastPrompt.contains("你已连续停留"), "不是「没人接话」文案（stayStreak 从未累加）：$lastPrompt")
+        assertTrue(lucatBot.state is LucatBot.State.ViewingConversations, "被搜索护栏强制带回消息列表")
+    }
+
+    @Test
     fun `system prompt tells bot to leave when nobody replies after stays`() {
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         ConversationAgent(llm).processObject(ConversationRequest())

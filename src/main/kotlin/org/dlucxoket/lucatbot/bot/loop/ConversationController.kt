@@ -16,6 +16,7 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryExtractor
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
+import org.dlucxoket.lucatbot.bot.persona.TimeFormat
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.bot.todo.TodoSettlement
 import org.dlucxoket.lucatbot.bot.tool.NapCatImageAction
@@ -26,6 +27,7 @@ import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.bot.tool.ToolNotes
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryRequest
 import org.dlucxoket.lucatbot.bot.tool.data.ChatHistoryResult
+import org.dlucxoket.lucatbot.model.session.ConversationId
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 
@@ -179,7 +181,7 @@ class ConversationController(
             conversationId,
             if (isGroup) LucatBot.ConversationType.GROUP else LucatBot.ConversationType.PRIVATE
         )
-        lucatBot.mood = lucatBot.mood.boost()
+        lucatBot.updateMood { it.boost() }
         actionLog.append(
             "进入${if (isGroup) "群聊" else "私聊"} ${pick.targetId}" + if (proactive) "（主动找人）" else "",
             conversationId = conversationId
@@ -228,6 +230,14 @@ class ConversationController(
         // 连续「停留且没人接话」的次数（有新消息即清零）——stay 几次仍无人回应
         // 就该离开：hint 升级要求 return，模型仍不走时由 maxIdleStays 强制兜底
         var stayStreak = 0
+        // 连续「搜索型停留」（searchPause 的 stay：带 memory_queries 的真 stay，
+        // 或 memory_queries 被误当 action 合成的 stay）——等的是**自己的搜索结果**，
+        // 不算「没人接话的干等」，故与 stayStreak 分开计数。语义：只有连续的
+        // 搜索型停留才累加；任何其他决策（send/read_more/return/tool/view_images/
+        // 普通 stay）都清零，有新消息时循环顶部一并清零。连搜几轮结果早到了却
+        // 始终不行动 → hint 点名「该行动了」，达上限（复用 maxIdleStays，见 buildHint
+        // 与护栏注释的取舍）强制收尾，log 文案区分于「无人接话」
+        var searchPauseStreak = 0
         // 记忆搜索结果（LLM 经顶层 memory_queries 请求）：从下一轮起持续注入
         // 「短期记忆」段——**不清空，直到再次请求才整体覆盖**；没请求过则该段逐字不变
         val pendingMemoryHits = mutableListOf<String>()
@@ -272,6 +282,7 @@ class ConversationController(
                 justSent = null // 有新回应就不再提示旧发送
                 noReplyRounds = 0
                 stayStreak = 0 // 有人接话 → 停留连击清零
+                searchPauseStreak = 0 // 新消息到达 → 搜索连击同样清零
             } else if (justSent != null) {
                 // 已发出消息且本轮仍没有任何新消息 → 递进一轮（衡量连续无回应）
                 noReplyRounds++
@@ -279,7 +290,7 @@ class ConversationController(
             // 2) 读历史（Tool → OOP）
             val historyResult = chatHistoryTool.processObject(
                 ChatHistoryRequest(
-                    targetId = conversationId.substringAfter(":").toLongOrNull() ?: 0L,
+                    targetId = ConversationId.parse(conversationId).targetIdOrNull ?: 0L,
                     count = historyCount,
                     type = if (isGroup) "group" else "private"
                 )
@@ -364,7 +375,18 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
-                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote, stayStreak, noRoomToTalk),
+                hint = buildHint(
+                    HintInput(
+                        readMoreWithInsertStreak = readMoreWithInsertStreak,
+                        justSent = justSent,
+                        noReplyRounds = noReplyRounds,
+                        newNotes = newNotes,
+                        sendFailureNote = sendFailureNote,
+                        stayStreak = stayStreak,
+                        searchPauseStreak = searchPauseStreak,
+                        noRoomToTalk = noRoomToTalk
+                    )
+                ),
                 toolNotes = toolNotes.snapshot(),
                 toolNames = toolCatalog.names(),
                 images = attachments.images,
@@ -440,12 +462,34 @@ class ConversationController(
 
             val hadInserts = newNotes.isNotEmpty()
 
+            // 搜索型停留判定与计数：只有「searchPause 的 stay」累加；任何其他决策
+            //（send/read_more/return/tool/view_images/普通 stay）都视为「已离开
+            // 只搜状态」→ 清零（有新消息的清零在循环顶部）。普通 stay 不清零它？
+            // 也清——普通 stay 是另一条连击（stayStreak），两条不该互相喂计数
+            val searchPauseStay = decision.action == ConversationAction.STAY && decision.searchPause
+            if (!searchPauseStay) searchPauseStreak = 0
+
             // 病态护栏：连续停留 [maxIdleStays] 次始终没人接话——hint 已在上一轮
-            // 要求「本轮必须 return」，模型仍输出 stay 时强制收尾（只拦 STAY：
-            // send/read_more/tool 等正常动作不受影响；有新消息时 stayStreak 已清零）
-            if (decision.action == ConversationAction.STAY && stayStreak >= maxIdleStays) {
+            // 要求「本轮必须 return」，模型仍输出 stay 时强制收尾（只拦**非搜索型**
+            // STAY：搜索型停留等的是自己的搜索结果，不是干等没人接话，由下方
+            // searchPauseStreak 护栏单独管；send/read_more/tool 等正常动作不受影响；
+            // 有新消息时 stayStreak 已清零）
+            if (decision.action == ConversationAction.STAY && !decision.searchPause &&
+                stayStreak >= maxIdleStays
+            ) {
                 logAct("连续停留 $stayStreak 次无人接话，强制返回消息列表", why)
                 log.warn("连续停留 {} 次无新消息，强制离开会话", stayStreak)
+                return
+            }
+
+            // 病态护栏：连续搜索型停留达上限——记忆结果早就在下一轮 prompt 里了却
+            // 一直只搜不动（原地打转，不是没人接话）。上限**复用 [maxIdleStays]**：
+            // 两者同属「原地打转几轮就强制收尾」的阈值，且计数互斥（一条只数
+            // 搜索型、一条只数非搜索型），共用一个参数避免配置面无谓膨胀。
+            // log 文案点名「只搜记忆不行动」，与「无人接话」区分开，实盘排查不混淆
+            if (searchPauseStay && searchPauseStreak >= maxIdleStays) {
+                logAct("连续 $searchPauseStreak 次只搜记忆不行动，强制返回消息列表", why)
+                log.warn("连续 {} 次只搜记忆不行动（搜索型停留），强制离开会话", searchPauseStreak)
                 return
             }
 
@@ -456,7 +500,7 @@ class ConversationController(
                     readMoreRounds++
                     if (hadInserts) readMoreWithInsertStreak++ else readMoreWithInsertStreak = 0
                     if (!hadInserts) {
-                        lucatBot.mood = lucatBot.mood.decay()
+                        lucatBot.updateMood { it.decay() }
                     }
                     logAct("爬楼 $count 条", why)
                     log.info("read_more → 累计读取 {}", historyCount)
@@ -547,7 +591,7 @@ class ConversationController(
                         }
                         logAct("回复：$sentText", why)
                         log.info("发送成功 {} 条：{}", sentContents.size, sentText.take(80))
-                        lucatBot.mood = lucatBot.mood.boost()
+                        lucatBot.updateMood { it.boost() }
                         mustIcebreak = false
                         readMoreWithInsertStreak = 0
                         // 发完不等待，立即进入下一轮决策；连发由 hint 约束
@@ -631,6 +675,10 @@ class ConversationController(
                 ConversationAction.STAY -> {
                     // 上限防病态值（非退出限制）；prompt 建议 LLM 通常给 10~120 秒
                     val sec = decision.staySeconds.coerceIn(1, 1800)
+                    // 搜索型停留（带 memory_queries 的 stay / memory_queries 误当 action
+                    // 合成的 stay）——actionLog 用不同文案落账，便于实盘区分「等搜索结果」
+                    // 与「没人接话干等」（两者走不同连击计数与护栏）
+                    val stayLabel = if (decision.searchPause) "搜索停留" else "停留"
                     // 计时等待：当前会话在时间到之前来了新消息 → 立即唤醒（取消剩余计时），否则等满
                     val interrupted = try {
                         val woken = lucatBot.awaitPendingInsert(conversationId, sec * 1000L)
@@ -639,9 +687,9 @@ class ConversationController(
                             val byYield = lucatBot.sessionYieldRequested
                             val whyStay = if (byYield) "被通知打断" else "新消息提前唤醒"
                             log.info("停留计划 {}s，被{}", sec, why.orEmpty())
-                            logAct("停留 ${sec}s（$whyStay）", why)
+                            logAct("$stayLabel ${sec}s（$whyStay）", why)
                         } else {
-                            logAct("停留 ${sec}s", why)
+                            logAct("$stayLabel ${sec}s", why)
                         }
                         false
                     } catch (e: InterruptedException) {
@@ -652,8 +700,15 @@ class ConversationController(
                     }
                     if (interrupted) return
                     readMoreWithInsertStreak = 0 // 停留打断连续爬楼计数
-                    // 没被新消息唤醒的停留才算「白等」——累计连击交 hint/强制退出
-                    if (!hadInserts) stayStreak++
+                    if (decision.searchPause) {
+                        // 搜索型停留：等的是自己的搜索结果，不算「没人接话的干等」
+                        //——不进 stayStreak（hint/强制退出的「无人接话」文案不适用），
+                        //单独累加 searchPauseStreak（连搜不行动由另一条护栏管）
+                        searchPauseStreak++
+                    } else if (!hadInserts) {
+                        // 没被新消息唤醒的停留才算「白等」——累计连击交 hint/强制退出
+                        stayStreak++
+                    }
                 }
 
                 ConversationAction.RETURN -> {
@@ -671,13 +726,16 @@ class ConversationController(
 
                 ConversationAction.CALL_TOOL -> {
                     val toolName = decision.toolName.orEmpty()
-                    val result = toolCatalog.invoke(toolName, decision.toolInput)
-                    toolNotes.recordResult(toolName, result)
+                    // 结构化结果：isError 由 ToolCatalog 按 JSON 结构判定（success=false /
+                    // 顶层 error），替代旧的 contains("\"error\"") 字符串嗅探——
+                    // 成功正文含 "error" 字样不再误报（N4）
+                    val call = toolCatalog.invokeDetailed(toolName, decision.toolInput)
+                    toolNotes.recordResult(toolName, call.output)
                     logAct("调用工具 $toolName", why)
-                    log.info("tool {} → {} 字符", toolName, result.length)
+                    log.info("tool {} → {} 字符", toolName, call.output.length)
                     // 失败结果不进日志就只能对着「433 字符」猜——报错内容直接打出来
-                    if (result.contains("\"error\"")) {
-                        log.warn("工具 {} 返回错误：{}", toolName, result.take(300))
+                    if (call.isError) {
+                        log.warn("工具 {} 返回错误：{}", toolName, call.output.take(300))
                     }
                     // 切换会话工具已置位 → 记下目标并结束本轮循环（runConversation 接着打开）
                     val switchTarget = lucatBot.consumeConversationSwitch()
@@ -950,70 +1008,105 @@ class ConversationController(
     }
 
     /**
+     * [buildHint] 的输入——hint 维度涨到 8 个后位置参数易传错位，收拢成小 data class
+     *（命名实参 + 默认值，新增维度只加字段不改签名；循环内每轮新建，成本可忽略）
+     *
+     * @param readMoreWithInsertStreak 连续爬楼期间一直有新消息的轮数
+     * @param justSent 刚发出的消息（null = 本轮没发/已有新回应）
+     * @param noReplyRounds 自上次发送起连续无新消息的轮数
+     * @param newNotes 本轮新消息注释（判定「有没有新回应」）
+     * @param sendFailureNote 上一轮发送失败详情（null = 没失败）
+     * @param stayStreak 连续「没人接话」的普通停留次数（有新消息即清零；
+     *   **不含搜索型停留**——那是等自己的搜索结果，走 [searchPauseStreak]）
+     * @param searchPauseStreak 连续搜索型停留次数（非搜索型决策/新消息即清零）
+     * @param noRoomToTalk 没有接话对象（无新消息且最后一条是自己发的）
+     */
+    private data class HintInput(
+        val readMoreWithInsertStreak: Int = 0,
+        val justSent: String? = null,
+        val noReplyRounds: Int = 0,
+        val newNotes: List<String> = emptyList(),
+        val sendFailureNote: String? = null,
+        val stayStreak: Int = 0,
+        val searchPauseStreak: Int = 0,
+        val noRoomToTalk: Boolean = false
+    )
+
+    /**
      * 组装决策 prompt 的强制约束提示（可多段，换行连接）
      *
      * - 上一轮发送失败：通知 LLM 失败详情（如被禁言 retCode），由它决定去留
      * - 连续爬楼期间一直有新消息：打断爬楼，优先回应
-     * - 刚 send 完且暂无新回应：按 [noReplyRounds] 递进提示——
+     * - 刚 send 完且暂无新回应：按 [HintInput.noReplyRounds] 递进提示——
      *   第 1 轮提示不要连发；N≥2 轮点明「已连续 N 轮行动但始终没有任何新消息」，
      *   并附上当前心情（含强度数值），由 LLM 自行判断 stay / return / 确有必要再发
      *   （无代码强制退出，去留全交智能体）
-     * - 连续停留没人接话（[stayStreak]，有新消息即清零）：第 2 次点名「下一轮就走」，
+     * - 连续停留没人接话（[HintInput.stayStreak]，有新消息即清零）：第 2 次点名「下一轮就走」，
      *   ≥[maxIdleStays] 次要求**本轮必须 return**；模型仍输出 stay 时编排层强制退出
      *   （实盘出过连刷 9 次 stay 空等同一个人——纯靠模型自觉走不掉）
+     * - 连续**搜索型停留**（[HintInput.searchPauseStreak]：带 memory_queries 的 stay）：
+     *   结果早就在下一轮 prompt 里却只搜不动——≥上限-1 轻量点名「该行动了」，
+     *   ≥上限由护栏强制收尾（文案与「没人接话」区分，它不是干等）
      */
-    private fun buildHint(
-        readMoreWithInsertStreak: Int,
-        justSent: String?,
-        noReplyRounds: Int,
-        newNotes: List<String>,
-        sendFailureNote: String? = null,
-        stayStreak: Int = 0,
-        noRoomToTalk: Boolean = false
-    ): String {
-        val parts = mutableListOf<String>()
-        sendFailureNote?.let { parts += it }
-        // 没有接话对象（无新消息且最后一条是自己发的）——实盘 18:18 出过凭历史/记忆
-        // 旧话题硬接一嘴（「不玩，手残党…」），这里点名禁止 send
-        if (noRoomToTalk && justSent == null) {
-            parts += "本轮没有任何新消息，聊天记录最后一条还是你自己发的——**没有接话对象，禁止 send**" +
-                "（只有确有待办要推进才例外）；别去接历史里的旧话题、别凭记忆编话，没别的事就 return。"
-        }
-        if (stayStreak >= maxIdleStays - 1) {
-            parts += if (stayStreak >= maxIdleStays) {
-                "你已连续停留 $stayStreak 次，期间始终没有任何新消息（没人接话）——不要再干等了，" +
-                    "本轮直接 return 离开会话；若继续输出 stay 会被强制退出。"
-            } else {
-                "你已连续停留 $stayStreak 次，期间始终没有任何新消息（没人接话）：若这轮还是没人接话，" +
-                    "下一轮就直接 return 离开，别无限等下去。"
+    private fun buildHint(state: HintInput = HintInput()): String {
+        with(state) {
+            val parts = mutableListOf<String>()
+            sendFailureNote?.let { parts += it }
+            // 没有接话对象（无新消息且最后一条是自己发的）——实盘 18:18 出过凭历史/记忆
+            // 旧话题硬接一嘴（「不玩，手残党…」），这里点名禁止 send
+            if (noRoomToTalk && justSent == null) {
+                parts += "本轮没有任何新消息，聊天记录最后一条还是你自己发的——**没有接话对象，禁止 send**" +
+                    "（只有确有待办要推进才例外）；别去接历史里的旧话题、别凭记忆编话，没别的事就 return。"
             }
-        }
-        if (readMoreWithInsertStreak >= maxReadMoreWithInserts) {
-            parts += "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
-        }
-        if (justSent != null && newNotes.isEmpty()) {
-            parts += if (noReplyRounds >= 2) {
-                "你已连续 $noReplyRounds 轮行动但始终没有任何新消息（最后发送：${quoteForHint(justSent)}）。" +
-                    "继续自言自语会很奇怪：可以 return 离开、stay 继续等，或确有必要再发。" +
-                    "当前心情：${lucatBot.mood.toPrompt()}"
-            } else {
-                "你刚发送了${quoteForHint(justSent)}，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
+            // 普通停留（没人接话的干等）——搜索型停留不进这条，不套「没人接话」文案
+            if (stayStreak >= maxIdleStays - 1) {
+                parts += if (stayStreak >= maxIdleStays) {
+                    "你已连续停留 $stayStreak 次，期间始终没有任何新消息（没人接话）——不要再干等了，" +
+                        "本轮直接 return 离开会话；若继续输出 stay 会被强制退出。"
+                } else {
+                    "你已连续停留 $stayStreak 次，期间始终没有任何新消息（没人接话）：若这轮还是没人接话，" +
+                        "下一轮就直接 return 离开，别无限等下去。"
+                }
             }
-            // 实盘出过：停滞 12 分钟后凭记忆里的旧话题自发续话（编造对方没问过的内容）
-            parts += "注意：没有新消息时不要凭记忆续话或自创话题——那不算「有必要再发」。"
-            // 实盘出过 4 组逐字重复发送（MD5 全同）：模型把 justSent 引用的原文
-            // 直接复制重发——必须点明「再发」的语义是新内容，不是原样再发一遍
-            parts += "若确有必要再发，「再发」指的是**新内容**（追问一句、换个话题、补充说明），" +
-                "绝不是把上面那句原样重发一遍——原样复制自己发过的话是复读，很奇怪。"
+            // 搜索型停留连击——**轻量升级**：结果已在手，这轮该动了（send/read_more/return）；
+            // 达上限的强制收尾在护栏里做（动作发生前判定），这里只在 ≥上限-1 时点名
+            if (searchPauseStreak >= maxIdleStays - 1) {
+                parts += if (searchPauseStreak >= maxIdleStays) {
+                    "你已连续 $searchPauseStreak 轮只查记忆不行动——**搜索结果已经在「短期记忆」里了**，" +
+                        "本轮必须给出 send / read_more / return 之一；继续只搜不动会被强制退出。"
+                } else {
+                    "你已连续 $searchPauseStreak 轮停下来搜记忆：**搜索结果已经在「短期记忆」里了**，" +
+                        "本轮该行动了——基于已有结果回话（send）、翻楼（read_more）或离开（return），别一直搜个不停。"
+                }
+            }
+            if (readMoreWithInsertStreak >= maxReadMoreWithInserts) {
+                parts += "有人在等你回应，优先处理新消息（send 或 return），不要再爬楼。"
+            }
+            // 取到局部 val 再判空——with 接收者的成员属性不依赖智能转换（避免编译器差异）
+            val sent = justSent
+            if (sent != null && newNotes.isEmpty()) {
+                parts += if (noReplyRounds >= 2) {
+                    "你已连续 $noReplyRounds 轮行动但始终没有任何新消息（最后发送：${quoteForHint(sent)}）。" +
+                        "继续自言自语会很奇怪：可以 return 离开、stay 继续等，或确有必要再发。" +
+                        "当前心情：${lucatBot.mood.toPrompt()}"
+                } else {
+                    "你刚发送了${quoteForHint(sent)}，暂无新回应。不要立刻连发；可用 stay 等待一会儿、return 离开，或确实有必要再发。"
+                }
+                // 实盘出过：停滞 12 分钟后凭记忆里的旧话题自发续话（编造对方没问过的内容）
+                parts += "注意：没有新消息时不要凭记忆续话或自创话题——那不算「有必要再发」。"
+                // 实盘出过 4 组逐字重复发送（MD5 全同）：模型把 justSent 引用的原文
+                // 直接复制重发——必须点明「再发」的语义是新内容，不是原样再发一遍
+                parts += "若确有必要再发，「再发」指的是**新内容**（追问一句、换个话题、补充说明），" +
+                    "绝不是把上面那句原样重发一遍——原样复制自己发过的话是复读，很奇怪。"
+            }
+            return parts.joinToString("\n")
         }
-        return parts.joinToString("\n")
     }
 
-    private fun toConversationId(pick: SessionPick): String {
-        return when (pick.conversationType) {
-            SessionPickType.GROUP -> "group:${pick.targetId}"
-            SessionPickType.PRIVATE, SessionPickType.PROACTIVE -> "private:${pick.targetId}"
-        }
+    /** SessionPick → 会话键（拼装收口 [ConversationId]——协议唯一拼装点） */
+    private fun toConversationId(pick: SessionPick): String = when (pick.conversationType) {
+        SessionPickType.GROUP -> ConversationId.group(pick.targetId).asKey()
+        SessionPickType.PRIVATE, SessionPickType.PROACTIVE -> ConversationId.private(pick.targetId).asKey()
     }
 
     /**
@@ -1029,7 +1122,7 @@ class ConversationController(
 
     private fun pickName(conversationId: String): String {
         return sessionManager.getLastMessage(conversationId)?.sender
-            ?: conversationId.substringAfter(":")
+            ?: ConversationId.parse(conversationId).targetId
     }
 
     /**
@@ -1039,7 +1132,7 @@ class ConversationController(
      *   网友改群名片/改 QQ 名后下一轮即生效；历史里还没有对方消息则只给 QQ 号）
      */
     private fun buildIdentity(conversationId: String, isGroup: Boolean, groupName: String?): String {
-        val id = conversationId.substringAfter(":")
+        val id = ConversationId.parse(conversationId).targetId
         if (isGroup) {
             return if (groupName.isNullOrBlank()) "群聊：群号 $id" else "群聊：群号 $id，群名「$groupName」"
         }
@@ -1052,7 +1145,7 @@ class ConversationController(
      * 失败/未绑定/私聊一律返回 null，身份行退化为只给群号。
      */
     private fun fetchGroupName(conversationId: String): String? {
-        val groupId = conversationId.substringAfter(":").toLongOrNull() ?: return null
+        val groupId = ConversationId.parse(conversationId).targetIdOrNull ?: return null
         return try {
             lucatBot.shiroBot?.getGroupInfo(groupId, false)?.data?.groupName
                 ?.takeIf { it.isNotBlank() }
@@ -1062,16 +1155,6 @@ class ConversationController(
         }
     }
 
-    /** 今天 → HH:mm；非今天 → yyyy-MM-dd HH:mm（让 LLM 能判断消息新旧） */
-    private fun formatTime(ts: Long): String {
-        if (ts <= 0L) return ""
-        val zone = java.time.ZoneId.of("Asia/Shanghai")
-        val dateTime = java.time.Instant.ofEpochMilli(ts)
-            .atZone(zone)
-            .toLocalDateTime()
-        val pattern =
-            if (dateTime.toLocalDate() == java.time.LocalDate.now(zone)) "HH:mm"
-            else "yyyy-MM-dd HH:mm"
-        return dateTime.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
-    }
+    /** 今天 → HH:mm；非今天 → yyyy-MM-dd HH:mm（让 LLM 能判断消息新旧）——渲染收口 [TimeFormat.chatLine] */
+    private fun formatTime(ts: Long): String = TimeFormat.chatLine(ts)
 }
