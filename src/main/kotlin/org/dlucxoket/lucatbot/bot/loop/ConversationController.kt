@@ -365,10 +365,12 @@ class ConversationController(
                 suppressRemember = sendFailureNote != null
             )
 
-            // proactive 破冰：首条必须 send（查目录/调工具/看图是前置动作，不视为破冰失败）
+            // proactive 破冰：首条必须 send（查目录/调工具/看图/**搜记忆**是前置动作，
+            // 不视为破冰失败；带 memory_queries 的 return 除外——不许借搜索溜走）
             val isToolStep = decision.action == ConversationAction.LIST_TOOLS ||
                 decision.action == ConversationAction.CALL_TOOL
-            val isPrepStep = isToolStep || decision.action == ConversationAction.VIEW_IMAGES
+            val isPrepStep = isToolStep || decision.action == ConversationAction.VIEW_IMAGES ||
+                (decision.memoryQueries.isNotEmpty() && decision.action != ConversationAction.RETURN)
             if (mustIcebreak && decision.action != ConversationAction.SEND && !isPrepStep) {
                 log.info("主动发起的会话尚未破冰，强制首条 send（原动作 {}）", decision.action)
                 decision = ConversationDecision(

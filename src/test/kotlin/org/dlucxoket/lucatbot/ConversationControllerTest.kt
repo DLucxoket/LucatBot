@@ -748,6 +748,27 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `proactive first round may search memory instead of forced icebreak`() {
+        // 「刚进会话先搜记忆再说话」：主动找人的破冰强制不能把第一轮的搜记忆打成「在吗」
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-prep", ".json").absolutePath)
+        )
+        memoryService.rememberEvent(MemorySubject.user(123L), "白鸽是他哥们")
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"stay","params":{"seconds":1},"memory_queries":["白鸽"]}""",
+            """{"action":"send","params":{"content":"走啊"}}"""
+        ))
+        val (controller, _, sendTool) = buildController(llm, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PROACTIVE, "123"))
+
+        assertEquals(listOf("走啊"), sendTool.sent,
+            "第一轮搜记忆不被强制破冰成「在吗」，第二轮正常开口")
+        assertTrue(llm.prompts[1].contains("【记忆搜索结果（你之前"),
+            "搜索结果进第二轮（先搜后说）：${llm.prompts[1]}")
+    }
+
+    @Test
     fun `without memory_queries memory section stays unchanged`() {
         val memoryService = MemoryService(
             JsonFileMemoryRepository(File.createTempFile("mem-nq", ".json").absolutePath)
@@ -776,6 +797,13 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("该搜就搜"), "勤奋调用的硬要求存在")
         assertTrue(prompt.contains("先搜再答") && prompt.contains("只有纯闲聊"),
             "点名何时必须搜（依赖过去的信息）与何时可省（纯闲聊）：$prompt")
+        assertTrue(prompt.contains("想说的话里的关键词也要一起搜"),
+            "想说的话里的关键词也要搜：$prompt")
+        assertTrue(prompt.contains("发表情 → 搜"), "表情场景点名：$prompt")
+        assertTrue(prompt.contains("刚进会话先别急着开口"),
+            "进会话先搜记忆再说话的规则存在：$prompt")
+        assertTrue(prompt.contains("只是等自己的搜索结果，不算等回应"),
+            "第一轮的 stay 用途说明（免得和「等回应别 stay」打架）：$prompt")
         assertTrue(prompt.contains("同时") && prompt.contains("下一轮"),
             "说明可与 send 同时输出、结果下一轮可见")
     }
