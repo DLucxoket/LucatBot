@@ -24,16 +24,26 @@ object LlmJson {
     }
 
     /** 解析为 JsonNode；失败返回 null */
-    fun parseTree(raw: String): JsonNode? {
-        val body = extract(raw)
-        return tryRead(body) ?: tryRead(repairJson(body))
-    }
+    fun parseTree(raw: String): JsonNode? = parseLenient(extract(raw))
 
     /** 只读一次（失败 null） */
     private fun tryRead(text: String): JsonNode? = try {
         mapper.readTree(text)
     } catch (e: Exception) {
         null
+    }
+
+    /** 常见手误：冒号后多写一个 =（实盘 14:35 的 `"reason":="…"`）——清洗后再解析 */
+    private val STRAY_EQ = Regex(""":\s*=""")
+
+    /**
+     * 逐级容错解析：原文 → 清洗手误（[STRAY_EQ]）→ 补缺尾闭合（[repairJson]）→ 仍失败 null
+     *
+     * 模型偶发的手误（多一个 =、尾巴写丢）不值得让整轮决策作废兜底退出。
+     */
+    fun parseLenient(text: String): JsonNode? {
+        val cleaned = STRAY_EQ.replace(text, ":")
+        return tryRead(text) ?: tryRead(cleaned) ?: tryRead(repairJson(cleaned))
     }
 
     /**
@@ -84,9 +94,9 @@ object LlmJson {
         }
         val node = mapper.createObjectNode()
         node.put("action", action)
-        // params 里的 JSON 可能缺尾 → 先修复；坏了/不是对象就用空 params
+        // params 里的 JSON 可能缺尾/带手误 → 容错解析；坏了/不是对象就用空 params
         params["params"]?.let { p ->
-            val json = tryRead(p) ?: tryRead(repairJson(p))
+            val json = parseLenient(p)
             if (json != null && json.isObject) node.set<JsonNode>("params", json)
         }
         params["reason"]?.takeIf { it.isNotBlank() }?.let { node.put("reason", it) }

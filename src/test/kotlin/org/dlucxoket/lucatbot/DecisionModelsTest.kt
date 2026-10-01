@@ -277,6 +277,16 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `parse tolerates stray equals after colon`() {
+        // 实盘 14:35：模型把 "reason" 后写成 :=（多一个 =）→ 整轮被判非 JSON 兜底退出
+        val raw = """{"action":"send","params":{"content":"在吗"},"reason":="接寒凌名梗，调侃一句"}"""
+        val d = ConversationDecision.parse(raw)
+        assertEquals(ConversationAction.SEND, d.action, "清洗手误后正常解析")
+        assertEquals("接寒凌名梗，调侃一句", d.reason)
+        assertEquals("在吗", d.resolveOutgoing().single().summarize())
+    }
+
+    @Test
     fun `plain json is not mistaken for tool-call envelope`() {
         val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
         assertEquals(ConversationAction.RETURN, d.action)
@@ -451,6 +461,13 @@ class LlmJsonTest {
     fun `repairJson keeps intact json unchanged`() {
         val ok = """{"a":[1,2]}"""
         assertEquals(ok, LlmJson.repairJson(ok), "本来就好不动它")
+    }
+
+    @Test
+    fun `parseLenient fixes stray equals and truncated tail`() {
+        assertNotNull(LlmJson.parseLenient("""{"a":="b"}"""), "冒号后多写 = 清掉")
+        assertNotNull(LlmJson.parseLenient("""{"a": [1, 2"""), "缺尾补闭合")
+        assertEquals("b", LlmJson.parseLenient("""{"a":="b"}""")!!.get("a").asText())
     }
 
     @Test
