@@ -36,6 +36,16 @@ class LoopConfig {
         ActionLog(repository = actionLogRepository)
 
     /**
+     * 固定短记——**固定放进决策 prompt 的短期记忆**（第八张表 fixed_memory /
+     * data/fixed-memory.json），退出会话整理时由 MemoryAgent 整体覆盖更新
+     */
+    @Bean
+    fun fixedMemory(
+        fixedMemoryRepository: org.dlucxoket.lucatbot.bot.memory.FixedMemoryRepository
+    ): org.dlucxoket.lucatbot.bot.memory.FixedMemory =
+        org.dlucxoket.lucatbot.bot.memory.FixedMemory(fixedMemoryRepository)
+
+    /**
      * 图片取材器——**全上下文共享的单例**（图片通道）。
      *
      * 必须是同一个实例：多处取材（会话决策轮、协议侧救援）共享同一份
@@ -89,7 +99,8 @@ class LoopConfig {
         actionLog: ActionLog,
         toolCatalog: ToolCatalog,
         imageResolver: ImageResolver,
-        readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService
+        readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService,
+        fixedMemory: org.dlucxoket.lucatbot.bot.memory.FixedMemory
     ): ConversationController = ConversationController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
@@ -102,7 +113,8 @@ class LoopConfig {
         sendMessageTool = SendMessageTool as Tool<SendMessageRequest, SendMessageResult>,
         toolCatalog = toolCatalog,
         imageResolver = imageResolver,
-        readStateService = readStateService
+        readStateService = readStateService,
+        fixedMemory = fixedMemory
     )
 
     /**

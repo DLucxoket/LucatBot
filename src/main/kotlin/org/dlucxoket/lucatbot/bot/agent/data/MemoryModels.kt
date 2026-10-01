@@ -35,6 +35,10 @@ data class MemoryReflectRequest(
     @JsonProperty("pendingTodos")
     val pendingTodos: String = "",
 
+    /** 当前固定短记（stage1 展示旧内容，LLM 需要改就整体覆盖输出 fixed_memory） */
+    @JsonProperty("fixedMemory")
+    val fixedMemory: String = "",
+
     @JsonProperty("candidates")
     val candidates: List<MemoryReflectItem> = emptyList(),
 
@@ -69,10 +73,13 @@ data class MemoryReflectItem(
  * @param doneTodos 阶段1 顺带产出的**待办结算**：本次对话确实办完的待办引用
  *   （id / id 前 4 位 / 内容片段；空 = 没办完的）——编排层据此标完成 + 留痕，
  *   不依赖 LLM 在会话里自觉输出 todo_done
+ * @param fixedMemory 阶段1 顺带产出的**固定短记**新内容（**完全覆盖旧的**；
+ *   null = 不更新，旧内容原样保留）——编排层写入并把这一行追加入库
  */
 data class MemoryReflectResult(
     val memories: List<MemoryReflectItem> = emptyList(),
     val doneTodos: List<String> = emptyList(),
+    val fixedMemory: String? = null,
     val degraded: Boolean = false
 ) {
     companion object {
@@ -93,8 +100,10 @@ data class MemoryReflectResult(
         fun parse(llmOutput: String): MemoryReflectResult {
             val node = LlmJson.parseTree(llmOutput) ?: return DEGRADED
             val doneTodos = node.stringList("done_todos")
+            val fixedMemory = node.get("fixed_memory")?.takeIf { !it.isNull }?.asText()?.trim()
+                ?.takeIf { it.isNotEmpty() }
             val array = node.get("memories")?.takeIf { it.isArray }
-                ?: return MemoryReflectResult(doneTodos = doneTodos, degraded = true)
+                ?: return MemoryReflectResult(doneTodos = doneTodos, fixedMemory = fixedMemory, degraded = true)
             val items = array.mapNotNull { entry ->
                 if (!entry.isObject) return@mapNotNull null
                 val content = entry.get("content")
@@ -110,7 +119,7 @@ data class MemoryReflectResult(
                 val keywords = entry.stringList("keywords")
                 MemoryReflectItem(kind = kind, content = content, tags = tags, keywords = keywords)
             }
-            return MemoryReflectResult(items, doneTodos)
+            return MemoryReflectResult(items, doneTodos, fixedMemory)
         }
 
         /** 读取字符串数组字段（空缺/非数组/含 null → 空列表） */

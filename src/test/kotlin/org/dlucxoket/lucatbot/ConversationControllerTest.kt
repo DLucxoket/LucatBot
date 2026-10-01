@@ -154,6 +154,8 @@ class ConversationControllerTest {
          * （无人回信）、true = 被新消息/让位提前唤醒
          */
         replyWait: (conversationId: String, ms: Long) -> Boolean = { _, _ -> false },
+        /** 固定短记（注入 prompt 的那段小抄；null = 没有，渲染「（暂无）」） */
+        fixedMemory: org.dlucxoket.lucatbot.bot.memory.FixedMemory? = null,
         /**
          * 已读水位服务——默认 temp 仓库（测试不污染 data/）；水位用例显式传自己的实例
          */
@@ -188,6 +190,7 @@ class ConversationControllerTest {
             reflectExecutor = reflectExecutor,
             segmentDelayWait = segmentDelayWait,
             replyWait = replyWait,
+            fixedMemory = fixedMemory,
             readStateService = readStateService
         )
         return Triple(controller, lucatBot, sendTool)
@@ -772,6 +775,37 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("拿不准要不要查就写上"), "鼓励多写、别编")
         assertTrue(prompt.contains("同时") && prompt.contains("下一轮"),
             "说明可与 send 同时输出、结果下一轮可见")
+    }
+
+    @Test
+    fun `fixed memory renders in short term memory section`() {
+        val fm = org.dlucxoket.lucatbot.bot.memory.FixedMemory()
+        fm.update("盯周五球局，别忘了回白鸽")
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, fixedMemory = fm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts.first()
+        assertTrue(
+            prompt.contains("【固定短记·当前（退出整理时整体覆盖更新，只读）】盯周五球局，别忘了回白鸽"),
+            "固定短记固定进 prompt：$prompt"
+        )
+        val idx = prompt.indexOf("### 短期记忆")
+        assertTrue(idx in 0 until prompt.indexOf("【固定短记·当前"), "挂在短期记忆段内：$prompt")
+    }
+
+    @Test
+    fun `fixed memory placeholder when never written`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(
+            llm.prompts.first().contains("【固定短记·当前（退出整理时整体覆盖更新，只读）】（暂无）"),
+            "从没写过 → 占位：${llm.prompts.first()}"
+        )
     }
 
     @Test

@@ -95,6 +95,18 @@ class StorageConfig(
         }
 
     /**
+     * 固定短记（第八张表 fixed_memory / data/fixed-memory.json）——
+     * **只增不删**：每次更新 INSERT 一行，旧行即变更审计；当前 = 最新一条
+     */
+    @Bean(destroyMethod = "shutdown")
+    fun fixedMemoryRepository(): org.dlucxoket.lucatbot.bot.memory.FixedMemoryRepository =
+        if (useMySql) {
+            org.dlucxoket.lucatbot.bot.storage.mysql.MySqlFixedMemoryRepository(mysql)
+        } else {
+            org.dlucxoket.lucatbot.bot.memory.JsonFileFixedMemoryRepository()
+        }
+
+    /**
      * 启动清理：把聊天记录存储层的孪生双份行合并为一条（仅 mysql 模式）
      *
      * 实时/回执行 × 爬楼 `hist:` 行的存量双份一直双倍膨胀——启动时用

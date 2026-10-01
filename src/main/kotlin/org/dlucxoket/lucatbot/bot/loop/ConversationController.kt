@@ -96,7 +96,14 @@ class ConversationController(
                 java.io.File.createTempFile("read-state", ".json").apply { delete() }.absolutePath
             )
         ),
-    /** 连续 read_more 且一直有新消息插入的打断轮数 */
+    /**
+     * 固定短记——**固定放进决策 prompt 的短期记忆**（生产由 LoopConfig 注入
+     * 持久化 bean；null = 既不注入也不结算，测试默认）
+     */
+    private val fixedMemory: org.dlucxoket.lucatbot.bot.memory.FixedMemory? = null,
+    /**
+     * 连续 read_more 且一直有新消息插入的打断轮数
+     */
     private val maxReadMoreWithInserts: Int = 3,
     /** 连续发送失败上限（病态护栏：如被禁言还反复试发，达上限强制收尾） */
     private val maxSendFailures: Int = 3,
@@ -129,7 +136,9 @@ class ConversationController(
         reflectHistoryCount = reflectHistoryCount,
         executor = reflectExecutor,
         // 待办兜底结算：退出整理那轮 LLM 顺带核对「本次对话把哪些待办办完了」
-        todoService = todoService
+        todoService = todoService,
+        // 固定短记：同一轮整理顺带整体覆盖更新（fixed_memory 输出）
+        fixedMemory = fixedMemory
     )
 
     /** 待办结算（todo_done 路径）：标完成 + 「已办」记忆留痕 + 操作日志 */
@@ -315,6 +324,7 @@ class ConversationController(
                 ) + memoryHitsBlock + sessionManager.getFatigueHint(conversationId),
                 todos = todoService.summaryForPrompt(),
                 actionLog = actionLog.dump(),
+                fixedMemory = fixedMemory?.current().orEmpty(),
                 recentMessages = recentLines,
                 newMessageNotes = newNotes,
                 proactive = mustIcebreak,

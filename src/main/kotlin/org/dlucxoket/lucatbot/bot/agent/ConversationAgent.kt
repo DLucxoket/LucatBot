@@ -153,6 +153,8 @@ class ConversationAgent(
             - 当前会话：${input.conversationIdentity.ifBlank { "${input.conversationName}(${input.conversationId})" }}
             - 你的 QQ 号：${if (input.selfQq > 0) input.selfQq else "未知"}（判断「是不是在对我说」的依据）
             ### 短期记忆
+            【固定短记·当前（退出整理时整体覆盖更新，只读）】${input.fixedMemory.ifBlank { "（暂无）" }}
+            【记忆概览】
             ${input.shortTermMemory.ifBlank { "（暂无）" }}
             ### 待办
             ${input.todos.ifBlank { "（无待办）" }}

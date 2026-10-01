@@ -329,6 +329,13 @@ data class ConversationRequest(
     @JsonProperty("shortTermMemory")
     val shortTermMemory: String = "",
 
+    /**
+     * 固定短记——**固定放进 prompt 的短期记忆**（当前要紧事小抄；
+     * 空 = 还没写过。退出会话整理时整体覆盖更新，这里只读）
+     */
+    @JsonProperty("fixedMemory")
+    val fixedMemory: String = "",
+
     /** 待办清单摘要（多行 `- [ ] (id前4位) content`） */
     @JsonProperty("todos")
     val todos: String = "",

@@ -56,7 +56,12 @@ class MemoryReflector(
      * 实盘根因：`todo_done` 全靠 LLM 在会话里自觉输出，漏标后待办永远挂着，
      * 机器人被问「你不是去过了吗」时仍以为没办
      */
-    private val todoService: TodoService? = null
+    private val todoService: TodoService? = null,
+    /**
+     * 固定短记（可空 = 不结算）——阶段1 顺带整体覆盖更新（`fixed_memory` 输出），
+     * 每次生效的更改追加入库（历史行 = 变更审计）
+     */
+    private val fixedMemory: org.dlucxoket.lucatbot.bot.memory.FixedMemory? = null
 ) {
     private val log = LoggerFactory.getLogger(MemoryReflector::class.java)
 
@@ -166,9 +171,20 @@ class MemoryReflector(
                     timeHint = TimeAwareness.timeHint(),
                     pendingTodos = pendingTodos.joinToString("\n") {
                         "- [ ] (${it.id.take(4)}) ${it.content}"
-                    }
+                    },
+                    fixedMemory = fixedMemory?.current().orEmpty()
                 )
             )
+
+            // 固定短记覆盖更新（**同样在「无候选就 return」之前**——整理的本职除了
+            // 记新东西，也包括维护这段固定小抄；不写字段 = 不更新）
+            fixedMemory?.let { fm ->
+                result.fixedMemory?.let { new ->
+                    if (fm.update(new)) {
+                        actionLog.append("固定短记更新", conversationId = conversationId)
+                    }
+                }
+            }
 
             // 待办结算（兜底，**必须在「无候选就 return」之前**——办完待办却没别的
             // 可记是常态）：本次对话确实办完的待办 → 标完成 + 写「已办」记忆留痕

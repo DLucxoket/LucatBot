@@ -79,6 +79,20 @@ class MemoryAgentTest {
     }
 
     @Test
+    fun `stage1 prompt explains fixed memory overwrite contract`() {
+        val llm = FakeLLM(mutableListOf("""{"memories":[]}"""))
+        MemoryAgent(llm).processObject(
+            MemoryReflectRequest(conversationContent = "对话", fixedMemory = "周五球局")
+        )
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("【固定短记（当前内容，要改就整体覆盖）】"), "旧内容段注入：$prompt")
+        assertTrue(prompt.contains("周五球局"), "当前内容可见（模型才知道覆盖什么）")
+        assertTrue(prompt.contains("整体覆盖"), "覆盖语义写明（不是追加）")
+        assertTrue(prompt.contains("省略该字段"), "不更新的写法写明")
+        assertTrue(prompt.contains("fixed_memory"), "输出字段名")
+    }
+
+    @Test
     fun `stage1 prompt omits todos section when no pending todo`() {
         val llm = FakeLLM(mutableListOf("""{"memories":[]}"""))
         MemoryAgent(llm).processObject(MemoryReflectRequest(conversationContent = "对话"))

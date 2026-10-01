@@ -9,6 +9,8 @@ import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.memory.MemorySubject
+import org.dlucxoket.lucatbot.bot.memory.FixedMemory
+import org.dlucxoket.lucatbot.bot.memory.JsonFileFixedMemoryRepository
 import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.junit.jupiter.api.Assertions.*
@@ -262,6 +264,56 @@ class MemoryDedupeTest {
         // system 里本就写着结算规则（含【未完成待办】字样）——只看 user 段
         val user = llm.prompts.single().substringAfter("\n=====USER=====\n")
         assertFalse(user.contains("【未完成待办】"), "没注入待办服务就不提结算：$user")
+    }
+
+    // ------------------------------------------------------------------
+    // 固定短记：同一轮整理顺带整体覆盖，且每次更改都入库
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `reflector overwrites fixed memory and persists every change`() {
+        val path = File.createTempFile("fixed-rf", ".json").apply { delete() }.absolutePath
+        val fm = FixedMemory(JsonFileFixedMemoryRepository(path))
+        fm.update("旧内容")
+        val llm = FakeLLM(mutableListOf("""{"memories":[],"fixed_memory":"盯周五球局，别忘了回白鸽"}"""))
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = service(),
+            chatHistoryService = ChatHistoryService(
+                JsonFileChatHistoryRepository(File.createTempFile("hist-fm", ".json").absolutePath)
+            ),
+            actionLog = ActionLog(),
+            fixedMemory = fm
+        )
+
+        reflector.reflect("private:7")
+
+        assertEquals("盯周五球局，别忘了回白鸽", fm.current(), "整体覆盖旧内容")
+        val history = JsonFileFixedMemoryRepository(path).loadRecent()
+        assertEquals(listOf("旧内容", "盯周五球局，别忘了回白鸽"), history.map { it.content },
+            "每次更改的新内容都入库（历史行即审计）")
+        assertTrue(llm.prompts.single().contains("旧内容"),
+            "整理时旧内容可见（模型才知道要覆盖什么）：${llm.prompts.single()}")
+    }
+
+    @Test
+    fun `reflector keeps fixed memory when output omits the field`() {
+        val fm = FixedMemory()
+        fm.update("别忘了回白鸽")
+        val llm = FakeLLM(mutableListOf("""{"memories":[]}"""))
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = service(),
+            chatHistoryService = ChatHistoryService(
+                JsonFileChatHistoryRepository(File.createTempFile("hist-fm2", ".json").absolutePath)
+            ),
+            actionLog = ActionLog(),
+            fixedMemory = fm
+        )
+
+        reflector.reflect("private:7")
+
+        assertEquals("别忘了回白鸽", fm.current(), "没写字段 = 不更新")
     }
 
     // ------------------------------------------------------------------

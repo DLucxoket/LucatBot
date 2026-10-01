@@ -68,6 +68,12 @@ class MemoryAgent(
             - 只是开了头、没办完、或拿不准 → 不要写（办完会标完成并留痕，写错会把没办的事记成办过）
             - 都没办完 → 省略 done_todos 或输出 "done_todos": []
             
+            固定短记（user 消息里有【固定短记】时；**整体覆盖，不是追加**）：
+            - 那是一小段**每轮决策都固定注入**的「当前要紧事小抄」（几十字：状态/关键约定/眼下最该记的事）
+            - 需要更新 → 输出 "fixed_memory": "完整的新内容"——**旧内容整体被替换**，过时的自己删掉，别在后面追加
+            - 不需要更新 → **省略该字段**（旧内容原样保留）；没什么值得常驻的就不写
+            - 写要短、准、当下有效（写长了每轮都烧 token）
+
             只记值得长期保留的：
             - 对人的事实（名字、喜好、重要情况）、对人的看法/印象、重要事件/约定
             - 普通闲聊、天气式对话不要记
@@ -94,6 +100,7 @@ class MemoryAgent(
         } else {
             "\n【未完成待办】\n${input.pendingTodos}"
         }
+        val fixedText = "\n【固定短记（当前内容，要改就整体覆盖）】\n${input.fixedMemory.ifBlank { "（暂无）" }}"
         val timeLine = if (input.timeHint.isNotBlank()) {
             "\n当前时间（北京时间）：${input.timeHint}"
         } else {
@@ -103,7 +110,7 @@ class MemoryAgent(
             【现有记忆】
             $existing
             【本次会话内容】
-            $content$todosText$timeLine
+            $content$fixedText$todosText$timeLine
         """.trimIndent()
     }
 

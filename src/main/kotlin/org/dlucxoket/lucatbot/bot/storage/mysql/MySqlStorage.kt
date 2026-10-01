@@ -541,6 +541,13 @@ class MySqlStorage(private val config: MySqlConfig) {
                 action VARCHAR(512) NOT NULL,
                 reason VARCHAR(256) NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS fixed_memory (
+                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                changed_at DATETIME(3) NOT NULL,
+                content TEXT NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent()
         )
     }
