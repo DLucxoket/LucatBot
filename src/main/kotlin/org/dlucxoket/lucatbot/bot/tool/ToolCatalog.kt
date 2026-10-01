@@ -72,6 +72,13 @@ class ToolCatalog(
     fun count(query: String?): Int = matching(query).size
 
     /**
+     * 可见工具名清单（**固定注入 prompt**：名字常驻，模型不必先 list_tools 才知道有啥）
+     *
+     * 只给名字——参数与「何时使用」仍需 list_tools 看目录
+     */
+    fun names(): List<String> = visibleTools().map { it.name }
+
+    /**
      * 执行一次工具调用
      *
      * @param name 工具名（忽略大小写；目录中的名字）

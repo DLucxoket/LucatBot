@@ -380,6 +380,10 @@ data class ConversationRequest(
     @JsonProperty("toolNotes")
     val toolNotes: List<String> = emptyList(),
 
+    /** 可见工具名固定清单（常驻 prompt：模型不用先 list_tools 就知道有啥工具） */
+    @JsonProperty("toolNames")
+    val toolNames: List<String> = emptyList(),
+
     /**
      * 图片附件（**图片通道**）——编排层从聊天记录/新消息的 imageUrls
      * 下载加工（[org.dlucxoket.lucatbot.bot.llm.ImageResolver]），

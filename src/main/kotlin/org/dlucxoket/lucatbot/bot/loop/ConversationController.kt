@@ -145,9 +145,29 @@ class ConversationController(
     private val todoSettlement = TodoSettlement(todoService, memoryService, actionLog)
 
     /**
-     * 跑完整的会话内循环，直到离开
+     * 会话内切换目标（[org.dlucxoket.lucatbot.bot.tool.SwitchConversationTool] 经
+     * CALL_TOOL 分支置位）——loop() 返回 Unit，故经字段把目标带回 [runConversation]，
+     * 由 [run] 接着打开（用后即清，防串到下一段会话）
+     */
+    @Volatile
+    private var pendingSwitchTarget: SessionPick? = null
+
+    /**
+     * 跑完整的会话内循环，直到离开——**可链式切换**
+     *
+     * 会话里调用 `SwitchConversationTool` 要求切换 → 当前会话结束 → 立刻接着
+     * 打开目标会话（同一把会话锁内直连，不经选会话、不受退出冷却影响）
      */
     fun run(pick: SessionPick) {
+        var current: SessionPick? = pick
+        while (current != null) {
+            current = runConversation(current)
+        }
+    }
+
+    /** 跑一段完整会话；返回值 = 切换目标（null = 回消息列表） */
+    private fun runConversation(pick: SessionPick): SessionPick? {
+        pendingSwitchTarget = null // 清掉上一段会话可能残留的切换目标
         val conversationId = toConversationId(pick)
         val isGroup = pick.conversationType == SessionPickType.GROUP
         val proactive = pick.conversationType == SessionPickType.PROACTIVE
@@ -187,6 +207,15 @@ class ConversationController(
             lucatBot.markConversationLeft(conversationId)
             lucatBot.backToConversationList()
         }
+        // 会话内要求切换 → 返回目标（run() 接着打开；目标=当前会话则忽略防死循环）
+        val target = pendingSwitchTarget
+        pendingSwitchTarget = null
+        if (target == null) return null
+        if (target == pick) {
+            log.warn("切换目标就是当前会话，忽略：{} {}", target.conversationType, target.targetId)
+            return null
+        }
+        return target
     }
 
     private fun loop(conversationId: String, isGroup: Boolean, proactive: Boolean) {
@@ -335,6 +364,7 @@ class ConversationController(
                 reachedHistoryStart = reachedHistoryStart,
                 hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote, stayStreak),
                 toolNotes = toolNotes.snapshot(),
+                toolNames = toolCatalog.names(),
                 images = attachments.images,
                 missingImages = attachments.missing
             )
@@ -644,6 +674,20 @@ class ConversationController(
                     toolNotes.recordResult(toolName, result)
                     logAct("调用工具 $toolName", why)
                     log.info("tool {} → {} 字符", toolName, result.length)
+                    // 切换会话工具已置位 → 记下目标并结束本轮循环（runConversation 接着打开）
+                    val switchTarget = lucatBot.consumeConversationSwitch()
+                    if (switchTarget != null) {
+                        if (toConversationId(switchTarget) == conversationId) {
+                            log.warn("切换目标就是当前会话，忽略：{} {}",
+                                switchTarget.conversationType, switchTarget.targetId)
+                        } else {
+                            logAct("切换会话 → ${switchTarget.conversationType}:${switchTarget.targetId}", why)
+                            log.info("会话内切换 → {}:{}（经 SwitchConversationTool）",
+                                switchTarget.conversationType, switchTarget.targetId)
+                            pendingSwitchTarget = switchTarget
+                            return
+                        }
+                    }
                 }
 
                 ConversationAction.VIEW_IMAGES -> {

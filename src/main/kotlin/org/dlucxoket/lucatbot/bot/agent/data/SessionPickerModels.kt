@@ -121,7 +121,11 @@ data class SessionPickerRequest(
      * 注入下一轮 prompt 的「### 工具」段。
      */
     @JsonProperty("toolNotes")
-    val toolNotes: List<String> = emptyList()
+    val toolNotes: List<String> = emptyList(),
+
+    /** 可见工具名固定清单（常驻 prompt：不用先 list_tools 就知道有啥工具） */
+    @JsonProperty("toolNames")
+    val toolNames: List<String> = emptyList()
 )
 
 /**

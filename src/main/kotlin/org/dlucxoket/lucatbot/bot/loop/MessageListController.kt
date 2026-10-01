@@ -90,7 +90,8 @@ class MessageListController(
                 sessions = sessions,
                 cooldownNotes = cooldownNotes,
                 proactiveCandidates = candidates,
-                toolNotes = toolNotes.snapshot()
+                toolNotes = toolNotes.snapshot(),
+                toolNames = toolCatalog.names()
             )
 
             val decision = sessionPickerAgent.processObject(request)

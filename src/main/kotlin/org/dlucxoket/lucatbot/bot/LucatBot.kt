@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot.bot
 
+import org.dlucxoket.lucatbot.bot.agent.data.SessionPick
+import org.dlucxoket.lucatbot.bot.agent.data.SessionPickType
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.BotPersona
 import org.dlucxoket.lucatbot.bot.persona.PersonaLoader
@@ -142,6 +144,31 @@ class LucatBot {
             val remain = CONVERSATION_COOLDOWN_MS - (now - at)
             if (remain > 0) conv to remain else null
         }.toMap()
+
+    /**
+     * 会话内要求**切换到别的会话**（[org.dlucxoket.lucatbot.bot.tool.SwitchConversationTool]
+     * 置位 → ConversationController 结束当前会话 → run() 接着打开目标）
+     */
+    @Volatile
+    private var pendingSwitch: SessionPick? = null
+
+    /** 当前挂着的切换请求（peek；null = 无） */
+    fun pendingConversationSwitch(): SessionPick? = pendingSwitch
+
+    /** 记一次切换请求（type：private / group，非法值按 private 处理） */
+    fun requestConversationSwitch(type: String, targetId: String) {
+        pendingSwitch = SessionPick(
+            conversationType = if (type.equals("group", ignoreCase = true)) {
+                SessionPickType.GROUP
+            } else {
+                SessionPickType.PRIVATE
+            },
+            targetId = targetId
+        )
+    }
+
+    /** 取走切换请求（一次性消费） */
+    fun consumeConversationSwitch(): SessionPick? = pendingSwitch.also { pendingSwitch = null }
 
     companion object {
         /** 退出会话后的冷却时长：期间选会话不把该会话放进候选 */

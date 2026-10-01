@@ -868,6 +868,49 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `prompt lists all tool names permanently`() {
+        // 工具名固定在 prompt 上（不用先 list_tools 才知道有啥）
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts.first()
+        assertTrue(prompt.contains("可用工具（固定名单）"), "固定名单段存在：$prompt")
+        assertTrue(prompt.contains("SwitchConversationTool") && prompt.contains("FetchUrlTool"),
+            "两个新工具在常驻名单里：$prompt")
+        assertTrue(prompt.contains("目录里没有的工具不存在"), "仍以目录为准的护栏")
+    }
+
+    @Test
+    fun `switch conversation tool ends current session and opens target`() {
+        // 会话内要求切换：当前会话立刻结束，目标会话在同一把锁里接着打开
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"tool","params":{"name":"SwitchConversationTool","input":{"type":"private","target":"456","reason":"转去那边说"},"reason":"这边说完了"}}""",
+            """{"action":"return","reason":"说完就走"}"""
+        ))
+        val (controller, lucatBot, _) = buildController(llm)
+        // 生产由 ToolDependencyBinder 绑定；测试手动注入
+        org.dlucxoket.lucatbot.bot.tool.SwitchConversationTool.bindServices(
+            org.dlucxoket.lucatbot.bot.tool.ToolServices(
+                memoryService = MemoryService(
+                    JsonFileMemoryRepository(File.createTempFile("mem-sw", ".json").absolutePath)
+                ),
+                chatHistoryService = ChatHistoryService(
+                    JsonFileChatHistoryRepository(File.createTempFile("hist-sw", ".json").absolutePath)
+                ),
+                lucatBot = lucatBot
+            )
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals(2, llm.prompts.size, "两段会话各一轮决策：实际 ${llm.prompts.size}")
+        assertTrue(llm.prompts[1].contains("456"), "第二轮已在目标会话里：${llm.prompts[1]}")
+        assertTrue(llm.prompts[1].contains("切换会话"), "切换动作进操作日志、第二轮可见：${llm.prompts[1]}")
+    }
+
+    @Test
     fun `entering conversation advances read watermark`() {
         // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
         val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(

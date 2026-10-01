@@ -42,6 +42,12 @@ class ConversationAgent(
      * 上一版时间在第 2 行，前缀从第 2 行起每轮全断，长指令段全部 miss。
      */
     private fun buildSystemPrompt(input: ConversationRequest): String {
+        val fixedToolNames = if (input.toolNames.isEmpty()) {
+            ""
+        } else {
+            "。**可用工具（固定名单）**：${input.toolNames.joinToString("、")}" +
+                "——名单常驻可见，目录里没有的工具不存在；要参数说明再 list_tools"
+        }
         val proactiveHint = if (input.proactive) {
             "\n（这是你主动发起的会话：有明确任务/待办要办就直接说正事；没有就先发一条简短的破冰招呼，例如「在吗」「干嘛呢」）"
         } else {
@@ -80,7 +86,7 @@ class ConversationAgent(
               - params 顶层另可带 **"wait_message": 秒数（1~60，可选）**——发送完**原地等回信**：对方在这段时间里发来新消息 → 立刻唤醒你去处理；等满仍没有任何新消息 = 没人接话 → 你会直接退出会话。**想等对方说话就带上它，秒数直接写 `"wait_message": 60`（上限，最多等 1 分钟）**；发完马上还要接着动作才省略
             - stay：在当前会话短暂停留后再决策。params：{"seconds": 10}（通常 10~30 秒；停留期间有新消息会被自动唤醒并取消计时）。**别拿 stay 等别人说话**——等回应一律用 send + wait_message（见上）；没话可发又要等，直接 return。**例外：对方话明显没说完就该 stay**（见下方「等下文」）
             - return：退出本会话，回到消息列表。params 可省略
-            - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）
+            - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）${fixedToolNames}
             - tool：调用一个工具。params：{"name": "工具名", "input": { ...参数，格式见目录里的「参数」... }}
             - view_images：查看聊天记录里图片的内容。params：{"refs": ["文件标签"]}——文件标签取占位符 `[图片 file=x]` 里的 x，想看哪几张就列哪几张（一次最多 6 张）；**下一轮**这些图会以附件形式给你（每张图前有同名标签文本对应）。图片默认不附内容，想看才要
             - reason 是内心动机（不会发出去）

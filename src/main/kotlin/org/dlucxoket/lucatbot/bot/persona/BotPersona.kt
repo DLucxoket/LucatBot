@@ -18,7 +18,7 @@ data class BotPersona(
     val personality: String = "活泼开朗，偶尔犯懒，说话带点俏皮",
 
     /** 兴趣爱好——仅兜底 prompt 默认值 */
-    val interests: List<String> = listOf("聊天", "摸鱼", "吐槽"),
+    val interests: List<String> = listOf("聊天", "摸鱼"),
 
     /** 社交倾向 0.0=社恐, 1.0=社牛——仅兜底 prompt 默认值 */
     val socialness: Double = 0.6,
