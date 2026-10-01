@@ -565,14 +565,15 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `segment delay times only between messages and send window messages inject next round`() {
-        // delay 语义：上一条发完之后才开始计时（第一条没有上一条、不等）；
+    fun `segment delay waits before each message and send window messages inject next round`() {
+        // delay 语义：**每条先等自己的 delay 再发**——第一条从决策起直接计时、到点就发；
+        // 第二条起因顺序执行天然从「上一条发完」开始计，以此类推；delay=0 不等。
         // 整个序列在同一轮决策内发完才进下一轮；发送窗口内到达的别人消息
         // 进待插入队列、下一轮 drain 进 prompt（机器人自己发的由 Tool 逐条
         // 写聊天记录，生产链路下一轮历史可读）
         val llm = FakeLLM(mutableListOf(
             """{"action":"send","params":{"content":[
-                {"delay": 999, "members":[{"type":"text","text":"第一条"}]},
+                {"delay": 3, "members":[{"type":"text","text":"第一条"}]},
                 {"delay": 5, "members":[{"type":"text","text":"第二条"}]},
                 {"members":[{"type":"text","text":"第三条"}]}
             ]}}""",
@@ -584,7 +585,7 @@ class ConversationControllerTest {
             llm,
             segmentDelayWait = { _, ms ->
                 waits += ms
-                // 模拟条间等待期间对方发来消息
+                // 模拟等待期间对方发来消息
                 bot?.enqueuePendingInsert(
                     "private:123", 9L, "用户B", "等你的时候插一句",
                     messageId = 99L
@@ -596,8 +597,8 @@ class ConversationControllerTest {
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        assertEquals(listOf(5_000L), waits,
-            "只在条间计时一次：第一条 delay(999s) 不等（无上一条）、第三条无 delay 不等")
+        assertEquals(listOf(3_000L, 5_000L), waits,
+            "每条发送前各计时一次：第一条(3s) 也要等、第二条(5s) 上一条发完后等、第三条无 delay 不等：$waits")
         assertEquals(3, sendTool.requests.size, "序列在同一轮内发完（否则会多轮决策）")
         assertEquals(2, llm.prompts.size, "发完才进入下一轮决策")
 

@@ -469,23 +469,22 @@ class ConversationController(
                     var failIndex = 0
                     var interrupted = false
                     for ((idx, msg) in outgoing.withIndex()) {
-                        // 条间打字延迟：**上一条发完之后才开始计时**（第一条没有
-                        // 上一条、不等）——同步顺序执行天然保证计时起点=上一条
-                        // 发送完成；等满或被新消息提前唤醒后发本条
-                        if (idx > 0) {
-                            val delayMs = (msg.delaySeconds * 1000).toLong().coerceIn(0L, 30_000L)
-                            if (delayMs > 0) {
-                                try {
-                                    if (segmentDelayWait(conversationId, delayMs)) {
-                                        log.info("第 {} 条发送前条间延迟被新消息提前唤醒（{}ms）", idx + 1, delayMs)
-                                    }
-                                } catch (e: InterruptedException) {
-                                    Thread.currentThread().interrupt()
-                                    log.info("分段发送延迟被中断，退出会话")
-                                    logAct("发送延迟被中断，退出")
-                                    interrupted = true
-                                    break
+                        // 发送前延迟：**每条先等自己的 delay 再发**——第一条从决策起
+                        // 直接计时、到点就发；后续条因同步顺序执行，天然从「上一条
+                        // 发送完成」那一刻开始计，以此类推。等满或被新消息提前唤醒后
+                        // 发本条；delay=0（或省略）不等
+                        val delayMs = (msg.delaySeconds * 1000).toLong().coerceIn(0L, 30_000L)
+                        if (delayMs > 0) {
+                            try {
+                                if (segmentDelayWait(conversationId, delayMs)) {
+                                    log.info("第 {} 条发送前等待被新消息提前唤醒（{}ms）", idx + 1, delayMs)
                                 }
+                            } catch (e: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                log.info("分段发送延迟被中断，退出会话")
+                                logAct("发送延迟被中断，退出")
+                                interrupted = true
+                                break
                             }
                         }
                         val sendResult = sendMessageTool.processObject(
