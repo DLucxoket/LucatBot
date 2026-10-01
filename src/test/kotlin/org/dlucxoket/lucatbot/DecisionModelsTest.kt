@@ -338,6 +338,28 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `fetch url tool call in harness format parses to input`() {
+        // 其他 agent 都长这样：function=工具名 + parameter 标签（双引号与单引号都收）
+        val lt = "<"
+        val url = "https://www.bing.com/search?q=%E5%8E%9F%E7%A5%9E"
+        val raw = lt + "function=FetchUrlTool>" +
+            lt + "parameter name=\"url\">" + url + lt + "/parameter>" +
+            lt + "parameter name='maxChars'>3000" + lt + "/parameter>" +
+            lt + "/function>"
+        val d = ConversationDecision.parse(raw)
+
+        assertEquals(ConversationAction.CALL_TOOL, d.action, "翻译成 tool 动作")
+        assertEquals("FetchUrlTool", d.toolName)
+        assertEquals(url, d.toolInput["url"]?.toString(), "URL 原样（含 % 转义）")
+        assertEquals(3000, (d.toolInput["maxChars"] as Number).toInt(), "数字参数按数字")
+
+        // 顶层字段写在参数标签里也提回顶层（todo_add 等）
+        val withTodo = lt + "function=stay>" +
+            lt + "parameter name=\"todo_add\">买票" + lt + "/parameter>" + lt + "/function>"
+        assertEquals("买票", ConversationDecision.parse(withTodo).todo_add, "todo_add 提回顶层")
+    }
+
+    @Test
     fun `plain json is not mistaken for tool-call envelope`() {
         val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
         assertEquals(ConversationAction.RETURN, d.action)

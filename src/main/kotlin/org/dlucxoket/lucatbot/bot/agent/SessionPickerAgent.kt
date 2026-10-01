@@ -53,7 +53,7 @@ class SessionPickerAgent(
             你是一个正在使用即时聊天工具的用户，现在你需要选择其中一个会话进行查看
             ## 你的输出格式（严格遵循）
             只输出纯JSON，结构如下：
-            - **只写纯 JSON 这一种形态**：不要包「函数调用 / XML 标签」那套标记（invoke、function、parameter 都不是本协议），不要裹解释文字——包错了整条会被丢弃、直接去空闲
+            - **首选只写纯 JSON**（结构如下）；**也接受函数调用标签形态**（function=动作名/工具名 + parameter 标签，系统会自动翻译）——但一次只用一种形态：别混写、别在 JSON 外再裹解释文字
             
             {
             "action": "open_conversation" | "idle" | "list_tools" | "tool",

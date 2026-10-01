@@ -81,7 +81,7 @@ object LlmJson {
     private const val LT = "<"
     private val INVOKE_OPEN = Regex("""$LT(?:invoke\s+name=|function=)"?([A-Za-z_][\w-]*)""")
     private val PARAM_TAG = Regex(
-        """${LT}parameter\s*(?:name\s*=\s*)?=?\s*"?([A-Za-z_][\w-]*)"?\s*>([\s\S]*?)$LT/parameter>"""
+        """${LT}parameter\s*(?:name\s*=\s*)?=?\s*["']?([A-Za-z_][\w-]*)["']?\s*>([\s\S]*?)$LT/parameter>"""
     )
 
     /** 极简裸参数对（如 `<messageId>123</messageId>`；结构标签除外） */
@@ -95,6 +95,9 @@ object LlmJson {
         "view_images", "view", "view_image",
         "open_conversation", "idle", "memory_queries", "search_memory"
     )
+
+    /** 可从参数标签提到信封**顶层**的字段（与 JSON 信封的顶层字段一致） */
+    private val TOP_LEVEL_FIELDS = listOf("memory_queries", "remember", "todo_add", "todo_done")
 
     /**
      * tool-call 形态的原文 → 纯 JSON 信封（`{"action":…,"params":{…},"reason":…}`）
@@ -125,9 +128,9 @@ object LlmJson {
                 }
                 else -> flat
             })
-            // 顶层字段随行（如 memory_queries 写在参数标签里）
-            if (action == "memory_queries" || action == "search_memory") {
-                flat.get("memory_queries")?.let { node.set<JsonNode>("memory_queries", it) }
+            // 顶层字段随行（写在参数标签里也认：remember/todo_*/memory_queries）
+            TOP_LEVEL_FIELDS.forEach { key ->
+                flat.get(key)?.let { node.set<JsonNode>(key, it) }
             }
         } else {
             // 不认识的名字 = 工具调用（<function=GetMsgTool><messageId>…）
