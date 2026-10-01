@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot.bot.agent.data
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 
 /**
@@ -73,13 +74,26 @@ object LlmJson {
         return text + quote + closers.reversed().joinToString("")
     }
 
-    // —— tool-call 形态容错：模型偶发把输出包成「函数调用」标记（invoke/function
-    //    + parameter 标签）——那不是本协议（纯 JSON 信封），这里把它翻译回信封。
-    //    字面标记在代码里拼接（避免注释/文档里出现可被误识别的连续标记）。
+    // —— tool-call 形态容错：模型偶发把输出包成「函数调用」标记——不是本协议
+    //    （纯 JSON 信封），这里翻译回信封：JSON 解析不了时就走这条路径。
+    //    支持整体 params JSON（老）与逐个参数标签（新，含裸标签对）两种形态。
+    //    字面标记在代码里拼接（避免注释里出现可被误识别的连续标记）。
     private const val LT = "<"
     private val INVOKE_OPEN = Regex("""$LT(?:invoke\s+name=|function=)"?([A-Za-z_][\w-]*)""")
-    private val INVOKE_PARAM = Regex(
-        """${LT}parameter\s*(?:name\s*=\s*)?=?\s*"?(params|reason)"?\s*>([\s\S]*?)${LT}/parameter>"""
+    private val PARAM_TAG = Regex(
+        """${LT}parameter\s*(?:name\s*=\s*)?=?\s*"?([A-Za-z_][\w-]*)"?\s*>([\s\S]*?)$LT/parameter>"""
+    )
+
+    /** 极简裸参数对（如 `<messageId>123</messageId>`；结构标签除外） */
+    private val BARE_TAG = Regex("""$LT([A-Za-z_][\w-]*)>([^$LT]*)$LT/\1>""")
+    private val STRUCT_TAGS = setOf("function", "invoke", "parameter", "output", "content")
+
+    /** 能当 action 的名字——**不认识的 function 名一律按「工具调用」处理** */
+    private val KNOWN_ACTIONS = setOf(
+        "read_more", "readmore", "send", "stay", "return",
+        "list_tools", "tools", "tool", "call_tool",
+        "view_images", "view", "view_image",
+        "open_conversation", "idle", "memory_queries", "search_memory"
     )
 
     /**
@@ -88,19 +102,53 @@ object LlmJson {
      * @return 翻译后的信封 JSON；**不是该形态 → null**（调用方照常走原解析）
      */
     fun toolCallEnvelope(raw: String): String? {
-        val action = INVOKE_OPEN.find(raw)?.groupValues?.get(1)?.lowercase() ?: return null
-        val params = INVOKE_PARAM.findAll(raw).associate { m ->
-            m.groupValues[1] to m.groupValues[2].trim()
+        val called = INVOKE_OPEN.find(raw)?.groupValues?.get(1) ?: return null
+        val args = LinkedHashMap<String, String>()
+        PARAM_TAG.findAll(raw).forEach { args.putIfAbsent(it.groupValues[1], it.groupValues[2].trim()) }
+        BARE_TAG.findAll(raw).forEach { m ->
+            val key = m.groupValues[1]
+            if (key !in STRUCT_TAGS) args.putIfAbsent(key, m.groupValues[2].trim())
         }
+        val jsonParams = args["params"]?.let { p -> parseLenient(p)?.takeIf { it.isObject } }
+        val flat = argsToNode(args)
         val node = mapper.createObjectNode()
-        node.put("action", action)
-        // params 里的 JSON 可能缺尾/带手误 → 容错解析；坏了/不是对象就用空 params
-        params["params"]?.let { p ->
-            val json = parseLenient(p)
-            if (json != null && json.isObject) node.set<JsonNode>("params", json)
+        val action = called.lowercase()
+        if (action in KNOWN_ACTIONS) {
+            node.put("action", action)
+            node.set<JsonNode>("params", when {
+                jsonParams != null -> jsonParams
+                action == "tool" || action == "call_tool" -> {
+                    val obj = mapper.createObjectNode()
+                    obj.set<JsonNode>("name", flat.get("name") ?: mapper.getNodeFactory().textNode(called))
+                    obj.set<JsonNode>("input", flat.deepCopy().also { it.remove("name") })
+                    obj
+                }
+                else -> flat
+            })
+            // 顶层字段随行（如 memory_queries 写在参数标签里）
+            if (action == "memory_queries" || action == "search_memory") {
+                flat.get("memory_queries")?.let { node.set<JsonNode>("memory_queries", it) }
+            }
+        } else {
+            // 不认识的名字 = 工具调用（<function=GetMsgTool><messageId>…）
+            node.put("action", "tool")
+            val obj = mapper.createObjectNode()
+            obj.put("name", called)
+            obj.set<JsonNode>("input", jsonParams ?: flat)
+            node.set<JsonNode>("params", obj)
         }
-        params["reason"]?.takeIf { it.isNotBlank() }?.let { node.put("reason", it) }
+        args["reason"]?.takeIf { it.isNotBlank() }?.let { node.put("reason", it) }
         return mapper.writeValueAsString(node)
+    }
+
+    /** 逐个参数标签 → JSON 对象（值先按 JSON 读、失败按字符串；跳过 params/reason） */
+    private fun argsToNode(args: Map<String, String>): ObjectNode {
+        val obj = mapper.createObjectNode()
+        args.forEach { (k, v) ->
+            if (k == "params" || k == "reason" || v.isEmpty()) return@forEach
+            obj.set<JsonNode>(k, parseLenient(v) ?: mapper.getNodeFactory().textNode(v))
+        }
+        return obj
     }
 
     /** 把信封里的 params 节点转成 Map；缺失/非对象返回空 Map */

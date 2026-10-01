@@ -311,6 +311,33 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `function tag with flat params becomes tool call`() {
+        // 支持形态：function 名不认识 → 按工具调用；参数可用裸标签对或 parameter 标签
+        val lt = "<"
+        val bare = lt + "function=GetMsgTool>" +
+            lt + "messageId>1377891508" + lt + "/messageId>" +
+            lt + "/function>"
+        val d = ConversationDecision.parse(bare)
+        assertEquals(ConversationAction.CALL_TOOL, d.action, "不认识的名字 → 工具调用")
+        assertEquals("GetMsgTool", d.toolName)
+        assertEquals("1377891508", d.toolInput["messageId"]?.toString(), "裸参数对取值")
+
+        val parameter = lt + "invoke name=\"GetMsgTool\">" +
+            lt + "parameter name=\"messageId\">1377891508" + lt + "/parameter>" +
+            lt + "/invoke>"
+        val d2 = ConversationDecision.parse(parameter)
+        assertEquals(ConversationAction.CALL_TOOL, d2.action)
+        assertEquals("GetMsgTool", d2.toolName)
+        assertEquals("1377891508", d2.toolInput["messageId"]?.toString())
+
+        // 认识的名字仍是动作（不是工具）
+        val action = lt + "function=stay>" + lt + "seconds>10" + lt + "/seconds>" + lt + "/function>"
+        val d3 = ConversationDecision.parse(action)
+        assertEquals(ConversationAction.STAY, d3.action, "已知动作名照常当动作")
+        assertEquals(10, d3.staySeconds, "裸参数对进 params")
+    }
+
+    @Test
     fun `plain json is not mistaken for tool-call envelope`() {
         val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
         assertEquals(ConversationAction.RETURN, d.action)
