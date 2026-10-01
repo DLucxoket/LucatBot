@@ -314,8 +314,16 @@ class ConversationController(
                 round, historyCount, inserts.size, attachments.images.size)
             val decisionStartMs = System.currentTimeMillis()
             var decision = conversationAgent.processObject(request)
-            log.info("第 {} 轮决策 → {}（{}ms）{}", round, decision.action,
-                System.currentTimeMillis() - decisionStartMs,
+            // 决策行带上关键参数（等回信/停留秒数）——否则「发送后为什么 5 分钟没下一步」
+            // 在日志里无从判断（实盘：wait_message 300s 静默等待被当成卡死）
+            val paramsNote = when (decision.action) {
+                ConversationAction.SEND ->
+                    decision.waitMessageSeconds.takeIf { it > 0 }?.let { "［等回信 ${it}s］" }.orEmpty()
+                ConversationAction.STAY -> "［停留 ${decision.staySeconds}s］"
+                else -> ""
+            }
+            log.info("第 {} 轮决策 → {}（{}ms）{}{}", round, decision.action,
+                System.currentTimeMillis() - decisionStartMs, paramsNote,
                 decision.reason?.let { "：$it" } ?: "")
             // send 动作的 remember 延后到发送成功才写（防「没发出去却记了『我回复了』」）；
             // 上一轮发送仍失败（sendFailureNote 未清）期间，非 send 动作的 remember
