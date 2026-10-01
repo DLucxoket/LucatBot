@@ -229,8 +229,8 @@ class MainLoopController(
             }
         }
 
-        // 空闲结束：decay 或按时间重估
-        lucatBot.mood = if (Math.random() < 0.5) lucatBot.mood.decay() else BotMood.guessByTime()
+        // 空闲结束：decay 或按时间重估（updateMood 原子读-改-写，防与消息线程并发丢更新）
+        lucatBot.updateMood { if (Math.random() < 0.5) it.decay() else BotMood.guessByTime() }
         wakeRequested = false
     }
 

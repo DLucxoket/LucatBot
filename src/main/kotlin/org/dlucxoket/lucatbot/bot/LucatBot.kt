@@ -6,6 +6,7 @@ import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.dlucxoket.lucatbot.bot.persona.BotPersona
 import org.dlucxoket.lucatbot.bot.persona.PersonaLoader
 import org.dlucxoket.lucatbot.model.event.message.MessageEvent
+import org.dlucxoket.lucatbot.model.session.ConversationId
 import org.springframework.stereotype.Component
 
 /**
@@ -78,14 +79,48 @@ class LucatBot {
         val imageUrls: List<String>? = null
     )
 
-    /** 当前状态 */
+    /**
+     * 当前状态
+     *
+     * **跨线程共享**（S1 并发修复）：Shiro WS 消息线程（[handleMessage] 读）、
+     * 主循环线程（enter/back/goIdle 写）、通知线程（读）三方并发——`@Volatile`
+     * 保证写后可见，消除「主循环已切状态、消息线程仍读到旧值」的可见性问题。
+     * 状态迁移本身由会话执行锁（MainLoopController.sessionGate）串行化，
+     * 此处不做原子 CAS（迁移涉及多字段，CAS 会引入半更新状态）。
+     */
+    @Volatile
     var state: State = State.Idle
 
     /** 机器人人格（启动时从 persona.md 读取，见 [org.dlucxoket.lucatbot.bot.persona.PersonaLoader]） */
     val persona: BotPersona = PersonaLoader.persona
 
-    /** 当前心情 */
+    /**
+     * 当前心情
+     *
+     * **跨线程读写**（S1 并发修复）：多线程 `mood = mood.boost()` 式 read-modify-write
+     * 既丢可见性也丢更新。`@Volatile` 解决可见性；丢更新请改用 [updateMood]
+     * （原子读-改-写），两者并存是为了兼容旧调用点逐步迁移。
+     */
+    @Volatile
     var mood: BotMood = BotMood.guessByTime()
+
+    /** mood 更新锁（[updateMood] 的原子读-改-写；不与 state 共锁，缩小临界区） */
+    private val moodLock = Any()
+
+    /**
+     * 原子更新心情（**跨线程改 mood 的正确姿势**）——替代裸 `mood = mood.boost()`：
+     * 两个线程同时 boost 时，裸写法有一个更新会被静默丢弃（读到同一旧值各写各的），
+     * 本方法把「读-改-写」收进同一把锁，效果叠加。
+     *
+     * ```kotlin
+     * lucatBot.updateMood { it.boost() }
+     * ```
+     */
+    fun updateMood(transform: (BotMood) -> BotMood) {
+        synchronized(moodLock) {
+            mood = transform(mood)
+        }
+    }
 
     /** 未读消息队列（线程安全） */
     private val unreadQueue = java.util.concurrent.CopyOnWriteArrayList<UnreadMessage>()
@@ -241,21 +276,21 @@ class LucatBot {
             // 没在管 QQ → 全部进未读，心情衰减
             is State.Idle -> {
                 addUnread(event, conversationId, isAtMe, isAtAll)
-                mood = mood.decay()
+                updateMood { it.decay() }
                 MessageAction.IGNORE
             }
 
             // 在会话列表 → 看情况
             is State.ViewingConversations -> {
                 if (isAtMe || isAtAll) {
-                    mood = mood.boost()  // 有人找我，心情好一点
+                    updateMood { it.boost() }  // 有人找我，心情好一点
                     // 通知类消息同样入未读：通知通道判「无视」后，选会话侧
                     // 仍要能看到它（判「跳转」进会话时 consumeUnread 自动清）
                     addUnread(event, conversationId, isAtMe, isAtAll)
                     MessageAction.NOTIFY
                 } else {
                     addUnread(event, conversationId, isAtMe, isAtAll)
-                    mood = mood.decay()
+                    updateMood { it.decay() }
                     MessageAction.IGNORE
                 }
             }
@@ -266,18 +301,18 @@ class LucatBot {
                 val current = state as State.InConversation
                 if (conversationId == current.conversationId) {
                     // 当前会话的消息 → 进待插入队列，不打断决策循环
-                    mood = mood.boost()
+                    updateMood { it.boost() }
                     addPendingInsert(event, conversationId, isAtMe, isAtAll)
                     MessageAction.PROCESS
                 } else if (isAtMe || isAtAll) {
                     // 其他会话但 @我/@全体 → 通知通道（同样入未读，无视可见/跳转即清）
-                    mood = mood.boost()
+                    updateMood { it.boost() }
                     addUnread(event, conversationId, isAtMe, isAtAll)
                     MessageAction.NOTIFY
                 } else {
                     // 其他会话普通消息 → 未读（被冷落，心情微降）
                     addUnread(event, conversationId, isAtMe, isAtAll)
-                    mood = mood.drop()
+                    updateMood { it.drop() }
                     MessageAction.IGNORE
                 }
             }
@@ -421,7 +456,7 @@ class LucatBot {
             pendingInsertQueue.add(
                 UnreadMessage(
                     conversationId = conversationId,
-                    conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
+                    conversationType = if (ConversationId.parse(conversationId).isGroup) ConversationType.GROUP else ConversationType.PRIVATE,
                     senderId = senderId,
                     senderName = senderName,
                     content = content,
@@ -443,7 +478,7 @@ class LucatBot {
         unreadQueue.add(
             UnreadMessage(
                 conversationId = conversationId,
-                conversationType = if (conversationId.startsWith("group:")) ConversationType.GROUP else ConversationType.PRIVATE,
+                conversationType = if (ConversationId.parse(conversationId).isGroup) ConversationType.GROUP else ConversationType.PRIVATE,
                 senderId = event.sender.qqNumber,
                 senderName = event.sender.displayName,
                 content = extractRichContent(event),
