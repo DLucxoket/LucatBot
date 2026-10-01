@@ -532,6 +532,8 @@ class ConversationController(
                     val waitSec = decision.waitMessageSeconds
                     if (waitSec > 0 && sentContents.isNotEmpty() && failDetail == null) {
                         val waitMs = waitSec.coerceIn(1, 300) * 1000L
+                        // 等待开始就打点（否则等待期间像「卡死」——实盘反馈发送后再无日志）
+                        log.info("发送后原地等回信 {}s（期间来消息立即唤醒；等满无新消息则退出会话）", waitMs / 1000)
                         val woken = try {
                             replyWait(conversationId, waitMs)
                         } catch (e: InterruptedException) {
