@@ -804,6 +804,8 @@ class ConversationControllerTest {
             "进会话先搜记忆再说话的规则存在：$prompt")
         assertTrue(prompt.contains("只是等自己的搜索结果，不算等回应"),
             "第一轮的 stay 用途说明（免得和「等回应别 stay」打架）：$prompt")
+        assertTrue(prompt.contains("绝不许把 action 写成 memory_queries"),
+            "点名 memory_queries 不是动作（实盘把它当 action 输出过两次）：$prompt")
         assertTrue(prompt.contains("同时") && prompt.contains("下一轮"),
             "说明可与 send 同时输出、结果下一轮可见")
     }

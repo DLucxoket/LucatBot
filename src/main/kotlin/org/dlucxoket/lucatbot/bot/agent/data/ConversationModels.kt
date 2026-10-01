@@ -201,9 +201,19 @@ data class ConversationDecision(
                 "list_tools", "tools" -> ConversationAction.LIST_TOOLS
                 "tool", "call_tool" -> ConversationAction.CALL_TOOL
                 "view_images", "view", "view_image" -> ConversationAction.VIEW_IMAGES
+                // 模型偶发把顶层字段当成了 action（只想先搜记忆，实盘 15:46/15:48 出过
+                // 两次 "action":"memory_queries"）→ 当作 stay 处理（params 见下：压到 2 秒），
+                // 既不作废本轮，又让当轮的 memory_queries 照常搜索、下一轮拿到结果再决策
+                "memory_queries", "search_memory" -> ConversationAction.STAY
+
                 else -> return fail(llmOutput, "未知 action=$actionText")
             }
-            val params = LlmJson.paramsOf(node)
+            // 该别名的本意是「先搜记忆再决策」：停留压到 2 秒（params 里的无关参数丢弃）
+            val params = if (actionText == "memory_queries" || actionText == "search_memory") {
+                mapOf("seconds" to 2)
+            } else {
+                LlmJson.paramsOf(node)
+            }
             // tool 调用必须带工具名，否则视为无效决策兜底退出（与 send 缺正文同规则）
             if (action == ConversationAction.CALL_TOOL &&
                 (params["name"]?.toString()?.trim().isNullOrEmpty())

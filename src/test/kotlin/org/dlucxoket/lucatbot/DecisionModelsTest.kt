@@ -287,6 +287,30 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `memory_queries written as action falls back to stay so search still runs`() {
+        // 实盘 15:46 / 15:48：模型把顶层字段当成了 action 直接输出 → 不作废本轮，
+        // 落到 stay 2s（当轮照常搜索、下一轮拿到结果再决策）
+        val bare = ConversationDecision.parse(
+            """{"action":"memory_queries","memory_queries":["921867047","QQ921867047 谁啊"]}"""
+        )
+        assertEquals(ConversationAction.STAY, bare.action, "落到 stay 等搜索结果")
+        assertEquals(2, bare.staySeconds, "短停留")
+        assertEquals(listOf("921867047", "QQ921867047 谁啊"), bare.memoryQueries, "关键词照常取")
+
+        val fenced = ConversationDecision.parse(
+            "```json\n{\"action\":\"memory_queries\",\"memory_queries\":[\"疯疯\"]}\n```"
+        )
+        assertEquals(ConversationAction.STAY, fenced.action, "裹了 markdown 也认")
+        assertEquals(listOf("疯疯"), fenced.memoryQueries)
+
+        val withParams = ConversationDecision.parse(
+            """{"action":"memory_queries","params":{"count":10},"reason":"先搜搜背景"}"""
+        )
+        assertEquals(ConversationAction.STAY, withParams.action)
+        assertEquals("先搜搜背景", withParams.reason, "reason 保留")
+    }
+
+    @Test
     fun `plain json is not mistaken for tool-call envelope`() {
         val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
         assertEquals(ConversationAction.RETURN, d.action)
