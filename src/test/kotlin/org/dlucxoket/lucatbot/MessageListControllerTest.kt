@@ -180,9 +180,9 @@ class MessageListControllerTest {
     }
 
     @Test
-    fun `conversation in cooldown is hidden from list until it passes`() {
-        // 实盘：群里只回了个表情包 → return → 下一轮 pick 又带着新未读进同一群 →
-        // 立刻又 return……几秒一轮反复横跳。退出即冷却，冷却期内不进候选
+    fun `conversation in cooldown is flagged in prompt instead of filtered`() {
+        // 实盘：群里只回了个表情包 → return → 下一轮 pick 又带未读进同一群 → 立刻又 return。
+        // 改用 prompt 约束：列表照常可见，但「刚退出（冷却中）」段点名 + 系统规则别马上再进
         val sessionManager = SessionManager()
         sessionManager.addMessage("group:811788212", "群友", "还在聊", isBot = false)
         val lucatBot = LucatBot()
@@ -191,10 +191,13 @@ class MessageListControllerTest {
         val cooling = FakeLLM(mutableListOf("""{"action":"idle"}"""))
         val (c1, _) = buildController(cooling, lucatBot = lucatBot, sessionManager = sessionManager)
         c1.pickSession(fromIdleWake = false)
-        assertFalse(cooling.prompts[0].contains("811788212"),
-            "冷却中的会话不进候选：${cooling.prompts[0]}")
+        val p1 = cooling.prompts[0]
+        assertTrue(p1.contains("811788212"), "列表照常可见（不硬过滤）：$p1")
+        assertTrue(p1.contains("### 刚退出（冷却中"), "冷却提示段注入：$p1")
+        assertTrue(p1.contains("刚退出过"), "点名冷却中的会话：$p1")
+        assertTrue(p1.contains("刚退出的会话别马上再进"), "系统规则约束别马上再进：$p1")
 
-        // 冷却期满 → 恢复出现（未读/最近活跃仍在就会被再选）
+        // 冷却期满 → 冷却段消失（列表仍在）
         lucatBot.markConversationLeft(
             "group:811788212",
             at = System.currentTimeMillis() - LucatBot.CONVERSATION_COOLDOWN_MS - 1_000
@@ -202,6 +205,7 @@ class MessageListControllerTest {
         val after = FakeLLM(mutableListOf("""{"action":"idle"}"""))
         val (c2, _) = buildController(after, lucatBot = lucatBot, sessionManager = sessionManager)
         c2.pickSession(fromIdleWake = false)
-        assertTrue(after.prompts[0].contains("811788212"), "冷却期满恢复出现：${after.prompts[0]}")
+        assertFalse(after.prompts[0].contains("刚退出过"),
+            "冷却结束不再提示：${after.prompts[0]}")
     }
 }

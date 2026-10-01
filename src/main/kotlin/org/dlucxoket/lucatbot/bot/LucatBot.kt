@@ -131,6 +131,18 @@ class LucatBot {
         return now - left >= CONVERSATION_COOLDOWN_MS
     }
 
+    /**
+     * 冷却中的会话 → 剩余冷却毫秒（>0；没有冷却中的 → 空 map）
+     *
+     * 选会话把它们注入「### 刚退出（冷却中）」段，由 **prompt** 约束别马上再进
+     * （不硬过滤——列表照样可见，@我/急事仍可由模型权衡后选）
+     */
+    fun recentlyLeft(now: Long = System.currentTimeMillis()): Map<String, Long> =
+        conversationLeftAt.mapNotNull { (conv, at) ->
+            val remain = CONVERSATION_COOLDOWN_MS - (now - at)
+            if (remain > 0) conv to remain else null
+        }.toMap()
+
     companion object {
         /** 退出会话后的冷却时长：期间选会话不把该会话放进候选 */
         const val CONVERSATION_COOLDOWN_MS = 120_000L

@@ -102,6 +102,14 @@ data class SessionPickerRequest(
     @JsonProperty("sessions")
     val sessions: List<SessionSummaryLine> = emptyList(),
 
+    /**
+     * 冷却中的会话（刚退出还没满 2 分钟）——每条如
+     * `group:123（45 秒内别再进…）`，注入「### 刚退出（冷却中）」段，
+     * 由 prompt 约束**别马上再进**（替代代码硬过滤，交模型判断）
+     */
+    @JsonProperty("cooldownNotes")
+    val cooldownNotes: List<String> = emptyList(),
+
     /** 可主动找的人；空列表表示不展示该区块 */
     @JsonProperty("proactiveCandidates")
     val proactiveCandidates: List<ProactiveCandidate> = emptyList(),

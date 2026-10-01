@@ -70,6 +70,12 @@ class MessageListController(
         actionLog.append("查看消息列表（${sessions.sumOf { it.unreadCount }}条未读）")
 
         val candidates = if (fromIdleWake) collectProactiveCandidates() else emptyList()
+        // 冷却中的会话（刚退出还没满 2 分钟）→ 注入「刚退出」提示段，由 **prompt**
+        // 约束别马上再进（列表照样可见、不硬过滤——@我/急事模型可自行权衡）
+        val cooldownNotes = lucatBot.recentlyLeft().map { (conv, remainMs) ->
+            val sec = ((remainMs / 1000).toInt()).coerceAtLeast(1)
+            "$conv（${sec} 秒内刚退出过：除非 @我 或特别要紧的未读，否则等它从冷却段消失再进）"
+        }
         // 工具上下文（本轮内累积：状态计数/目录/执行结果；选会话侧硬上限更紧）
         val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 6)
 
@@ -82,6 +88,7 @@ class MessageListController(
                 todos = todoService.pendingSummary(),
                 actionLog = actionLog.dump(),
                 sessions = sessions,
+                cooldownNotes = cooldownNotes,
                 proactiveCandidates = candidates,
                 toolNotes = toolNotes.snapshot()
             )
@@ -160,8 +167,6 @@ class MessageListController(
         val now = System.currentTimeMillis()
 
         for ((convId, count) in unread) {
-            // 会话冷却：刚退出的会话短期内不进候选（防「退回列表又马上进来」反复横跳）
-            if (!lucatBot.conversationReady(convId)) continue
             val msgs = lucatBot.peekUnread(convId)
             val last = msgs.lastOrNull()
             val isGroup = convId.startsWith("group:")
@@ -182,9 +187,9 @@ class MessageListController(
             )
         }
 
-        // 已读但最近活跃的会话（无未读也展示，模拟「看过列表」）；冷却中的跳过
+        // 已读但最近活跃的会话（无未读也展示，模拟「看过列表」）
         val recent = sessionManager.recentConversationIds(withinMinutes = 24 * 60)
-            .filter { it !in unread.keys && lucatBot.conversationReady(it) }
+            .filter { it !in unread.keys }
         for (convId in recent.take(5)) {
             val entry = sessionManager.getLastMessage(convId) ?: continue
             val isGroup = convId.startsWith("group:")
@@ -254,7 +259,7 @@ class MessageListController(
         if (cap == 0) return emptyList()
 
         return sessionManager.recentConversationIds(withinMinutes = 24 * 60)
-            .filter { it.startsWith("private:") && lucatBot.conversationReady(it) }
+            .filter { it.startsWith("private:") }
             .take(cap)
             .map { convId ->
                 val subject = MemorySubject.fromConversation(convId)
