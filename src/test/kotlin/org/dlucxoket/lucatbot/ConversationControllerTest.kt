@@ -812,6 +812,17 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `prompt lists qq face ids with yin yang note on 14`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("0微笑 1撇嘴"), "常用表情编号对照列出")
+        assertTrue(prompt.contains("14带着阴阳的笑"), "14 号注释为「带着阴阳的笑」")
+        assertTrue(prompt.contains("39再见"), "对照列到 39（大部分常用表情）")
+        assertTrue(prompt.contains("别照着编号编意思"), "拿不准按语境理解的护栏")
+    }
+
+    @Test
     fun `entering conversation advances read watermark`() {
         // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
         val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
@@ -1895,7 +1906,7 @@ class ConversationAgentFallbackTest {
         // 读侧：聊天记录标记的语义说明（回复/艾特/表情怎么读、怎么回）
         assertTrue(prompt.contains("读懂它们才能接上语境"), "标记阅读说明：$prompt")
         assertTrue(prompt.contains("在**引用**某人之前说的话"), "回复标记语义：$prompt")
-        assertTrue(prompt.contains("[表情:14]` = 对方发了 QQ 表情"), "表情标记语义：$prompt")
+        assertTrue(prompt.contains("[表情:N]` = 对方发了 QQ 内置表情"), "表情标记语义：$prompt")
         assertTrue(prompt.contains("用 send 的 reply/at/face 字段"), "读→写对应（结构化回法）：$prompt")
     }
 
