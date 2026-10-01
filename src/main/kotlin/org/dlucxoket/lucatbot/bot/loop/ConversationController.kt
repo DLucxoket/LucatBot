@@ -329,6 +329,8 @@ class ConversationController(
             pendingViewImages = null
 
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）
+            // 没有接话对象：本轮无新消息、窗口最后一条还是自己发的（没人等回应）
+            val noRoomToTalk = newNotes.isEmpty() && recentLines.lastOrNull()?.isMe == true
             val reachedHistoryStart = historyResult.messages.size < historyCount
             // 上一轮/更早 memory_queries 的搜索结果 → 追加在记忆段末尾（**不清空**：
             // 一直带着，直到下次给出 memory_queries 才被新结果整体覆盖；
@@ -362,7 +364,7 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
-                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote, stayStreak),
+                hint = buildHint(readMoreWithInsertStreak, justSent, noReplyRounds, newNotes, sendFailureNote, stayStreak, noRoomToTalk),
                 toolNotes = toolNotes.snapshot(),
                 toolNames = toolCatalog.names(),
                 images = attachments.images,
@@ -962,10 +964,17 @@ class ConversationController(
         noReplyRounds: Int,
         newNotes: List<String>,
         sendFailureNote: String? = null,
-        stayStreak: Int = 0
+        stayStreak: Int = 0,
+        noRoomToTalk: Boolean = false
     ): String {
         val parts = mutableListOf<String>()
         sendFailureNote?.let { parts += it }
+        // 没有接话对象（无新消息且最后一条是自己发的）——实盘 18:18 出过凭历史/记忆
+        // 旧话题硬接一嘴（「不玩，手残党…」），这里点名禁止 send
+        if (noRoomToTalk && justSent == null) {
+            parts += "本轮没有任何新消息，聊天记录最后一条还是你自己发的——**没有接话对象，禁止 send**" +
+                "（只有确有待办要推进才例外）；别去接历史里的旧话题、别凭记忆编话，没别的事就 return。"
+        }
         if (stayStreak >= maxIdleStays - 1) {
             parts += if (stayStreak >= maxIdleStays) {
                 "你已连续停留 $stayStreak 次，期间始终没有任何新消息（没人接话）——不要再干等了，" +

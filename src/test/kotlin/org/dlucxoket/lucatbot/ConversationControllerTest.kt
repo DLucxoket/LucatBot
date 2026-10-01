@@ -914,6 +914,40 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `guard hint forbids send when no new message and last line is mine`() {
+        // 实盘 18:18：无新消息、最后一条是自己发的，却凭历史/记忆硬接一嘴「不玩，手残党…」
+        val lines = listOf(
+            HistoryMessageItem(sender = "用户A", content = "投喂两只基本不怎么怕我了",
+                timestamp = 1_000L, senderId = 7L),
+            HistoryMessageItem(sender = "牢洛", content = "不过都愿意蹲门口等你了",
+                timestamp = 2_000L, isFromBot = true)
+        )
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, historyLines = lines)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertTrue(llm.prompts[0].contains("本轮没有任何新消息，聊天记录最后一条还是你自己发的"),
+            "无新消息且最后是我发的 → 禁发提示：${llm.prompts[0]}")
+        assertTrue(llm.prompts[0].contains("禁止 send"), "点名禁止 send：${llm.prompts[0]}")
+    }
+
+    @Test
+    fun `guard hint absent when conversation ends with others message`() {
+        // 对方的话结尾 → 有接话对象，可以正常回复，不加禁发提示
+        val lines = listOf(
+            HistoryMessageItem(sender = "用户A", content = "还在吗", timestamp = 1_000L, senderId = 7L)
+        )
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, historyLines = lines)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertFalse(llm.prompts[0].contains("本轮没有任何新消息，聊天记录最后一条还是你自己发的"),
+            "对方的话结尾不加禁发提示：${llm.prompts[0]}")
+    }
+
+    @Test
     fun `entering conversation advances read watermark`() {
         // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
         val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
