@@ -79,7 +79,7 @@ class MessageListController(
             "$conv（${sec} 秒内刚退出过：除非 @我 或特别要紧的未读，否则等它从冷却段消失再进）"
         }
         // 工具上下文（本轮内累积：状态计数/目录/执行结果；选会话侧硬上限更紧）
-        val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 6)
+        val toolNotes = ToolNotes(maxTotalChars = 16_000, maxConsecutiveErrors = 3)
 
         while (true) {
             val request = SessionPickerRequest(
@@ -99,13 +99,13 @@ class MessageListController(
             val decision = sessionPickerAgent.processObject(request)
             applyTodoSideEffects(decision)
 
-            // 防病态值资源护栏：连续工具步达硬上限 → 兜底去空闲（正常场景
-            // 一两步工具就该出结论，6 步仍不决策属病态路径）
+            // 防病态值资源护栏（2026-10-01 调整：**只限连续调用错误，不限工具轮数**）
+            // ——连续失败达上限 → 兜底去空闲；正常多轮工具不再触发
             val isToolStep = decision.action == SessionAction.LIST_TOOLS ||
                 decision.action == SessionAction.CALL_TOOL
-            if (isToolStep && toolNotes.exceeded()) {
-                actionLog.append("连续工具步超限，去空闲")
-                log.warn("选会话连续工具步超限（{} 步），兜底 idle", toolNotes.steps)
+            if (isToolStep && toolNotes.errorsExceeded()) {
+                actionLog.append("连续工具调用报错超限，去空闲")
+                log.warn("选会话连续工具调用报错超限（连续报错 {} 次），兜底 idle", toolNotes.consecutiveErrors)
                 return null
             }
             if (!isToolStep) toolNotes.resetStreak()
@@ -135,7 +135,7 @@ class MessageListController(
                     // 结构化结果（与会话内 CALL_TOOL 同款）：isError 由 ToolCatalog 按
                     // JSON 结构判定，失败打进日志便于排障
                     val call = toolCatalog.invokeDetailed(toolName, decision.toolInput)
-                    toolNotes.recordResult(toolName, call.output)
+                    toolNotes.recordResult(toolName, call.output, call.isError)
                     actionLog.append("调用工具 $toolName")
                     log.info("tool {} → {} 字符", toolName, call.output.length)
                     if (call.isError) {

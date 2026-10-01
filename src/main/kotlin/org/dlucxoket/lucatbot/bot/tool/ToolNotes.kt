@@ -7,35 +7,49 @@ package org.dlucxoket.lucatbot.bot.tool
  * 随下一轮 prompt 注入（格式化与「同会话只保留一份目录」的去重契约
  * **只存在于本类**——两个 Controller 不再各写一份字符串逻辑）。
  *
- * 同时承担两层护栏（防病态值的资源护栏，与 stay 钳制同性质）：
+ * 护栏语义（2026-10-01 实盘后调整：**不再限制正常工具轮数**）：
  * - **字符预算**：[maxTotalChars] 超限时优先淘汰最旧的执行结果，目录常驻
- * - **连续步数硬上限**：[hardLimitSteps] 个连续工具步后 [exceeded] 为 true，
- *   编排层据此强制收尾；配合 [snapshot] 首行的状态计数（软提示）让
- *   LLM 在 prompt 里就能看到「已经连续查了几轮工具」
+ * - **只限连续调用错误**：[maxConsecutiveErrors] 个**连续失败**的工具调用后
+ *   [errorsExceeded] 为 true，编排层据此强制收尾——多轮成功的 list_tools /
+ *   tool 不再触发任何限制（实盘第 7 轮被「连续步 ≥3」的软提示逼停正常排查，
+ *   而真正该停的场景是反复报错空转）。成功一次即清零错误连击，
+ *   语义是「连续」而非「累计」。
  *
  * 非工具决策（send/return/open/idle…）后由编排层调 [resetStreak] 归零。
  * 仅在主循环单线程内使用，无并发写。
+ *
+ * @param maxConsecutiveErrors 连续失败调用上限（达此数后 [errorsExceeded] 为 true；
+ *   list_tools 不产生错误计数——它只有「有无匹配」，没有失败态）
  */
 class ToolNotes(
     /** 目录 + 执行结果的总字符预算（超出淘汰最旧结果） */
     private val maxTotalChars: Int = 16_000,
-    /** 连续工具步硬上限（超过则编排层强制收尾） */
-    private val hardLimitSteps: Int = 12
+    /** 连续**调用错误**硬上限（正常工具轮不限；成功一次即清零） */
+    private val maxConsecutiveErrors: Int = 3
 ) {
     private val entries = mutableListOf<String>()
     private var catalogCount = 0
     private var callCount = 0
     private var consecutiveSteps = 0
+    private var errorStreak = 0
 
-    /** 连续工具步数（自上次非工具决策以来） */
+    /** 连续工具步数（自上次非工具决策以来；仅状态展示，不再用于限制） */
     val steps: Int get() = consecutiveSteps
 
-    /** 是否已达硬上限（编排层据此强制收尾，防无限烧 token） */
-    fun exceeded(): Boolean = consecutiveSteps >= hardLimitSteps
+    /** 连续**失败**调用数（成功一次清零；list_tools 不计入） */
+    val consecutiveErrors: Int get() = errorStreak
 
-    /** 非工具决策后重置连续计数 */
+    /**
+     * 是否已达连续错误上限（编排层据此强制收尾）
+     *
+     * 只看错误连击——多轮成功调用**不会**触发（旧版的连续步数硬上限已移除）。
+     */
+    fun errorsExceeded(): Boolean = errorStreak >= maxConsecutiveErrors
+
+    /** 非工具决策后重置连续计数（步数与错误连击一起归零） */
     fun resetStreak() {
         consecutiveSteps = 0
+        errorStreak = 0
     }
 
     /** 记录一次目录获取：同时只保留一份目录（重复获取覆盖旧条目） */
@@ -47,23 +61,32 @@ class ToolNotes(
         trimToBudget()
     }
 
-    /** 记录一次工具执行结果 */
-    fun recordResult(toolName: String, resultJson: String) {
+    /**
+     * 记录一次工具执行结果
+     *
+     * @param isError 本次调用是否失败（[org.dlucxoket.lucatbot.bot.tool.ToolCatalog]
+     *   的结构化判定）——失败累加错误连击、成功清零；状态行据此点名
+     */
+    fun recordResult(toolName: String, resultJson: String, isError: Boolean = false) {
         entries += "（工具 $toolName 执行结果）\n$resultJson"
         callCount++
         consecutiveSteps++
+        errorStreak = if (isError) errorStreak + 1 else 0
         trimToBudget()
     }
 
     /**
      * 注入 prompt 的快照：状态计数行 + 目录 + 执行结果
      *
-     * 状态行放首行（软提示）：连续工具步 ≥3 时附加「请尽快正常决策」的点名。
+     * 状态行放首行（可观测性）：报错时点名「检查参数/停止调用」，
+     * 但**成功轮次不施加任何压力**（不再有「连续步 ≥3 请尽快正常决策」）。
      */
     fun snapshot(): List<String> {
         val status = buildString {
-            append("（工具状态：已查目录 $catalogCount 次、已调用工具 $callCount 次、连续工具步 $consecutiveSteps")
-            if (consecutiveSteps >= 3) append("——已连续查工具多轮，请尽快给出正常决策，不要再查工具")
+            append("（工具状态：已查目录 $catalogCount 次、已调用工具 $callCount 次、连续工具步 $consecutiveSteps、连续报错 $consecutiveErrors")
+            if (consecutiveErrors > 0) {
+                append("——上一次调用失败，检查错误信息修正参数后再试；连续报错 $maxConsecutiveErrors 次将强制停止工具调用")
+            }
             append("）")
         }
         return listOf(status) + entries.toList()

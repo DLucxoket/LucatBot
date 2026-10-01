@@ -12,6 +12,7 @@ import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
 import org.dlucxoket.lucatbot.bot.todo.TodoService
+import org.dlucxoket.lucatbot.bot.tool.Tool
 import org.dlucxoket.lucatbot.bot.tool.ToolCatalog
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.junit.jupiter.api.Assertions.*
@@ -22,8 +23,19 @@ import java.io.File
  * MessageListController.pickSession 的多步决策循环
  *
  * 覆盖 OOP 审查的最大测试缺口：工具动作执行后带结果重新决策、
- * 未知工具不打断循环、连续工具步硬上限兜底去空闲。
+ * 未知工具不打断循环、**连续报错兜底去空闲（成功工具轮不限）**。
  */
+
+/** 必失败工具（构造 success=false + error 结果，触发连续报错护栏） */
+class FakeFailTool : Tool<FakeFailTool.Request, FakeFailTool.Result>() {
+    data class Request(val q: String = "")
+    data class Result(val success: Boolean = true, val error: String? = null)
+    override val name = "FakeFailTool"
+    override val description = "功能：必然失败的工具。\n何时使用：测试专用。"
+    override val parameterHint = "JSON: {\"q\": \"任意\"}"
+    override val inputClass: Class<Request> = Request::class.java
+    override fun handle(input: Request): Result = Result(success = false, error = "测试失败")
+}
 class MessageListControllerTest {
 
     private fun buildController(
@@ -92,16 +104,37 @@ class MessageListControllerTest {
     }
 
     @Test
-    fun `consecutive tool steps hit hard limit and fall back to idle`() {
-        // 硬上限 6：第 7 个工具决策到来时兜底去空闲，不再执行
-        val script = MutableList(7) { """{"action":"list_tools"}""" }
+    fun `consecutive tool errors hit limit and fall back to idle`() {
+        // 护栏语义（2026-10-01 调整）：只限**连续调用错误**（上限 3）——
+        // 3 次失败执行后，第 4 个工具决策兜底去空闲、不再执行
+        val script = MutableList(4) { """{"action":"tool","params":{"name":"FakeFailTool","input":{}}}""" }
+        val llm = FakeLLM(script)
+        val (controller, _) = buildController(
+            llm, toolCatalog = ToolCatalog(toolsProvider = { listOf(FakeFailTool()) })
+        )
+
+        assertNull(controller.pickSession(fromIdleWake = false), "连续报错超限兜底 idle")
+        assertEquals(4, llm.prompts.size, "恰好 4 轮（3 次失败执行 + 1 轮兜底）")
+        // 状态行应显示连续报错 3（第 4 轮未执行记录）
+        assertTrue(llm.prompts[3].contains("连续报错 3"), llm.prompts[3])
+        assertTrue(llm.prompts[3].contains("将强制停止"), "报错点名提示注入：${llm.prompts[3]}")
+    }
+
+    @Test
+    fun `successful tool rounds are never limited`() {
+        // 旧版 6 步硬上限在正常排查中途逼停（实盘第 7 轮被逼停）——
+        // 现多轮**成功**的 list_tools 不触发任何限制，直到模型自己 idle
+        val script = MutableList(8) { """{"action":"list_tools"}""" }
+        script += """{"action":"idle","reason":"看完了"}"""
         val llm = FakeLLM(script)
         val (controller, _) = buildController(llm)
 
-        assertNull(controller.pickSession(fromIdleWake = false), "超限兜底 idle")
-        assertEquals(7, llm.prompts.size, "恰好 7 轮（6 步执行 + 1 轮兜底）")
-        // 状态行应显示连续 6 步（第 7 轮未执行记录）
-        assertTrue(llm.prompts[6].contains("连续工具步 6"), llm.prompts[6])
+        assertNull(controller.pickSession(fromIdleWake = false), "模型自己 idle 才结束")
+        assertEquals(9, llm.prompts.size, "8 轮 list_tools 全部执行、无中途兜底")
+        // prompts[7] = 第 8 轮决策前注入 → 此时已记录 7 次（第 8 次尚未执行）
+        assertTrue(llm.prompts[7].contains("连续工具步 7"), "计数照常展示（仅可观测）：${llm.prompts[7]}")
+        assertTrue(llm.prompts[7].contains("连续报错 0"), "无报错：${llm.prompts[7]}")
+        assertTrue(llm.prompts[7].contains("连续报错 7 次将强制停止").not(), "报错 0 不提限制：${llm.prompts[7]}")
     }
 
     @Test

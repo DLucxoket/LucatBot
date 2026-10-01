@@ -248,7 +248,7 @@ class ConversationController(
         //（每轮全新请求、图内容看过即在当轮决策里消化，不重复携带省 token）
         var pendingViewImages: PromptAttachments? = null
         // 工具上下文（本会话内累积：状态计数/目录/执行结果，随每轮注入 prompt）
-        val toolNotes = ToolNotes(maxTotalChars = 16_000, hardLimitSteps = 12)
+        val toolNotes = ToolNotes(maxTotalChars = 16_000, maxConsecutiveErrors = 3)
         // 会话身份：群名进会话时查一次（网络调用不每轮打）；私聊每轮现算（见 buildIdentity）
         val cachedGroupName = if (isGroup) fetchGroupName(conversationId) else null
         // 机器人自己的 QQ 号（LLM 判断「@的是不是我」的依据；未连接 → 0）
@@ -441,12 +441,14 @@ class ConversationController(
                 decision = ConversationDecision.forceReturn("连续爬楼期间一直有新消息，强制回应或离开")
             }
 
-            // 防病态值资源护栏：连续工具步达硬上限 → 强制收尾（与 stay 钳制同性质，
-            // 不限制正常工具使用，只兜底「无限烧 token」的病态路径）
-            if (isToolStep && toolNotes.exceeded()) {
-                decision = ConversationDecision.forceReturn("连续工具步已达上限，先结束本轮工具使用")
+            // 防病态值资源护栏（2026-10-01 调整：**只限连续调用错误，不限工具轮数**）
+            // ——连续失败达上限 → 强制收尾；多轮成功的 list_tools/tool 不再触发
+            //（实盘曾被「连续步 ≥3」软提示在正常排查中途逼停）。错误连击由
+            // recordResult 的 isError 累计，成功一次即清零
+            if (isToolStep && toolNotes.errorsExceeded()) {
+                decision = ConversationDecision.forceReturn("连续工具调用报错已达上限，先结束工具使用")
             }
-            // 非工具决策（含被强制的 return/send）→ 重置连续工具步计数
+            // 非工具决策（含被强制的 return/send）→ 重置连续计数（步数与错误连击）
             if (decision.action != ConversationAction.LIST_TOOLS &&
                 decision.action != ConversationAction.CALL_TOOL
             ) {
@@ -730,7 +732,7 @@ class ConversationController(
                     // 顶层 error），替代旧的 contains("\"error\"") 字符串嗅探——
                     // 成功正文含 "error" 字样不再误报（N4）
                     val call = toolCatalog.invokeDetailed(toolName, decision.toolInput)
-                    toolNotes.recordResult(toolName, call.output)
+                    toolNotes.recordResult(toolName, call.output, call.isError)
                     logAct("调用工具 $toolName", why)
                     log.info("tool {} → {} 字符", toolName, call.output.length)
                     // 失败结果不进日志就只能对着「433 字符」猜——报错内容直接打出来
