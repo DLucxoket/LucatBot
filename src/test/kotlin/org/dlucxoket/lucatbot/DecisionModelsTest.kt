@@ -360,6 +360,27 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `tool input tolerates flat params and double encoded string`() {
+        // 实盘 SwitchConversationTool 连调两次报错：模型把参数平铺在 params 顶层、不包 input
+        val flat = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"SwitchConversationTool","type":"private","target":"456"}}"""
+        )
+        assertEquals("456", flat.toolInput["target"]?.toString(), "平铺参数兜底进 input")
+        assertEquals("private", flat.toolInput["type"]?.toString())
+        assertFalse(flat.toolInput.containsKey("name"), "name 不混进 input")
+
+        val dbl = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"X","input":"{\"q\":\"hi\"}"}}"""
+        )
+        assertEquals("hi", dbl.toolInput["q"]?.toString(), "input 被双层编码也能解开")
+
+        val normal = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"X","input":{"q":"yo"}}}"""
+        )
+        assertEquals("yo", normal.toolInput["q"]?.toString(), "正常对象照旧")
+    }
+
+    @Test
     fun `plain json is not mistaken for tool-call envelope`() {
         val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
         assertEquals(ConversationAction.RETURN, d.action)

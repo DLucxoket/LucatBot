@@ -160,4 +160,26 @@ object LlmJson {
         if (!paramsNode.isObject) return emptyMap()
         return mapper.convertValue(paramsNode, Map::class.java) as Map<String, Any?>
     }
+
+    /** JSON 对象字符串 → Map（容错解析；不是对象 → null）——input 被双层编码时用 */
+    fun mapOrNull(json: String): Map<String, Any?>? =
+        parseLenient(json)?.takeIf { it.isObject }
+            ?.let { mapper.convertValue(it, Map::class.java) as Map<String, Any?> }
+
+    /**
+     * tool 调用入参的容错提取（两个决策智能体共用）
+     *
+     * `input` 是对象 → 直用；是字符串（被双层编码）→ 解析；
+     * **缺失/形态不对 → 用 params 里除 name 外的字段平铺兜底**（模型常把
+     * `type/target` 直接写在 params 顶层而不包 input——实盘 SwitchConversationTool
+     * 连调两次报错就是这么来的）
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun toolInputOf(params: Map<String, Any?>): Map<String, Any?> {
+        when (val raw = params["input"]) {
+            is Map<*, *> -> return raw as Map<String, Any?>
+            is String -> mapOrNull(raw)?.let { return it }
+        }
+        return params.filterKeys { !it.equals("name", ignoreCase = true) }
+    }
 }

@@ -675,6 +675,10 @@ class ConversationController(
                     toolNotes.recordResult(toolName, result)
                     logAct("调用工具 $toolName", why)
                     log.info("tool {} → {} 字符", toolName, result.length)
+                    // 失败结果不进日志就只能对着「433 字符」猜——报错内容直接打出来
+                    if (result.contains("\"error\"")) {
+                        log.warn("工具 {} 返回错误：{}", toolName, result.take(300))
+                    }
                     // 切换会话工具已置位 → 记下目标并结束本轮循环（runConversation 接着打开）
                     val switchTarget = lucatBot.consumeConversationSwitch()
                     if (switchTarget != null) {

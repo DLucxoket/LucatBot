@@ -235,8 +235,7 @@ object SessionDecisionParser {
                 val name = params["name"]?.toString()?.trim()
                     ?.takeIf { it.isNotEmpty() && it != "null" }
                     ?: return idleLogged(llmOutput, "工具名缺失，兜底空闲", todoAdd, todoDone)
-                @Suppress("UNCHECKED_CAST")
-                val input = params["input"] as? Map<String, Any?> ?: emptyMap()
+                val input = LlmJson.toolInputOf(params)
                 SessionDecision(
                     SessionAction.CALL_TOOL, toolName = name, toolInput = input,
                     todoAdd = todoAdd, todoDone = todoDone, reason = reason

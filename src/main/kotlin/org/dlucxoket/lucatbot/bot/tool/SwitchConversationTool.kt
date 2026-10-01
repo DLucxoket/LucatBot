@@ -1,10 +1,13 @@
 package org.dlucxoket.lucatbot.bot.tool
 
+import com.fasterxml.jackson.annotation.JsonAlias
 import org.dlucxoket.lucatbot.bot.LucatBot
 
-/** 切换会话入参（type: private/group；target: QQ号/群号） */
+/** 切换会话入参（type: private/group；target: QQ号/群号——宽容解析见 handle） */
 data class SwitchConversationRequest(
+    @JsonAlias("conversationType", "kind")
     val type: String = "",
+    @JsonAlias("conversationId", "targetId", "id", "qq", "group_id", "groupId")
     val target: String = "",
     val reason: String? = null
 )
@@ -49,13 +52,29 @@ object SwitchConversationTool : Tool<SwitchConversationRequest, SwitchConversati
 
     override fun handle(input: SwitchConversationRequest): SwitchConversationResult {
         val bot = lucatBot ?: return SwitchConversationResult(success = false, error = "Bot 未绑定")
-        val type = input.type.trim().lowercase()
-        if (type != "private" && type != "group") {
-            return SwitchConversationResult(success = false, error = "type 必须是 private 或 group")
+        // 宽容解析：target 可带会话前缀（private:123 / group:456），type 缺失时从前缀推断——
+        // 模型爱把会话 id 整个塞进来，报错也要给正确写法（下一轮它照着改）
+        var type = input.type.trim().lowercase()
+        var target = input.target.trim()
+        if (target.contains(":")) {
+            val prefix = target.substringBefore(":").lowercase()
+            if (prefix == "private" || prefix == "group") {
+                if (type.isEmpty()) type = prefix
+                target = target.substringAfter(":").trim()
+            }
         }
-        val target = input.target.trim()
+        if (type != "private" && type != "group") {
+            return SwitchConversationResult(
+                success = false,
+                error = "type 必须是 private 或 group——正确写法：{\"type\":\"private\",\"target\":\"3981541235\"}"
+            )
+        }
         if (target.isEmpty() || !target.all { it.isDigit() }) {
-            return SwitchConversationResult(success = false, error = "target 必须是纯数字的 QQ号/群号")
+            return SwitchConversationResult(
+                success = false,
+                error = "target 要纯数字 QQ号/群号（private:123 这种带前缀的也收）——正确写法：" +
+                    "{\"type\":\"$type\",\"target\":\"3981541235\"}"
+            )
         }
         return try {
             bot.requestConversationSwitch(type, target)

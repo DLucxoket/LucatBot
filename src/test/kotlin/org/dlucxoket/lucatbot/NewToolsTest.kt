@@ -76,4 +76,38 @@ class NewToolsTest {
         assertEquals("811788212", pending!!.targetId)
         assertNull(lucatBot.pendingConversationSwitch(), "一次性消费")
     }
+
+    @Test
+    fun `switch tool tolerates prefixed target and missing type`() {
+        // 实盘连调两次报错：模型常把整个会话 id（private:xxx）塞进 target、或用别名字段
+        val lucatBot = LucatBot()
+        SwitchConversationTool.bindServices(
+            ToolServices(
+                memoryService = MemoryService(
+                    JsonFileMemoryRepository(File.createTempFile("mem-sw3", ".json").absolutePath)
+                ),
+                chatHistoryService = ChatHistoryService(
+                    JsonFileChatHistoryRepository(File.createTempFile("hist-sw3", ".json").absolutePath)
+                ),
+                lucatBot = lucatBot
+            )
+        )
+
+        // 带前缀、缺 type → 从前缀推断
+        val prefixed = SwitchConversationTool.process("""{"target":"private:456"}""")
+        assertTrue(prefixed.contains("\"switched\":true"), "带前缀也能切：$prefixed")
+        assertEquals("456", lucatBot.consumeConversationSwitch()?.targetId, "剥掉前缀取号")
+
+        // 别名字段 conversationId + group 前缀
+        val alias = SwitchConversationTool.process("""{"conversationId":"group:789"}""")
+        assertTrue(alias.contains("\"switched\":true"), "别名字段也认：$alias")
+        val pick = lucatBot.consumeConversationSwitch()
+        assertEquals("789", pick?.targetId)
+        assertEquals(org.dlucxoket.lucatbot.bot.agent.data.SessionPickType.GROUP, pick?.conversationType,
+            "从前缀推断出会话类型")
+
+        // 报错要给正确写法（模型下一轮照着改）
+        val bad = SwitchConversationTool.process("""{"type":"qqq","target":"1"}""")
+        assertTrue(bad.contains("\"success\":false") && bad.contains("正确写法"), "报错带示例：$bad")
+    }
 }

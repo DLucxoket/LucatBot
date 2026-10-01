@@ -145,7 +145,7 @@ data class ConversationDecision(
 
     /** tool 动作的入参对象（无则空 Map） */
     @Suppress("UNCHECKED_CAST")
-    val toolInput: Map<String, Any?> get() = params["input"] as? Map<String, Any?> ?: emptyMap()
+    val toolInput: Map<String, Any?> get() = LlmJson.toolInputOf(params)
 
     /** view_images 要查看的文件标签列表（params.refs；parse 已校验非空） */
     @Suppress("UNCHECKED_CAST")
