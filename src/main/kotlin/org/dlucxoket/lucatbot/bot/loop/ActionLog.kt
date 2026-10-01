@@ -1,10 +1,10 @@
 package org.dlucxoket.lucatbot.bot.loop
 
+import org.dlucxoket.lucatbot.bot.persona.TimeFormat
 import org.dlucxoket.lucatbot.bot.storage.DebouncedFlusher
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.time.LocalTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -45,7 +45,6 @@ class ActionLog(
     private val entries = CopyOnWriteArrayList<ActionLogEntry>()
     /** 自上次成功 flush 以来新增的条目（**只送增量**——历史不重写、不删） */
     private val pendingAdds = CopyOnWriteArrayList<ActionLogEntry>()
-    private val zone = ZoneId.of("Asia/Shanghai")
     private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 
     /** 防抖落盘（仅持久化模式）：append 后约 5s 批量写，shutdown 兜底 */
@@ -92,7 +91,7 @@ class ActionLog(
         return entries.joinToString("\n") { e ->
             buildString {
                 append("[")
-                append(LocalTime.ofInstant(Instant.ofEpochMilli(e.timestamp), zone).format(timeFormat))
+                append(LocalTime.ofInstant(Instant.ofEpochMilli(e.timestamp), TimeFormat.ZONE).format(timeFormat))
                 append("]")
                 e.conversationId?.let { append("[$it]") }
                 append(" ")

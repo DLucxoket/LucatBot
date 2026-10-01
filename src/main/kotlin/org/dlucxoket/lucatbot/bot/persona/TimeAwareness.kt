@@ -26,9 +26,9 @@ object TimeAwareness {
         return false
     }
 
-    /** 决策 prompt 用时间提示（北京时间 yyyyMMdd-HHmmss） */
+    /** 决策 prompt 用时间提示（北京时间 yyyyMMdd-HHmmss）——时区收口 [TimeFormat.ZONE] */
     fun timeHint(): String {
-        return LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"))
+        return LocalDateTime.now(TimeFormat.ZONE)
             .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
     }
 }

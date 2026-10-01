@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.bot.memory
 
+import org.dlucxoket.lucatbot.bot.persona.TimeFormat
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
@@ -240,13 +241,8 @@ class MemoryService(
         return sb.toString().trim()
     }
 
-    /** 记忆写入日期（MMdd；跨年带年份）——摘要行尾的「（记于…）」 */
-    private fun datedOn(epochMs: Long): String {
-        val zone = java.time.ZoneId.of("Asia/Shanghai")
-        val date = java.time.Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
-        val pattern = if (date.year == java.time.LocalDate.now(zone).year) "MM-dd" else "yyyy-MM-dd"
-        return date.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
-    }
+    /** 记忆写入日期（MMdd；跨年带年份）——摘要行尾的「（记于…）」；渲染收口 [TimeFormat.monthDay] */
+    private fun datedOn(epochMs: Long): String = TimeFormat.monthDay(epochMs)
 
     /**
      * 搜索相关记忆
