@@ -130,19 +130,47 @@ data class SessionPickerRequest(
 
 /**
  * 会话选择决策动作
+ *
+ * @param wire LLM 线上协议里的规范动作名——**词表单一源**（同 [ConversationAction]）：
+ *   prompt 动作行、`SessionDecisionParser.parse`、标签形态翻译都从伴生取
  */
-enum class SessionAction {
+enum class SessionAction(val wire: String) {
     /** 打开一个会话（pick 非空） */
-    OPEN_CONVERSATION,
+    OPEN_CONVERSATION("open_conversation"),
 
     /** 不看任何会话，去空闲 */
-    IDLE,
+    IDLE("idle"),
 
     /** 查看/搜索工具目录（全量或按关键词） */
-    LIST_TOOLS,
+    LIST_TOOLS("list_tools"),
 
     /** 调用一个工具（toolName + toolInput） */
-    CALL_TOOL
+    CALL_TOOL("tool");
+
+    companion object {
+        /** 别名 → 规范动作（模型偶发写法；与 wire 一起构成完整词表） */
+        val ALIASES: Map<String, SessionAction> = mapOf(
+            "tools" to LIST_TOOLS,
+            "call_tool" to CALL_TOOL
+        )
+
+        /** 完整可识别词表（规范名 + 别名）——标签形态翻译的判定依据（计算属性，同 ConversationAction） */
+        val WIRE_NAMES: Set<String>
+            get() = SessionAction.entries.mapTo(mutableSetOf<String>()) { it.wire } + ALIASES.keys
+
+        /** 线上动作名 → 枚举（调用方已 lowercase）；未收录 → null（走兜底空闲） */
+        fun fromWire(name: String): SessionAction? =
+            SessionAction.entries.firstOrNull { it.wire == name } ?: ALIASES[name]
+
+        /**
+         * prompt 动作行文本——**渲染结果必须与历史字面量逐字一致**（测试断言依赖）。
+         * 参数同 `ConversationAction.promptList`
+         */
+        fun promptList(separator: String = " | ", quoted: Boolean = true): String =
+            SessionAction.entries.joinToString(separator) {
+                if (quoted) "\"${it.wire}\"" else it.wire
+            }
+    }
 }
 
 /**
@@ -194,8 +222,9 @@ object SessionDecisionParser {
     }
 
     fun parse(llmOutput: String): SessionDecision {
-        // 模型偶发把输出包成「函数调用」标记 → 先翻译回纯 JSON 信封（同会话内决策）
-        val normalized = LlmJson.toolCallEnvelope(llmOutput) ?: llmOutput
+        // 模型偶发把输出包成「函数调用」标记 → 先翻译回纯 JSON 信封（同会话内决策；
+        // 「已知动作」由 SessionAction 词表裁决，不认识的名字才当工具调用）
+        val normalized = LlmJson.toolCallEnvelope(llmOutput, SessionAction.WIRE_NAMES) ?: llmOutput
         val node = LlmJson.parseTree(normalized)
             ?: return idleLogged(llmOutput, "非 JSON 或无可提取 JSON，兜底空闲")
         val actionText = node.get("action")?.asText()?.trim()?.lowercase()
@@ -204,8 +233,8 @@ object SessionDecisionParser {
         val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
         val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
 
-        return when (actionText) {
-            "open_conversation" -> {
+        return when (SessionAction.fromWire(actionText)) {
+            SessionAction.OPEN_CONVERSATION -> {
                 val pick = SessionPickParser.parse(normalized)
                     ?: return idleLogged(llmOutput, "open_conversation 参数无效，兜底空闲", todoAdd, todoDone)
                 SessionDecision(
@@ -214,13 +243,13 @@ object SessionDecisionParser {
                 )
             }
 
-            "idle" -> SessionDecision(
+            SessionAction.IDLE -> SessionDecision(
                 SessionAction.IDLE,
                 idleSeconds = idleSecondsOf(LlmJson.paramsOf(node)),
                 todoAdd = todoAdd, todoDone = todoDone, reason = reason
             )
 
-            "list_tools", "tools" -> {
+            SessionAction.LIST_TOOLS -> {
                 val params = LlmJson.paramsOf(node)
                 val query = params["query"]?.toString()?.trim()
                     ?.takeIf { it.isNotEmpty() && it != "null" }
@@ -230,7 +259,7 @@ object SessionDecisionParser {
                 )
             }
 
-            "tool", "call_tool" -> {
+            SessionAction.CALL_TOOL -> {
                 val params = LlmJson.paramsOf(node)
                 val name = params["name"]?.toString()?.trim()
                     ?.takeIf { it.isNotEmpty() && it != "null" }
@@ -242,7 +271,8 @@ object SessionDecisionParser {
                 )
             }
 
-            else -> idleLogged(llmOutput, "未知 action=$actionText，兜底空闲", todoAdd, todoDone)
+            // when 已覆盖全部枚举值——此处仅为 Kotlin 穷尽性收口（fromWire 未收录的名字）
+            null -> idleLogged(llmOutput, "未知 action=$actionText，兜底空闲", todoAdd, todoDone)
         }
     }
 
@@ -273,7 +303,8 @@ object SessionPickParser {
     fun parse(llmOutput: String): SessionPick? {
         val node = LlmJson.parseTree(llmOutput) ?: return null
         val action = node.get("action")?.asText()?.trim()?.lowercase() ?: return null
-        if (action != "open_conversation") return null
+        // 词表裁决（别名也认）——不再硬编码 wire 字面量
+        if (SessionAction.fromWire(action) != SessionAction.OPEN_CONVERSATION) return null
 
         val params = LlmJson.paramsOf(node)
         val typeText = params["type"]?.toString()?.trim()?.lowercase() ?: return null

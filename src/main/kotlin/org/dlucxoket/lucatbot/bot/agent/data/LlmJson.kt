@@ -88,23 +88,20 @@ object LlmJson {
     private val BARE_TAG = Regex("""$LT([A-Za-z_][\w-]*)>([^$LT]*)$LT/\1>""")
     private val STRUCT_TAGS = setOf("function", "invoke", "parameter", "output", "content")
 
-    /** 能当 action 的名字——**不认识的 function 名一律按「工具调用」处理** */
-    private val KNOWN_ACTIONS = setOf(
-        "read_more", "readmore", "send", "stay", "return",
-        "list_tools", "tools", "tool", "call_tool",
-        "view_images", "view", "view_image",
-        "open_conversation", "idle", "memory_queries", "search_memory"
-    )
-
     /** 可从参数标签提到信封**顶层**的字段（与 JSON 信封的顶层字段一致） */
     private val TOP_LEVEL_FIELDS = listOf("memory_queries", "remember", "todo_add", "todo_done")
 
     /**
      * tool-call 形态的原文 → 纯 JSON 信封（`{"action":…,"params":{…},"reason":…}`）
      *
+     * @param raw LLM 原文
+     * @param knownActions 该智能体的**已知动作词表**（规范名 + 别名）——词表单一源在
+     *   各动作枚举（ConversationAction/SessionAction 的 WIRE_NAMES），
+     *   本类不再自带副本（曾是第 4 份拷贝，漏改即静默降级）；
+     *   名字在表内 → 当动作翻译，不在表内 → 当工具调用（`<function=GetMsgTool>` 形态）
      * @return 翻译后的信封 JSON；**不是该形态 → null**（调用方照常走原解析）
      */
-    fun toolCallEnvelope(raw: String): String? {
+    fun toolCallEnvelope(raw: String, knownActions: Set<String>): String? {
         val called = INVOKE_OPEN.find(raw)?.groupValues?.get(1) ?: return null
         val args = LinkedHashMap<String, String>()
         PARAM_TAG.findAll(raw).forEach { args.putIfAbsent(it.groupValues[1], it.groupValues[2].trim()) }
@@ -116,7 +113,7 @@ object LlmJson {
         val flat = argsToNode(args)
         val node = mapper.createObjectNode()
         val action = called.lowercase()
-        if (action in KNOWN_ACTIONS) {
+        if (action in knownActions) {
             node.put("action", action)
             node.set<JsonNode>("params", when {
                 jsonParams != null -> jsonParams

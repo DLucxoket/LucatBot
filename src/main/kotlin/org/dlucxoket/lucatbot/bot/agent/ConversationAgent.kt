@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.bot.agent
 
+import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.llm.LLM
@@ -40,7 +41,7 @@ class ConversationAgent(
                 append("\n\n（注意：你上一次的输出没能解析成决策 JSON——请**只输出纯 JSON**，")
                 append("不要多余文字、不要别的包裹形态，结构为 ")
                 append("{\"action\":\"…\",\"params\":{…},\"reason\":\"…\"}，")
-                append("action 只能是 read_more / send / stay / return / list_tools / tool / view_images）")
+                append("action 只能是 ${ConversationAction.promptList(separator = " / ", quoted = false)}）")
             }
             decision = ConversationDecision.parse(llm.ask(systemPrompt, userContent + nudge, input.images))
         }
@@ -85,7 +86,7 @@ class ConversationAgent(
             - **只输出纯 JSON**（结构如下）：不要用「函数调用 / XML 标签」那套标记包裹（invoke、function、parameter），也不要裹解释文字——**标签形态只是系统的容错兜底，别依赖它**，正常一律纯 JSON
             
             {
-            "action": "read_more" | "send" | "stay" | "return" | "list_tools" | "tool" | "view_images",
+            "action": ${ConversationAction.promptList()},
             "params": { ... },
             "reason": "..."
             }
@@ -114,7 +115,7 @@ class ConversationAgent(
               - 可与 send 等任何动作**同时**输出；结果**下一轮起一直带在**「### 短期记忆」末尾的【记忆搜索结果】里，**直到你再次给出 memory_queries 才被新结果整体覆盖**（不给就一直留着，不用重复搜同一个词）
               - **想说的话里的关键词也要一起搜**：打算发的内容里出现的人/梗/表情/约定 → **发之前**就写进去（想发表情 → 搜 "表情"；想接某个梗 → 搜梗名；要 @ 谁 → 搜名字或 QQ号）——先搜到再开口，别凭印象接话
               - **没有要查的就省略该字段或给 []**；**拿不准要不要查就写上**——搜一下总比凭印象编强（搜不到会如实标「没搜到」）
-              - ⚠️ **memory_queries 不是动作**：`action` 只能是 read_more / send / stay / return / list_tools / tool / view_images，**绝不许把 action 写成 memory_queries**。想「只搜不说话」→ 输出 `{"action":"stay","params":{"seconds":2},"memory_queries":[…]}`（停留 2 秒等搜索结果，下一轮拿到【记忆搜索结果】再决策）；也可以直接和 send / read_more 一起给
+              - ⚠️ **memory_queries 不是动作**：`action` 只能是 ${ConversationAction.promptList(separator = " / ", quoted = false)}，**绝不许把 action 写成 memory_queries**。想「只搜不说话」→ 输出 `{"action":"stay","params":{"seconds":2},"memory_queries":[…]}`（停留 2 秒等搜索结果，下一轮拿到【记忆搜索结果】再决策）；也可以直接和 send / read_more 一起给
             - **刚进会话先别急着开口（先搜记忆再说话）**：进来的**第一轮不要直接 send**——先用 memory_queries 把回话要用的词搜一遍（对方是谁/什么关系、刚才提到的梗与表情、相关约定、**你要说的话里的关键词**），可与 read_more 同时；本轮用 `stay`（1~3 秒，**只是等自己的搜索结果，不算等回应**）或 read_more，**下一轮拿到【记忆搜索结果】再决定说什么**；确实没什么可搜的才直接决策
             - **该搜就搜，memory_queries 别省（要勤奋）**：只要这轮回复或决策**可能依赖以前的事**——对方是谁/跟你的关系、之前的约定与承诺、上次聊到哪、你不确定的细节、回复或引用里出现的人事物——就**这一轮顺手带上 memory_queries**（不必等答不上来才补，先搜再答）；只有纯闲聊、完全不依赖过去时才省略。**拿不准就写**：多搜一次不亏，答错/编造才亏（例：对方提起某人 → 带上人名+QQ号；说到约定 → 带上约定关键词；要接梗 → 带上梗里的名词）
             

@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.bot.agent
 
+import org.dlucxoket.lucatbot.bot.agent.data.NotificationAction
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationRequest
 import org.dlucxoket.lucatbot.bot.llm.LLM
@@ -59,7 +60,7 @@ class NotificationAgent(
             只输出纯JSON，结构如下：
 
             {
-            "action": "ignore" | "todo" | "open",
+            "action": ${NotificationAction.promptList()},
             "params": { ... },
             "reason": "..."
             }

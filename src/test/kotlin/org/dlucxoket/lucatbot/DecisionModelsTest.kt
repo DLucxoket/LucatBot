@@ -311,6 +311,52 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `searchPause marks stays that wait for own search results`() {
+        // searchPause 置位三态：memory-alias 合成 stay / 真 stay 带搜索词 / markdown 包裹形态
+        val synthesized = ConversationDecision.parse(
+            """{"action":"memory_queries","memory_queries":["可乐"]}"""
+        )
+        assertEquals(ConversationAction.STAY, synthesized.action, "合成 stay")
+        assertEquals(2, synthesized.staySeconds, "合成停留压到 2 秒")
+        assertTrue(synthesized.searchPause, "memory-alias 合成的 stay 是搜索型停留")
+
+        val fenced = ConversationDecision.parse(
+            "```json\n{\"action\":\"search_memory\",\"memory_queries\":[\"疯疯\"]}\n```"
+        )
+        assertEquals(ConversationAction.STAY, fenced.action, "裹 markdown 的搜索别名同样落 stay")
+        assertTrue(fenced.searchPause, "markdown 包裹形态同样置位")
+
+        val realStay = ConversationDecision.parse(
+            """{"action":"stay","params":{"seconds":1},"memory_queries":["白鸽"]}"""
+        )
+        assertTrue(realStay.searchPause, "带 memory_queries 的真 stay 是搜索型停留")
+
+        // 对照组：普通 stay 是「没人接话的干等」（走 stayStreak）；非 stay 动作带搜索词也不算停留
+        val plainStay = ConversationDecision.parse("""{"action":"stay","params":{"seconds":5}}""")
+        assertFalse(plainStay.searchPause, "普通 stay 不置位（仍计 stayStreak）")
+        val sendWithQueries = ConversationDecision.parse(
+            """{"action":"send","params":{"content":"hi"},"memory_queries":["x"]}"""
+        )
+        assertFalse(sendWithQueries.searchPause, "send 不是停留，不置位")
+    }
+
+    @Test
+    fun `isFallback is an explicit field not reference identity`() {
+        // 显式字段：FALLBACK.copy(...) 派生路径也必须带着标记，重试循环才不会静默失效
+        val fallback = ConversationDecision.parse("根本不是 JSON")
+        assertTrue(fallback.isFallback, "解析失败的兜底结果带标记")
+        assertTrue(ConversationDecision.FALLBACK.isFallback, "FALLBACK 常量带标记")
+        assertFalse(
+            ConversationDecision.parse("""{"action":"return","reason":"正常"}""").isFallback,
+            "正常解析结果不带标记"
+        )
+        assertFalse(
+            ConversationDecision.forceReturn("护栏强制退出").isFallback,
+            "编排层强制 return 不是解析失败（不该触发 Agent 重试）"
+        )
+    }
+
+    @Test
     fun `function tag with flat params becomes tool call`() {
         // 支持形态：function 名不认识 → 按工具调用；参数可用裸标签对或 parameter 标签
         val lt = "<"
@@ -566,8 +612,43 @@ class LlmJsonTest {
 
     @Test
     fun `toolCallEnvelope returns null for plain output`() {
-        assertNull(LlmJson.toolCallEnvelope("""{"action":"return"}"""), "纯 JSON 不误判")
-        assertNull(LlmJson.toolCallEnvelope("随便一句话"), "无标记不误判")
+        // knownActions 词表参数化（词表单一源自枚举伴生，LlmJson 不再自带副本）
+        assertNull(
+            LlmJson.toolCallEnvelope("""{"action":"return"}""", ConversationAction.WIRE_NAMES),
+            "纯 JSON 不误判"
+        )
+        assertNull(
+            LlmJson.toolCallEnvelope("随便一句话", SessionAction.WIRE_NAMES),
+            "无标记不误判"
+        )
+    }
+
+    @Test
+    fun `known actions vocabulary is single sourced from enums`() {
+        // 词表单一源：prompt 动作行、parse、标签形态翻译都从枚举伴生取——
+        // 新增 action 只改枚举，四处拷贝（含 LlmJson 曾经的 KNOWN_ACTIONS）已收敛
+        assertEquals(
+            "\"read_more\" | \"send\" | \"stay\" | \"return\" | \"list_tools\" | \"tool\" | \"view_images\"",
+            ConversationAction.promptList(),
+            "prompt 动作行渲染必须与历史字面量逐字一致"
+        )
+        assertEquals(
+            "\"open_conversation\" | \"idle\" | \"list_tools\" | \"tool\"",
+            SessionAction.promptList(),
+            "选会话 prompt 动作行同上"
+        )
+        assertEquals(
+            "read_more / send / stay / return / list_tools / tool / view_images",
+            ConversationAction.promptList(separator = " / ", quoted = false),
+            "重试 nudge 的无引号斜杠形式"
+        )
+        // 别名一并进词表（标签形态翻译判定用），且 fromWire 能解析
+        assertTrue("readmore" in ConversationAction.WIRE_NAMES)
+        assertTrue("memory_queries" in ConversationAction.WIRE_NAMES)
+        assertTrue("call_tool" in SessionAction.WIRE_NAMES)
+        assertEquals(ConversationAction.READ_MORE, ConversationAction.fromWire("readmore"))
+        assertEquals(SessionAction.LIST_TOOLS, SessionAction.fromWire("tools"))
+        assertNull(ConversationAction.fromWire("dance"), "词表外 → null（解析失败兜底）")
     }
 }
 

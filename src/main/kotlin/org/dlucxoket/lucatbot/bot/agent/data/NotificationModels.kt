@@ -45,16 +45,41 @@ data class NotificationRequest(
     @JsonProperty("shortTermMemory") val shortTermMemory: String = ""
 )
 
-/** 通知决策动作 */
-enum class NotificationAction {
+/** 通知决策动作（wire 词表单一源，同 ConversationAction/SessionAction） */
+enum class NotificationAction(val wire: String) {
     /** 划掉：现在不处理（消息已入档+未读，之后扫列表仍可见） */
-    IGNORE,
+    IGNORE("ignore"),
 
     /** 记下来：创建一条待办，稍后处理 */
-    TODO,
+    TODO("todo"),
 
     /** 点开：当场跳转到通知所在会话，交给会话内决策 agent */
-    OPEN
+    OPEN("open");
+
+    companion object {
+        /** 别名 → 规范动作（模型偶发写法） */
+        val ALIASES: Map<String, NotificationAction> = mapOf(
+            "dismiss" to IGNORE,
+            "jump" to OPEN
+        )
+
+        /** 完整可识别词表（规范名 + 别名）——prompt 动作行与解析共用（计算属性，同 ConversationAction） */
+        val WIRE_NAMES: Set<String>
+            get() = NotificationAction.entries.mapTo(mutableSetOf<String>()) { it.wire } + ALIASES.keys
+
+        /** 线上动作名 → 枚举（调用方已 lowercase）；未收录 → null（走解析失败兜底） */
+        fun fromWire(name: String): NotificationAction? =
+            NotificationAction.entries.firstOrNull { it.wire == name } ?: ALIASES[name]
+
+        /**
+         * prompt 动作行文本——**渲染结果必须与历史字面量逐字一致**。
+         * 参数同 `ConversationAction.promptList`
+         */
+        fun promptList(separator: String = " | ", quoted: Boolean = true): String =
+            NotificationAction.entries.joinToString(separator) {
+                if (quoted) "\"${it.wire}\"" else it.wire
+            }
+    }
 }
 
 /**
@@ -90,12 +115,8 @@ data class NotificationDecision(
                 ?: return fail(llmOutput, "非 JSON 或无可提取 JSON")
             val actionText = node.get("action")?.asText()?.trim()?.lowercase()
                 ?: return fail(llmOutput, "缺 action 字段")
-            val action = when (actionText) {
-                "ignore", "dismiss" -> NotificationAction.IGNORE
-                "todo" -> NotificationAction.TODO
-                "open", "jump" -> NotificationAction.OPEN
-                else -> return fail(llmOutput, "未知 action=$actionText")
-            }
+            val action = NotificationAction.fromWire(actionText)
+                ?: return fail(llmOutput, "未知 action=$actionText")
             val params = LlmJson.paramsOf(node)
             // todo 必须带内容，否则视为无效 → 保守无视（消息仍在未读里不丢）
             if (action == NotificationAction.TODO && params["content"]?.toString().isNullOrBlank()) {

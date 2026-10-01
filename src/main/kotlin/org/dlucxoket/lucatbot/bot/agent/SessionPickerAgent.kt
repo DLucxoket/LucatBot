@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot.bot.agent
 import org.dlucxoket.lucatbot.bot.agent.data.SessionDecision
 import org.dlucxoket.lucatbot.bot.agent.data.SessionDecisionParser
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
+import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
 import org.dlucxoket.lucatbot.bot.llm.LLM
 
 /**
@@ -56,7 +57,7 @@ class SessionPickerAgent(
             - **只输出纯 JSON**（结构如下）：不要用「函数调用 / XML 标签」那套标记包裹（invoke、function、parameter），也不要裹解释文字——**标签形态只是系统的容错兜底，别依赖它**，正常一律纯 JSON
             
             {
-            "action": "open_conversation" | "idle" | "list_tools" | "tool",
+            "action": ${SessionAction.promptList()},
             "params": { ... },
             "reason": "..."
             }

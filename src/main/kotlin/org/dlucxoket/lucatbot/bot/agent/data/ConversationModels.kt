@@ -8,32 +8,83 @@ import org.dlucxoket.lucatbot.model.message.OutgoingMember
 
 /**
  * 会话内动作
+ *
+ * @param wire LLM 线上协议里的规范动作名（JSON `action` 字段值）——
+ *   **词表单一源**：prompt 动作行、重试 nudge、`ConversationDecision.parse`
+ *   与标签形态翻译（`LlmJson.toolCallEnvelope`）都从本伴生取，新增动作只改这里。
  */
-enum class ConversationAction {
+enum class ConversationAction(val wire: String) {
     /** 爬楼：再看更早的历史 */
-    READ_MORE,
+    READ_MORE("read_more"),
 
     /** 发一条消息 */
-    SEND,
+    SEND("send"),
 
     /** 在会话里停留一会儿，到时后重新决策 */
-    STAY,
+    STAY("stay"),
 
     /** 退出本会话，回到消息列表 */
-    RETURN,
+    RETURN("return"),
 
     /** 查看/搜索工具目录（全量或按关键词） */
-    LIST_TOOLS,
+    LIST_TOOLS("list_tools"),
 
     /** 调用一个工具（params.name + params.input） */
-    CALL_TOOL,
+    CALL_TOOL("tool"),
 
     /**
      * 查看图片内容（params.refs = 占位符里的文件标签）——**按需供图**：
      * 图片默认不附内容（省 token），LLM 显式声明要看哪几张，
      * 编排层取图后附到**下一轮**请求（与 list_tools 的「结果进下一轮」对称）
      */
-    VIEW_IMAGES
+    VIEW_IMAGES("view_images");
+
+    companion object {
+        /**
+         * 别名 → 规范动作（模型偶发/历史遗留写法）——与 [wire] 一起构成
+         * 完整可识别词表；解析入口统一走 [fromWire]，别名表不再散在 parse 的 when 里
+         */
+        val ALIASES: Map<String, ConversationAction> = mapOf(
+            "readmore" to READ_MORE,
+            "tools" to LIST_TOOLS,
+            "call_tool" to CALL_TOOL,
+            "view" to VIEW_IMAGES,
+            "view_image" to VIEW_IMAGES,
+            // 顶层字段被误当 action（实盘 15:46/15:48 两次 "action":"memory_queries"）——
+            // 语义是「先搜记忆再决策」→ 映射 STAY，合成 params 与 searchPause 置位见 parse
+            "memory_queries" to STAY,
+            "search_memory" to STAY
+        )
+
+        /**
+         * 「顶层字段被误当 action」的搜索别名——parse 对它们合成 `stay 2s`
+         * （params 压到 2 秒、丢弃其余参数）并置 `ConversationDecision.searchPause`
+         */
+        val MEMORY_PAUSE_ALIASES: Set<String> = setOf("memory_queries", "search_memory")
+
+        /**
+         * 完整可识别词表（规范名 + 别名）——标签形态翻译的判定依据
+         * （`LlmJson.toolCallEnvelope`：名字在表内 → 当动作，不在 → 当工具调用）。
+         * 计算属性（非 val 初始化）：避开伴生字段初始化与枚举常量/entries 的先后顺序问题
+         */
+        val WIRE_NAMES: Set<String>
+            get() = ConversationAction.entries.mapTo(mutableSetOf<String>()) { it.wire } + ALIASES.keys
+
+        /** 线上动作名 → 枚举（调用方已 lowercase）；未收录 → null（走解析失败兜底） */
+        fun fromWire(name: String): ConversationAction? =
+            ConversationAction.entries.firstOrNull { it.wire == name } ?: ALIASES[name]
+
+        /**
+         * prompt 动作行文本——**渲染结果必须与历史字面量逐字一致**（测试断言依赖）
+         *
+         * @param separator 条目分隔（prompt 行用 ` | `；重试 nudge 用 ` / `）
+         * @param quoted 是否给每个名字加双引号（prompt 行加；nudge 不加）
+         */
+        fun promptList(separator: String = " | ", quoted: Boolean = true): String =
+            ConversationAction.entries.joinToString(separator) {
+                if (quoted) "\"${it.wire}\"" else it.wire
+            }
+    }
 }
 
 /**
@@ -47,6 +98,12 @@ enum class ConversationAction {
  * @param todo_done 完成待办的 id 或内容片段（可选）
  * @param memory_queries 想搜记忆的关键词数组（可选；人名/QQ号/聊天里的词/想不起来的细节）——
  *   与任何动作同时输出，编排层**当轮搜**、结果注入**下一轮** prompt 的「短期记忆」段
+ * @param isFallback 解析失败的兜底结果（不是模型真说了 return）——[ConversationAgent]
+ *   据此决定是否重试。**显式字段而非引用相等**：任何 `FALLBACK.copy(...)` 派生
+ *   路径都必须带着它，否则重试循环会静默失效
+ * @param searchPause 搜索型停留（带 memory_queries 的 stay，或 memory_queries 被误当
+ *   action 合成的 stay）——等的是**自己的搜索结果**而非「没人接话的干等」，
+ *   编排层据此不计入 stayStreak（见 ConversationController）
  */
 data class ConversationDecision(
     val action: ConversationAction,
@@ -59,10 +116,10 @@ data class ConversationDecision(
     @JsonProperty("todo_done")
     val todo_done: String? = null,
     @JsonProperty("memory_queries")
-    val memoryQueries: List<String> = emptyList()
+    val memoryQueries: List<String> = emptyList(),
+    val isFallback: Boolean = false,
+    val searchPause: Boolean = false
 ) {
-    /** 解析失败的兜底结果（不是模型真说了 return）——[ConversationAgent] 据此重试 */
-    val isFallback: Boolean get() = this === FALLBACK
     /** send 的正文——仅旧字符串写法（`"content": "纯文本"`）时非 null；数组写法为 null */
     val content: String? get() = params["content"] as? String
 
@@ -157,10 +214,11 @@ data class ConversationDecision(
     companion object {
         private val log = org.slf4j.LoggerFactory.getLogger(ConversationDecision::class.java)
 
-        /** 解析失败兜底：RETURN，避免卡死在会话里 */
+        /** 解析失败兜底：RETURN，避免卡死在会话里（isFallback=true → 触发 Agent 侧重试） */
         val FALLBACK = ConversationDecision(
             action = ConversationAction.RETURN,
-            reason = "解析失败兜底退出"
+            reason = "解析失败兜底退出",
+            isFallback = true
         )
 
         /**
@@ -190,28 +248,21 @@ data class ConversationDecision(
          */
         fun parse(llmOutput: String): ConversationDecision {
             // 模型偶发把输出包成「函数调用」标记 → 先翻译回纯 JSON 信封
-            val normalized = LlmJson.toolCallEnvelope(llmOutput) ?: llmOutput
+            //（标签形态是容错兜底：是否「已知动作」由本枚举词表裁决，不认识的名字才当工具调用）
+            val normalized = LlmJson.toolCallEnvelope(llmOutput, ConversationAction.WIRE_NAMES) ?: llmOutput
             val node = LlmJson.parseTree(normalized)
                 ?: return fail(llmOutput, "非 JSON（或 markdown 包裹外无可提取的 JSON）")
             val actionText = node.get("action")?.asText()?.trim()?.lowercase()
                 ?: return fail(llmOutput, "缺 action 字段")
-            val action = when (actionText) {
-                "read_more", "readmore" -> ConversationAction.READ_MORE
-                "send" -> ConversationAction.SEND
-                "stay" -> ConversationAction.STAY
-                "return" -> ConversationAction.RETURN
-                "list_tools", "tools" -> ConversationAction.LIST_TOOLS
-                "tool", "call_tool" -> ConversationAction.CALL_TOOL
-                "view_images", "view", "view_image" -> ConversationAction.VIEW_IMAGES
-                // 模型偶发把顶层字段当成了 action（只想先搜记忆，实盘 15:46/15:48 出过
-                // 两次 "action":"memory_queries"）→ 当作 stay 处理（params 见下：压到 2 秒），
-                // 既不作废本轮，又让当轮的 memory_queries 照常搜索、下一轮拿到结果再决策
-                "memory_queries", "search_memory" -> ConversationAction.STAY
-
-                else -> return fail(llmOutput, "未知 action=$actionText")
-            }
+            // 模型偶发把顶层字段当成了 action（只想先搜记忆，实盘 15:46/15:48 出过
+            // 两次 "action":"memory_queries"）→ 词表把该别名映射为 STAY（params 见下：
+            // 压到 2 秒），既不作废本轮，又让当轮的 memory_queries 照常搜索、
+            // 下一轮拿到结果再决策；searchPause 置位避免被当成「没人接话的干等」
+            val synthesizedSearchPause = actionText in ConversationAction.MEMORY_PAUSE_ALIASES
+            val action = ConversationAction.fromWire(actionText)
+                ?: return fail(llmOutput, "未知 action=$actionText")
             // 该别名的本意是「先搜记忆再决策」：停留压到 2 秒（params 里的无关参数丢弃）
-            val params = if (actionText == "memory_queries" || actionText == "search_memory") {
+            val params = if (synthesizedSearchPause) {
                 mapOf("seconds" to 2)
             } else {
                 LlmJson.paramsOf(node)
@@ -248,7 +299,11 @@ data class ConversationDecision(
                 remember = remember,
                 todo_add = todoAdd,
                 todo_done = todoDone,
-                memoryQueries = memoryQueries
+                memoryQueries = memoryQueries,
+                // 搜索型停留 = 合成的 memory-alias stay，或真 stay 同时带了搜索词
+                //（prompt sanction 的「stay 1~3 秒等自己的搜索结果」同属此类）
+                searchPause = synthesizedSearchPause ||
+                    (action == ConversationAction.STAY && memoryQueries.isNotEmpty())
             )
         }
     }
