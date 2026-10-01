@@ -113,7 +113,7 @@ data class ConversationDecision(
      * send 的「等回信」秒数（params.wait_message，默认 0=发完立即再次决策）
      *
      * 发送成功后原地等新消息：期间来消息（或让位请求）立即唤醒进下一轮处理，
-     * 等满仍无任何新消息 = 没人接话 → 编排层直接退出会话。执行侧钳 1~300。
+     * 等满仍无任何新消息 = 没人接话 → 编排层直接退出会话。执行侧钳 1~60（最多等 1 分钟）。
      * 兼容 camelCase 与**写进 content 条目里**的错位写法（模型偶发放错层级）。
      */
     val waitMessageSeconds: Int
