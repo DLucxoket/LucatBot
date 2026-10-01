@@ -39,7 +39,9 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
             targetId = input.targetId, success = false, error = "ChatHistoryService 未绑定"
         )
 
-        return try {
+        return tryResult(
+            onError = { ChatHistoryResult(targetId = input.targetId, success = false, error = it) }
+        ) {
             val conversationId = "${input.type}:${input.targetId}"
 
             // 爬楼：能拉远端就拉，拉到就落盘
@@ -63,8 +65,6 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                 },
                 success = true
             )
-        } catch (e: Exception) {
-            ChatHistoryResult(targetId = input.targetId, success = false, error = e.message)
         }
     }
 

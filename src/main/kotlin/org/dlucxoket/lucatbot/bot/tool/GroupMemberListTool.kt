@@ -15,22 +15,18 @@ object GroupMemberListTool : Tool<GroupMemberListRequest, GroupMemberListResult>
     override val parameterHint: String = "JSON: {\"groupId\": 123456}"
     override val inputClass: Class<GroupMemberListRequest> = GroupMemberListRequest::class.java
 
-    override fun handle(input: GroupMemberListRequest): GroupMemberListResult {
-        val b = bot ?: return GroupMemberListResult(success = false, error = "Bot 未绑定")
+    override fun handle(input: GroupMemberListRequest): GroupMemberListResult = runTool(
+        onError = { GroupMemberListResult(success = false, error = it) }
+    ) { b ->
+        val members = b.getGroupMemberList(input.groupId)?.data?.map {
+            GroupMemberInfo(
+                userId = it.userId,
+                nickname = it.nickname ?: "",
+                card = it.card ?: "",
+                role = it.role ?: "member"
+            )
+        } ?: emptyList()
 
-        return try {
-            val members = b.getGroupMemberList(input.groupId)?.data?.map {
-                GroupMemberInfo(
-                    userId = it.userId,
-                    nickname = it.nickname ?: "",
-                    card = it.card ?: "",
-                    role = it.role ?: "member"
-                )
-            } ?: emptyList()
-
-            GroupMemberListResult(members = members, success = true)
-        } catch (e: Exception) {
-            GroupMemberListResult(success = false, error = e.message)
-        }
+        GroupMemberListResult(members = members, success = true)
     }
 }

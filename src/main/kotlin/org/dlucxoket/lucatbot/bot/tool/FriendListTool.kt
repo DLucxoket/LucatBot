@@ -15,21 +15,17 @@ object FriendListTool : Tool<FriendListRequest, FriendListResult>() {
     override val parameterHint: String = "JSON: {\"keyword\": \"可选，搜索关键词\"}"
     override val inputClass: Class<FriendListRequest> = FriendListRequest::class.java
 
-    override fun handle(input: FriendListRequest): FriendListResult {
-        val b = bot ?: return FriendListResult(success = false, error = "Bot 未绑定")
+    override fun handle(input: FriendListRequest): FriendListResult = runTool(
+        onError = { FriendListResult(success = false, error = it) }
+    ) { b ->
+        val friends = b.friendList?.data?.map {
+            FriendInfo(userId = it.userId, nickname = it.nickname ?: "", remark = it.remark ?: "")
+        } ?: emptyList()
 
-        return try {
-            val friends = b.friendList?.data?.map {
-                FriendInfo(userId = it.userId, nickname = it.nickname ?: "", remark = it.remark ?: "")
-            } ?: emptyList()
+        val filtered = if (input.keyword.isNotBlank()) {
+            friends.filter { it.nickname.contains(input.keyword) || it.remark.contains(input.keyword) }
+        } else friends
 
-            val filtered = if (input.keyword.isNotBlank()) {
-                friends.filter { it.nickname.contains(input.keyword) || it.remark.contains(input.keyword) }
-            } else friends
-
-            FriendListResult(friends = filtered, success = true)
-        } catch (e: Exception) {
-            FriendListResult(success = false, error = e.message)
-        }
+        FriendListResult(friends = filtered, success = true)
     }
 }

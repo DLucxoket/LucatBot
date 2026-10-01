@@ -37,56 +37,53 @@ object SendMessageTool : Tool<SendMessageRequest, SendMessageResult>() {
         chatHistoryService = services.chatHistoryService
     }
 
-    override fun handle(input: SendMessageRequest): SendMessageResult {
-        val b = bot ?: return SendMessageResult(success = false, error = "Bot 未绑定")
-
-        return try {
-            val parts = input.conversationId.split(":")
-            if (parts.size != 2) {
-                return SendMessageResult(success = false, error = "会话ID格式错误: ${input.conversationId}")
-            }
-            val type = parts[0]
-            val id = parts[1].toLongOrNull() ?: return SendMessageResult(success = false, error = "无效ID")
-
-            // 富标记 → 消息段：结构化（reply+members，分段发送的单条）优先；
-            // 否则旧 content 走富标记解析。解析为空（空内容或全是丢弃型标记）按失败返回
-            val segments = if (input.members.isNotEmpty() || input.replyToId != null) {
-                buildSegments(input.replyToId, input.members)
-            } else {
-                toWire(SendContentParser.parse(input.content))
-            }
-            if (segments.isEmpty()) {
-                return SendMessageResult(success = false, error = "消息内容为空（或只含无法发送的标记，如 [图片]）")
-            }
-
-            val resp = when (type) {
-                "group" -> b.sendGroupMsg(id, segments, false)
-                "private" -> b.sendPrivateMsg(id, segments, false)
-                else -> return SendMessageResult(success = false, error = "未知会话类型: $type")
-            }
-
-            // OneBot 返回非 ok（被禁言时 NapCat 返回 status=failed/retcode=120，Shiro 已打 ERROR 日志）
-            // ——消息实际没发出去：不写聊天记录，直接返回失败，由调用方通知 LLM 决定去留
-            if (resp?.status != "ok") {
-                return SendMessageResult(
-                    success = false,
-                    error = "发送失败 status=${resp?.status} retCode=${resp?.retCode}（可能被禁言）"
-                )
-            }
-
-            // 发出后必须写入聊天记录（isBot=true）；回执里的 message_id 一并入档，
-            // 网友回复这条消息时引用解析（回复 #id）才能定位到它。
-            // 回执 data 是 MsgId 对象（ActionData<MsgId>），不是裸数字——
-            // 曾用 `as? Number` 恒为 null，机器人消息全部丢失 id（UUID 兜底行）
-            val sentMessageId = (resp?.data as? com.mikuac.shiro.dto.action.common.MsgId)?.messageId?.toLong()
-                ?: (resp?.data as? Number)?.toLong()
-            // content 存标记原文（与聊天记录同风格）：后续回复引用、prompt 圆环一致
-            chatHistoryService?.recordBotReply(input.conversationId, input.content, sentMessageId)
-
-            SendMessageResult(success = true)
-        } catch (e: Exception) {
-            SendMessageResult(success = false, error = e.message)
+    override fun handle(input: SendMessageRequest): SendMessageResult = runTool(
+        onError = { SendMessageResult(success = false, error = it) }
+    ) { b ->
+        val parts = input.conversationId.split(":")
+        if (parts.size != 2) {
+            return@runTool SendMessageResult(success = false, error = "会话ID格式错误: ${input.conversationId}")
         }
+        val type = parts[0]
+        val id = parts[1].toLongOrNull()
+            ?: return@runTool SendMessageResult(success = false, error = "无效ID")
+
+        // 富标记 → 消息段：结构化（reply+members，分段发送的单条）优先；
+        // 否则旧 content 走富标记解析。解析为空（空内容或全是丢弃型标记）按失败返回
+        val segments = if (input.members.isNotEmpty() || input.replyToId != null) {
+            buildSegments(input.replyToId, input.members)
+        } else {
+            toWire(SendContentParser.parse(input.content))
+        }
+        if (segments.isEmpty()) {
+            return@runTool SendMessageResult(success = false, error = "消息内容为空（或只含无法发送的标记，如 [图片]）")
+        }
+
+        val resp = when (type) {
+            "group" -> b.sendGroupMsg(id, segments, false)
+            "private" -> b.sendPrivateMsg(id, segments, false)
+            else -> return@runTool SendMessageResult(success = false, error = "未知会话类型: $type")
+        }
+
+        // OneBot 返回非 ok（被禁言时 NapCat 返回 status=failed/retcode=120，Shiro 已打 ERROR 日志）
+        // ——消息实际没发出去：不写聊天记录，直接返回失败，由调用方通知 LLM 决定去留
+        if (resp?.status != "ok") {
+            return@runTool SendMessageResult(
+                success = false,
+                error = "发送失败 status=${resp?.status} retCode=${resp?.retCode}（可能被禁言）"
+            )
+        }
+
+        // 发出后必须写入聊天记录（isBot=true）；回执里的 message_id 一并入档，
+        // 网友回复这条消息时引用解析（回复 #id）才能定位到它。
+        // 回执 data 是 MsgId 对象（ActionData<MsgId>），不是裸数字——
+        // 曾用 `as? Number` 恒为 null，机器人消息全部丢失 id（UUID 兜底行）
+        val sentMessageId = (resp?.data as? com.mikuac.shiro.dto.action.common.MsgId)?.messageId?.toLong()
+            ?: (resp?.data as? Number)?.toLong()
+        // content 存标记原文（与聊天记录同风格）：后续回复引用、prompt 圆环一致
+        chatHistoryService?.recordBotReply(input.conversationId, input.content, sentMessageId)
+
+        SendMessageResult(success = true)
     }
 
     /**

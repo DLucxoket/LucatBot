@@ -47,7 +47,7 @@ object FetchUrlTool : Tool<FetchUrlRequest, FetchUrlResult>() {
             return FetchUrlResult(url = url, success = false, error = "只支持 http/https 链接")
         }
         val maxChars = input.maxChars.coerceIn(200, 6_000)
-        return try {
+        return tryResult(onError = { FetchUrlResult(url = url, success = false, error = it) }) {
             val client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.ALWAYS)
@@ -60,13 +60,13 @@ object FetchUrlTool : Tool<FetchUrlRequest, FetchUrlResult>() {
                 .build()
             val response = client.send(request, HttpResponse.BodyHandlers.ofString(Charsets.UTF_8))
             if (response.statusCode() !in 200..399) {
-                return FetchUrlResult(url = url, success = false, error = "HTTP ${response.statusCode()}")
+                return@tryResult FetchUrlResult(url = url, success = false, error = "HTTP ${response.statusCode()}")
             }
             val contentType = response.headers().firstValue("content-type").orElse("").lowercase()
             val textLike = contentType.isEmpty() || listOf("text", "html", "json", "xml", "javascript")
                 .any { contentType.contains(it) }
             if (!textLike) {
-                return FetchUrlResult(url = url, success = false, error = "不是文本内容（$contentType）")
+                return@tryResult FetchUrlResult(url = url, success = false, error = "不是文本内容（$contentType）")
             }
             val body = response.body().orEmpty()
             val raw = if (contentType.contains("html") || body.trimStart().startsWith("<")) {
@@ -81,8 +81,6 @@ object FetchUrlTool : Tool<FetchUrlRequest, FetchUrlResult>() {
             } else {
                 FetchUrlResult(url = url, text = text.take(maxChars), success = true)
             }
-        } catch (e: Exception) {
-            FetchUrlResult(url = url, success = false, error = "${e.javaClass.simpleName}: ${e.message}")
         }
     }
 

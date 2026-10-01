@@ -31,7 +31,7 @@ object MemoryQueryTool : Tool<MemoryQueryRequest, MemoryQueryResult>() {
     override fun handle(input: MemoryQueryRequest): MemoryQueryResult {
         val service = memoryService ?: return MemoryQueryResult(success = false, error = "MemoryService 未绑定")
 
-        return try {
+        return tryResult(onError = { MemoryQueryResult(success = false, error = it) }) {
             val results = if (input.userId != null) {
                 service.getMemoriesOf(MemorySubject.user(input.userId))
             } else {
@@ -41,8 +41,6 @@ object MemoryQueryTool : Tool<MemoryQueryRequest, MemoryQueryResult>() {
                 memories = results.map { it.content },
                 success = true
             )
-        } catch (e: Exception) {
-            MemoryQueryResult(success = false, error = e.message)
         }
     }
 }

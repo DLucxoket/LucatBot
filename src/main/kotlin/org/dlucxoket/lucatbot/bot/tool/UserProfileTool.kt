@@ -19,33 +19,28 @@ object UserProfileTool : Tool<UserProfileRequest, UserProfileResult>() {
 
     override val inputClass: Class<UserProfileRequest> = UserProfileRequest::class.java
 
-    override fun handle(input: UserProfileRequest): UserProfileResult {
-        val b = bot ?: return UserProfileResult(
-            qqNumber = input.qqNumber, nickname = "", sex = "", age = 0,
-            found = false, error = "Bot 未绑定"
-        )
-
-        return try {
-            val actionData = b.getStrangerInfo(input.qqNumber, false)
-            val userInfo = actionData?.data
-            if (userInfo != null) {
-                UserProfileResult(
-                    qqNumber = userInfo.userId,
-                    nickname = userInfo.nickname,
-                    sex = userInfo.sex,
-                    age = userInfo.age,
-                    found = true
-                )
-            } else {
-                UserProfileResult(
-                    qqNumber = input.qqNumber, nickname = "", sex = "", age = 0,
-                    found = false, error = "未找到用户"
-                )
-            }
-        } catch (e: Exception) {
+    override fun handle(input: UserProfileRequest): UserProfileResult = runTool(
+        onError = { msg ->
             UserProfileResult(
                 qqNumber = input.qqNumber, nickname = "", sex = "", age = 0,
-                found = false, error = e.message
+                found = false, error = msg
+            )
+        }
+    ) { b ->
+        val actionData = b.getStrangerInfo(input.qqNumber, false)
+        val userInfo = actionData?.data
+        if (userInfo != null) {
+            UserProfileResult(
+                qqNumber = userInfo.userId,
+                nickname = userInfo.nickname,
+                sex = userInfo.sex,
+                age = userInfo.age,
+                found = true
+            )
+        } else {
+            UserProfileResult(
+                qqNumber = input.qqNumber, nickname = "", sex = "", age = 0,
+                found = false, error = "未找到用户"
             )
         }
     }

@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot.bot.tool
 
 import com.fasterxml.jackson.annotation.JsonAlias
 import org.dlucxoket.lucatbot.bot.LucatBot
+import org.dlucxoket.lucatbot.model.session.ConversationId
 
 /** 切换会话入参（type: private/group；target: QQ号/群号——宽容解析见 handle） */
 data class SwitchConversationRequest(
@@ -53,15 +54,16 @@ object SwitchConversationTool : Tool<SwitchConversationRequest, SwitchConversati
     override fun handle(input: SwitchConversationRequest): SwitchConversationResult {
         val bot = lucatBot ?: return SwitchConversationResult(success = false, error = "Bot 未绑定")
         // 宽容解析：target 可带会话前缀（private:123 / group:456），type 缺失时从前缀推断——
-        // 模型爱把会话 id 整个塞进来，报错也要给正确写法（下一轮它照着改）
+        // 模型爱把会话 id 整个塞进来，报错也要给正确写法（下一轮它照着改）。
+        // 前缀判定与拆分走 [ConversationId] 常量/parse（协议唯一解析点，勿再手写字符串）
         var type = input.type.trim().lowercase()
         var target = input.target.trim()
-        if (target.contains(":")) {
-            val prefix = target.substringBefore(":").lowercase()
-            if (prefix == "private" || prefix == "group") {
-                if (type.isEmpty()) type = prefix
-                target = target.substringAfter(":").trim()
-            }
+        // 前缀大小写不敏感（与旧逻辑一致：Private:123 也认）——按小写形态判定后走 parse
+        val lowerTarget = target.lowercase()
+        if (lowerTarget.startsWith(ConversationId.GROUP_PREFIX) || lowerTarget.startsWith(ConversationId.PRIVATE_PREFIX)) {
+            val parsed = ConversationId.parse(lowerTarget)
+            if (type.isEmpty()) type = if (parsed.isGroup) "group" else "private"
+            target = parsed.targetId.trim() // 冒号拆分收口在 parse 内——本处不再手碰分隔符
         }
         if (type != "private" && type != "group") {
             return SwitchConversationResult(
@@ -76,15 +78,13 @@ object SwitchConversationTool : Tool<SwitchConversationRequest, SwitchConversati
                     "{\"type\":\"$type\",\"target\":\"3981541235\"}"
             )
         }
-        return try {
+        return tryResult(onError = { SwitchConversationResult(success = false, error = it) }) {
             bot.requestConversationSwitch(type, target)
             SwitchConversationResult(
                 success = true,
                 switched = true,
                 note = "已请求切换到 $type:$target——当前会话随即结束，目标会话立即打开"
             )
-        } catch (e: Exception) {
-            SwitchConversationResult(success = false, error = "${e.javaClass.simpleName}: ${e.message}")
         }
     }
 }

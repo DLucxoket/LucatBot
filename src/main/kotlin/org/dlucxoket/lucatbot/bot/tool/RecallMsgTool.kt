@@ -14,14 +14,10 @@ object RecallMsgTool : Tool<RecallMsgRequest, RecallMsgResult>() {
     override val parameterHint: String = "JSON: {\"messageId\": 123}"
     override val inputClass: Class<RecallMsgRequest> = RecallMsgRequest::class.java
 
-    override fun handle(input: RecallMsgRequest): RecallMsgResult {
-        val b = bot ?: return RecallMsgResult(success = false, error = "Bot 未绑定")
-
-        return try {
-            b.deleteMsg(input.messageId)
-            RecallMsgResult(success = true)
-        } catch (e: Exception) {
-            RecallMsgResult(success = false, error = e.message)
-        }
+    override fun handle(input: RecallMsgRequest): RecallMsgResult = runTool(
+        onError = { RecallMsgResult(success = false, error = it) }
+    ) { b ->
+        b.deleteMsg(input.messageId)
+        RecallMsgResult(success = true)
     }
 }

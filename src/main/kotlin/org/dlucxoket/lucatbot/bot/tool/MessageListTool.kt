@@ -19,31 +19,23 @@ object MessageListTool : Tool<MessageListRequest, MessageListResult>() {
 
     override val inputClass: Class<MessageListRequest> = MessageListRequest::class.java
 
-    override fun handle(input: MessageListRequest): MessageListResult {
-        val b = bot ?: return MessageListResult(
-            targetId = input.targetId, success = false, error = "Bot 未绑定"
-        )
-
-        return try {
-            val actionData = if (input.type == "group") {
-                b.getGroupMsgHistory(input.targetId, null, 20, true)
-            } else {
-                b.getFriendMsgHistory(input.targetId, null, 20, true)
-            }
-
-            val messages = actionData?.data?.messages ?: emptyList()
-            val lastMessage = messages.lastOrNull()
-
-            MessageListResult(
-                targetId = input.targetId,
-                messageCount = messages.size,
-                lastMessage = lastMessage?.message ?: "",
-                success = true
-            )
-        } catch (e: Exception) {
-            MessageListResult(
-                targetId = input.targetId, success = false, error = e.message
-            )
+    override fun handle(input: MessageListRequest): MessageListResult = runTool(
+        onError = { MessageListResult(targetId = input.targetId, success = false, error = it) }
+    ) { b ->
+        val actionData = if (input.type == "group") {
+            b.getGroupMsgHistory(input.targetId, null, 20, true)
+        } else {
+            b.getFriendMsgHistory(input.targetId, null, 20, true)
         }
+
+        val messages = actionData?.data?.messages ?: emptyList()
+        val lastMessage = messages.lastOrNull()
+
+        MessageListResult(
+            targetId = input.targetId,
+            messageCount = messages.size,
+            lastMessage = lastMessage?.message ?: "",
+            success = true
+        )
     }
 }

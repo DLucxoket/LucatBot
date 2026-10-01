@@ -14,20 +14,16 @@ object GroupDetailTool : Tool<GroupDetailRequest, GroupDetailResult>() {
     override val parameterHint: String = "JSON: {\"groupId\": 123456}"
     override val inputClass: Class<GroupDetailRequest> = GroupDetailRequest::class.java
 
-    override fun handle(input: GroupDetailRequest): GroupDetailResult {
-        val b = bot ?: return GroupDetailResult(success = false, error = "Bot 未绑定")
-
-        return try {
-            val info = b.getGroupInfo(input.groupId, false)?.data
-            GroupDetailResult(
-                groupId = input.groupId,
-                groupName = info?.groupName ?: "",
-                memberCount = info?.memberCount ?: 0,
-                maxMemberCount = info?.maxMemberCount ?: 0,
-                success = true
-            )
-        } catch (e: Exception) {
-            GroupDetailResult(success = false, error = e.message)
-        }
+    override fun handle(input: GroupDetailRequest): GroupDetailResult = runTool(
+        onError = { GroupDetailResult(success = false, error = it) }
+    ) { b ->
+        val info = b.getGroupInfo(input.groupId, false)?.data
+        GroupDetailResult(
+            groupId = input.groupId,
+            groupName = info?.groupName ?: "",
+            memberCount = info?.memberCount ?: 0,
+            maxMemberCount = info?.maxMemberCount ?: 0,
+            success = true
+        )
     }
 }

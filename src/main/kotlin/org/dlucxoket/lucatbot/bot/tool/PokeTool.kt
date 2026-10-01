@@ -14,25 +14,21 @@ object PokeTool : Tool<PokeRequest, PokeResult>() {
     override val parameterHint: String = "JSON: {\"conversationId\": \"private:123\", \"userId\": 456}"
     override val inputClass: Class<PokeRequest> = PokeRequest::class.java
 
-    override fun handle(input: PokeRequest): PokeResult {
-        val b = bot ?: return PokeResult(success = false, error = "Bot 未绑定")
+    override fun handle(input: PokeRequest): PokeResult = runTool(
+        onError = { PokeResult(success = false, error = it) }
+    ) { b ->
+        val parts = input.conversationId.split(":")
+        if (parts.size != 2) return@runTool PokeResult(success = false, error = "会话ID格式错误")
 
-        return try {
-            val parts = input.conversationId.split(":")
-            if (parts.size != 2) return PokeResult(success = false, error = "会话ID格式错误")
-
-            when (parts[0]) {
-                "group" -> {
-                    val groupId = parts[1].toLongOrNull()
-                        ?: return PokeResult(success = false, error = "无效群号: ${parts[1]}")
-                    b.sendGroupPoke(groupId, input.userId)
-                }
-                "private" -> b.sendFriendPoke(input.userId)
-                else -> return PokeResult(success = false, error = "未知会话类型")
+        when (parts[0]) {
+            "group" -> {
+                val groupId = parts[1].toLongOrNull()
+                    ?: return@runTool PokeResult(success = false, error = "无效群号: ${parts[1]}")
+                b.sendGroupPoke(groupId, input.userId)
             }
-            PokeResult(success = true)
-        } catch (e: Exception) {
-            PokeResult(success = false, error = e.message)
+            "private" -> b.sendFriendPoke(input.userId)
+            else -> return@runTool PokeResult(success = false, error = "未知会话类型")
         }
+        PokeResult(success = true)
     }
 }

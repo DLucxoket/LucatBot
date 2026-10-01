@@ -90,6 +90,55 @@ abstract class Tool<I, O> {
     protected abstract fun handle(input: I): O
 
     /**
+     * 统一「取 Bot + 异常转错误结果」模板——消掉各 Tool 手写的
+     * `val b = bot ?: return XResult(success = false, error = "Bot 未绑定")`
+     * + `return try { … } catch (e: Exception) { XResult(…) }` 样板
+     *
+     * 语义（迁移逐点保持等价）：
+     * 1. `bot == null` → 返回 `onError("Bot 未绑定")`（迁移点原文案即此）；
+     * 2. [block] 正常执行 → 其结果原样透出；
+     * 3. [block] 抛异常 → 返回 `onError("异常简单类名: 异常消息")`——
+     *    **统一错误文案**（此前混用裸 `e.message` 与带类名两种写法），
+     *    与 [ToolCatalog] 报错 JSON 同格式。
+     *
+     * 用法：[block] 内需要提前退出（参数校验失败等）时写
+     * `return@runTool 结果`（lambda 局部返回，语义与原手写 `return` 一致）；
+     * [crossinline] 禁止的只是从 `handle` 里"跳出去"的非局部 return。
+     *
+     * 错误契约：[onError] 构造的结果必须 `success = false`
+     * （`ToolErrorContractTest` 全量守卫，见 AGENTS.md）。
+     */
+    protected inline fun <T> runTool(
+        crossinline onError: (String) -> T,
+        crossinline block: (Bot) -> T
+    ): T {
+        val b = bot ?: return onError("Bot 未绑定")
+        return try {
+            block(b)
+        } catch (e: Exception) {
+            onError("${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /**
+     * 无 Bot 依赖工具的「异常转错误结果」兜底（判空类依赖保留手写——
+     * 各服务未绑定文案不同：ChatHistoryService / MemoryService 等）
+     *
+     * 语义：[block] 正常 → 结果原样透出；抛异常 → `onError("异常简单类名: 异常消息")`，
+     * 与 [runTool] 同一统一文案。提前退出写 `return@tryResult 结果`。
+     *
+     * 错误契约同 [runTool]：[onError] 构造的结果必须 `success = false`。
+     */
+    protected inline fun <T> tryResult(
+        crossinline onError: (String) -> T,
+        crossinline block: () -> T
+    ): T = try {
+        block()
+    } catch (e: Exception) {
+        onError("${e.javaClass.simpleName}: ${e.message}")
+    }
+
+    /**
      * JSON 边界入口（模板方法，LLM API 层调用）
      *
      * 流程：JSON → 反序列化 OOP → [handle] → 序列化 JSON
