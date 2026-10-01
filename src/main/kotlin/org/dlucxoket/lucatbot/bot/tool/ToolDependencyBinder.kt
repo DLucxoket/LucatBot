@@ -4,6 +4,7 @@ import jakarta.annotation.PostConstruct
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.request.PendingRequestStore
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
@@ -21,7 +22,8 @@ import org.springframework.stereotype.Component
 class ToolDependencyBinder(
     private val memoryService: MemoryService,
     private val chatHistoryService: ChatHistoryService,
-    private val lucatBot: LucatBot
+    private val lucatBot: LucatBot,
+    private val pendingRequestStore: PendingRequestStore
 ) {
     private val log = LoggerFactory.getLogger(ToolDependencyBinder::class.java)
 
@@ -30,7 +32,8 @@ class ToolDependencyBinder(
         val services = ToolServices(
             memoryService = memoryService,
             chatHistoryService = chatHistoryService,
-            lucatBot = lucatBot
+            lucatBot = lucatBot,
+            pendingRequestStore = pendingRequestStore
         )
         // 与发现/调用共享同一批实例（ToolDiscovery 单例列表）
         val tools = ToolDiscovery.getTools()

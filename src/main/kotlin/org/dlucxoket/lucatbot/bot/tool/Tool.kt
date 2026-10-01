@@ -6,6 +6,7 @@ import com.mikuac.shiro.core.Bot
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
+import org.dlucxoket.lucatbot.bot.request.PendingRequestStore
 
 /**
  * Tool 层共享服务聚合
@@ -14,11 +15,15 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryService
  * [ToolDependencyBinder] 在 Spring 启动时构造一次本对象，
  * 逐个调用 [Tool.bindServices] 完成绑定——新增带依赖的 Tool 只需
  * override [Tool.bindServices]，无需改 Binder 的字段清单。
+ *
+ * @param pendingRequestStore 待处理请求队列（群邀请/加群申请/好友请求）——
+ *   生产由 Binder 注入 Spring 单例；默认新实例供测试隔离（各测独立队列）
  */
 data class ToolServices(
     val memoryService: MemoryService,
     val chatHistoryService: ChatHistoryService,
-    val lucatBot: LucatBot
+    val lucatBot: LucatBot,
+    val pendingRequestStore: PendingRequestStore = PendingRequestStore()
 )
 
 /**

@@ -59,6 +59,10 @@ internal class MainPlugin: BotPlugin() {
     @Autowired
     private lateinit var readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService
 
+    /** 待处理请求队列（群邀请/加群申请/好友请求）——入队后由 LLM 经 Tool 审批 */
+    @Autowired
+    private lateinit var pendingRequests: org.dlucxoket.lucatbot.bot.request.PendingRequestStore
+
     /** 戳一戳旁路直接用的会话内决策智能体 */
     private val conversationAgent = ConversationAgent()
 
@@ -123,8 +127,49 @@ internal class MainPlugin: BotPlugin() {
     }
 
     override fun onFriendAddRequest(bot: Bot, event: FriendAddRequestEvent): Int {
-        bot.setFriendAddRequest(event.flag, true, null)
+        // 旧版硬编码无条件自动同意（机器人对「谁加好友」零感知）；改为
+        // 入队 + 记操作日志，由 LLM 看验证消息后经 FriendRequestTool 决策
+        val pending = pendingRequests.add(
+            kind = org.dlucxoket.lucatbot.bot.request.PendingRequestStore.Kind.FRIEND,
+            flag = event.flag,
+            userId = event.userId,
+            comment = event.comment
+        )
+        actionLog.append("收到好友请求：QQ ${event.userId}（${event.comment ?: "无验证消息"}）→ 待审批 #${pending.seq}")
+        log.info("好友请求入队 #{}：QQ {}（{}）", pending.seq, event.userId, event.comment)
+        // 缩短空闲休眠：待审批请求值得尽快看（LLM 下一轮列表即见操作日志）
+        mainLoopController.notifyUrgent()
         return super.onFriendAddRequest(bot, event)
+    }
+
+    /**
+     * 收到入群邀请 / 加群申请（此前该回调未实现——事件被静默忽略）
+     *
+     * subType：`invite` = 机器人被邀请进群；`add` = 有人申请加入机器人管理的群。
+     * 两类都入队 + 记日志，由 LLM 经 [org.dlucxoket.lucatbot.bot.tool.GroupRequestTool]
+     * 决策同意/拒绝（与好友请求同一条「模拟真人审批」链路）。
+     */
+    override fun onGroupAddRequest(bot: Bot, event: com.mikuac.shiro.dto.event.request.GroupAddRequestEvent): Int {
+        val invite = event.subType.equals("invite", ignoreCase = true)
+        val kind = if (invite) {
+            org.dlucxoket.lucatbot.bot.request.PendingRequestStore.Kind.GROUP_INVITE
+        } else {
+            org.dlucxoket.lucatbot.bot.request.PendingRequestStore.Kind.GROUP_JOIN
+        }
+        val pending = pendingRequests.add(
+            kind = kind,
+            flag = event.flag,
+            subType = event.subType,
+            groupId = event.groupId,
+            userId = event.userId,
+            invitorId = event.invitorId,
+            comment = event.comment
+        )
+        val label = if (invite) "入群邀请" else "加群申请"
+        actionLog.append("收到${label}：群 ${event.groupId}（${if (invite) "邀请人" else "申请人"} ${event.userId}）→ 待审批 #${pending.seq}")
+        log.info("{}入队 #{}：群 {} 用户 {} subType={}", label, pending.seq, event.groupId, event.userId, event.subType)
+        mainLoopController.notifyUrgent()
+        return super.onGroupAddRequest(bot, event)
     }
 
     /**
