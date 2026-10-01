@@ -15,6 +15,7 @@ import org.dlucxoket.lucatbot.bot.loop.MainLoopController
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.tool.ToolDependencyBinder
 import org.dlucxoket.lucatbot.model.message.ChatMessage
+import org.dlucxoket.lucatbot.model.session.ConversationId
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -146,6 +147,8 @@ internal class MainPlugin: BotPlugin() {
         try {
             log.info("被戳一戳")
 
+            // 会话键拼装收口 ConversationId（协议唯一拼装点；本方法复用 6 次）
+            val pokeConvId = ConversationId.private(event.userId).asKey()
             val request = ConversationRequest(
                 persona = lucatBot.persona,
                 mood = lucatBot.mood,
@@ -153,10 +156,10 @@ internal class MainPlugin: BotPlugin() {
                 conversationType = "私聊",
                 conversationName = event.userId.toString(),
                 conversationIdentity = "私聊：网友 QQ ${event.userId}" + (
-                    chatHistoryService.peerDisplayName("private:${event.userId}", event.userId)
+                    chatHistoryService.peerDisplayName(pokeConvId, event.userId)
                         ?.let { "，名字「$it」" } ?: ""
                     ),
-                conversationId = "private:${event.userId}",
+                conversationId = pokeConvId,
                 selfQq = bot.selfId,
                 newMessageNotes = listOf("（戳一戳）QQ号 ${event.userId} 戳了你一下"),
                 hint = "这是戳一戳场景：想回应就 send 一句短的（如「干嘛」「戳我干嘛」），不想理就 return"
@@ -172,18 +175,16 @@ internal class MainPlugin: BotPlugin() {
                     // data 是 MsgId 对象（as? Number 曾恒为 null → 全部 UUID 兜底行）
                     val receiptId = (resp.data as? com.mikuac.shiro.dto.action.common.MsgId)?.messageId?.toLong()
                         ?: (resp.data as? Number)?.toLong()
-                    chatHistoryService.recordBotReply(
-                        "private:${event.userId}", content, receiptId
-                    )
-                    sessionManager.addMessage("private:${event.userId}", lucatBot.persona.name, content, isBot = true)
-                    actionLog.append("戳一戳回应：$content", conversationId = "private:${event.userId}")
-                    log.info("戳一戳回应: $content")
+                    chatHistoryService.recordBotReply(pokeConvId, content, receiptId)
+                    sessionManager.addMessage(pokeConvId, lucatBot.persona.name, content, isBot = true)
+                    actionLog.append("戳一戳回应：$content", conversationId = pokeConvId)
+                    log.info("戳一戳回应: {}", content)
                 } else {
                     // 被禁言等发送失败（Shiro 已打 ERROR 日志）——不写记录，直接返回
                     log.warn("戳一戳回应发送失败 status={} retCode={}（可能被禁言）", resp?.status, resp?.retCode)
                 }
             } else {
-                actionLog.append("戳一戳：不回应", conversationId = "private:${event.userId}")
+                actionLog.append("戳一戳：不回应", conversationId = pokeConvId)
                 log.info("戳一戳：不回应")
             }
         } catch (e: Exception) {

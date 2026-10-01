@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot.bot.readstate
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.chathistory.ReadStateRepository
+import org.dlucxoket.lucatbot.model.session.ConversationId
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
@@ -65,7 +66,7 @@ class ReadStateService(
                     .forEach { r ->
                         restored += LucatBot.UnreadMessage(
                             conversationId = convId,
-                            conversationType = if (convId.startsWith("group:")) {
+                            conversationType = if (ConversationId.parse(convId).isGroup) {
                                 LucatBot.ConversationType.GROUP
                             } else {
                                 LucatBot.ConversationType.PRIVATE

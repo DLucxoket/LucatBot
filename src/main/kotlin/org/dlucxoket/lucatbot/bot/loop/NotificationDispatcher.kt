@@ -12,6 +12,7 @@ import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.persona.TimeAwareness
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.model.event.message.MessageEvent
+import org.dlucxoket.lucatbot.model.session.ConversationId
 import org.slf4j.LoggerFactory
 
 /**
@@ -52,8 +53,9 @@ class NotificationDispatcher(
     fun handle(modelEvent: MessageEvent, content: String, isAtMe: Boolean, isAtAll: Boolean) {
         try {
             val convId = modelEvent.conversationId
-            val isGroup = convId.startsWith("group:")
-            val targetId = convId.substringAfter(":")
+            val cid = ConversationId.parse(convId)
+            val isGroup = cid.isGroup
+            val targetId = cid.targetId
             val senderName = modelEvent.sender.displayName
 
             // 处于聊天界面 → 附当前会话的聊天记录（外来源通知打断前的现场）
@@ -129,7 +131,7 @@ class NotificationDispatcher(
 
     /** 会话展示名（给 LLM 看；群取不到名时留空串，私聊取对方昵称） */
     private fun conversationLabel(conversationId: String, peerId: Long): String {
-        if (conversationId.startsWith("group:")) return ""
+        if (ConversationId.parse(conversationId).isGroup) return ""
         return chatHistoryService.peerDisplayName(conversationId, peerId).orEmpty()
     }
 }

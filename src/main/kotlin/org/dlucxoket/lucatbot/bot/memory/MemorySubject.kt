@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot.bot.memory
 
+import org.dlucxoket.lucatbot.model.session.ConversationId
+
 /**
  * 记忆主体——记忆键空间的隔离单位
  *
@@ -34,11 +36,13 @@ data class MemorySubject(
         /**
          * 从会话 ID（`private:x` / `group:x`）推导记忆主体。
          *
-         * 解析失败（无 id 或未知前缀）按 USER 兜底，与历史行为兼容。
+         * 解析走 [ConversationId.parse]（协议唯一解析点）；数字解析失败按 0L、
+         * 未知前缀按 USER 兜底，与历史行为兼容。
          */
         fun fromConversation(conversationId: String): MemorySubject {
-            val id = conversationId.substringAfter(":").toLongOrNull() ?: 0L
-            return if (conversationId.startsWith("group:")) group(id) else user(id)
+            val cid = ConversationId.parse(conversationId)
+            val id = cid.targetIdOrNull ?: 0L
+            return if (cid.isGroup) group(id) else user(id)
         }
     }
 }

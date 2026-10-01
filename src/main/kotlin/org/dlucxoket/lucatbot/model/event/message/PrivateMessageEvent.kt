@@ -18,5 +18,6 @@ open class PrivateMessageEvent(
     timestamp: Long,
     messageId: Long? = null
 ) : org.dlucxoket.lucatbot.model.event.message.MessageEvent(message, sender, timestamp, messageId) {
-    override val conversationId: String = "private:${sender.qqNumber}"
+    /** 拼装走 [org.dlucxoket.lucatbot.model.session.ConversationId]（协议唯一拼装点） */
+    override val conversationId: String = org.dlucxoket.lucatbot.model.session.ConversationId.private(sender.qqNumber).asKey()
 }
