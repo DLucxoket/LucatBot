@@ -183,6 +183,8 @@ class ConversationController(
         } finally {
             // 「返回消息列表」由 RETURN 分支带 reason 记入（本处不再重复）；
             // 中断/异常退出路径各自在中断点补记，异常有 log.error 兜底
+            // 退出即进冷却：选会话短期内不再选它（防刚退回又马上进来空转）
+            lucatBot.markConversationLeft(conversationId)
             lucatBot.backToConversationList()
         }
     }

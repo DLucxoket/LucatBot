@@ -160,6 +160,8 @@ class MessageListController(
         val now = System.currentTimeMillis()
 
         for ((convId, count) in unread) {
+            // 会话冷却：刚退出的会话短期内不进候选（防「退回列表又马上进来」反复横跳）
+            if (!lucatBot.conversationReady(convId)) continue
             val msgs = lucatBot.peekUnread(convId)
             val last = msgs.lastOrNull()
             val isGroup = convId.startsWith("group:")
@@ -180,9 +182,9 @@ class MessageListController(
             )
         }
 
-        // 已读但最近活跃的会话（无未读也展示，模拟「看过列表」）
+        // 已读但最近活跃的会话（无未读也展示，模拟「看过列表」）；冷却中的跳过
         val recent = sessionManager.recentConversationIds(withinMinutes = 24 * 60)
-            .filter { it !in unread.keys }
+            .filter { it !in unread.keys && lucatBot.conversationReady(it) }
         for (convId in recent.take(5)) {
             val entry = sessionManager.getLastMessage(convId) ?: continue
             val isGroup = convId.startsWith("group:")
@@ -252,7 +254,7 @@ class MessageListController(
         if (cap == 0) return emptyList()
 
         return sessionManager.recentConversationIds(withinMinutes = 24 * 60)
-            .filter { it.startsWith("private:") }
+            .filter { it.startsWith("private:") && lucatBot.conversationReady(it) }
             .take(cap)
             .map { convId ->
                 val subject = MemorySubject.fromConversation(convId)

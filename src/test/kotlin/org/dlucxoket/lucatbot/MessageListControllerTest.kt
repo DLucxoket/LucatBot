@@ -32,11 +32,15 @@ class MessageListControllerTest {
         /** 传入即可在外部断言 todo_add / todo_done 副作用 */
         todoService: TodoService = TodoService(
             JsonFileTodoRepository(File.createTempFile("todos", ".json").absolutePath)
-        )
+        ),
+        /** 传入即可在外部操作未读/冷却（会话冷却测试） */
+        lucatBot: LucatBot = LucatBot(),
+        /** 传入即可让某些会话进「最近活跃」列表 */
+        sessionManager: SessionManager = SessionManager()
     ): Pair<MessageListController, ActionLog> {
         val controller = MessageListController(
-            lucatBot = LucatBot(),
-            sessionManager = SessionManager(),
+            lucatBot = lucatBot,
+            sessionManager = sessionManager,
             memoryService = MemoryService(
                 JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
             ),
@@ -173,5 +177,31 @@ class MessageListControllerTest {
         controller.pickSession(fromIdleWake = false)
         assertTrue(llm.prompts[0].contains("### 待办"), "待办段固定出现")
         assertTrue(llm.prompts[0].contains("（无待办）"), "空清单保底文案")
+    }
+
+    @Test
+    fun `conversation in cooldown is hidden from list until it passes`() {
+        // 实盘：群里只回了个表情包 → return → 下一轮 pick 又带着新未读进同一群 →
+        // 立刻又 return……几秒一轮反复横跳。退出即冷却，冷却期内不进候选
+        val sessionManager = SessionManager()
+        sessionManager.addMessage("group:811788212", "群友", "还在聊", isBot = false)
+        val lucatBot = LucatBot()
+        lucatBot.markConversationLeft("group:811788212")
+
+        val cooling = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val (c1, _) = buildController(cooling, lucatBot = lucatBot, sessionManager = sessionManager)
+        c1.pickSession(fromIdleWake = false)
+        assertFalse(cooling.prompts[0].contains("811788212"),
+            "冷却中的会话不进候选：${cooling.prompts[0]}")
+
+        // 冷却期满 → 恢复出现（未读/最近活跃仍在就会被再选）
+        lucatBot.markConversationLeft(
+            "group:811788212",
+            at = System.currentTimeMillis() - LucatBot.CONVERSATION_COOLDOWN_MS - 1_000
+        )
+        val after = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val (c2, _) = buildController(after, lucatBot = lucatBot, sessionManager = sessionManager)
+        c2.pickSession(fromIdleWake = false)
+        assertTrue(after.prompts[0].contains("811788212"), "冷却期满恢复出现：${after.prompts[0]}")
     }
 }

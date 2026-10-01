@@ -110,6 +110,33 @@ class LucatBot {
     fun suspectedBanSince(conversationId: String): Long? = suspectedBans[conversationId]
 
     /**
+     * 会话冷却——**刚退出的会话短时间内不再被选中**
+     *
+     * 实盘：群里对方只回了个表情包、无新内容可接 → return → 下一轮 pick 带着
+     * 新未读又进同一个群 → 立刻又 return……几秒一轮反复横跳（action_log 里
+     * 「进入群聊 / 返回消息列表」交替刷屏）。退出时打点，冷却期内该会话
+     * **不进选会话候选**；冷却期满未读仍在自然会再进去。
+     * 通知通道的「当场跳转」不走 pick，不受此限。
+     */
+    private val conversationLeftAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** 退出会话时打点（[org.dlucxoket.lucatbot.bot.loop.ConversationController.run] 的 finally 里调用） */
+    fun markConversationLeft(conversationId: String, at: Long = System.currentTimeMillis()) {
+        conversationLeftAt[conversationId] = at
+    }
+
+    /** 该会话是否已过冷却（true = 可以被选会话选中） */
+    fun conversationReady(conversationId: String, now: Long = System.currentTimeMillis()): Boolean {
+        val left = conversationLeftAt[conversationId] ?: return true
+        return now - left >= CONVERSATION_COOLDOWN_MS
+    }
+
+    companion object {
+        /** 退出会话后的冷却时长：期间选会话不把该会话放进候选 */
+        const val CONVERSATION_COOLDOWN_MS = 120_000L
+    }
+
+    /**
      * 当前会话的待插入新消息队列
      *
      * 会话内决策循环进行中到来的消息先进这里，不打断 LLM 调用；

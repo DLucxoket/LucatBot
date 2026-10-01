@@ -823,6 +823,23 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `leaving conversation starts cooldown against immediate re-entry`() {
+        // 退出即打点冷却：选会话在 2 分钟内不会再选它（防退回列表又马上进来）
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, lucatBot, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertFalse(lucatBot.conversationReady("private:123"), "刚退出 → 冷却中")
+        assertTrue(lucatBot.conversationReady("group:999"), "其他会话不受影响")
+        lucatBot.markConversationLeft(
+            "private:123",
+            at = System.currentTimeMillis() - LucatBot.CONVERSATION_COOLDOWN_MS - 1_000
+        )
+        assertTrue(lucatBot.conversationReady("private:123"), "冷却期满恢复可选")
+    }
+
+    @Test
     fun `entering conversation advances read watermark`() {
         // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
         val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(
