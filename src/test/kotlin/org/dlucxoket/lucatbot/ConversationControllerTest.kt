@@ -773,6 +773,9 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("QQ号"), "关键词取材含 QQ号")
         assertTrue(prompt.contains("回复、引用里出现的词"), "关键词取材含回复/引用里的词")
         assertTrue(prompt.contains("拿不准要不要查就写上"), "鼓励多写、别编")
+        assertTrue(prompt.contains("该搜就搜"), "勤奋调用的硬要求存在")
+        assertTrue(prompt.contains("先搜再答") && prompt.contains("只有纯闲聊"),
+            "点名何时必须搜（依赖过去的信息）与何时可省（纯闲聊）：$prompt")
         assertTrue(prompt.contains("同时") && prompt.contains("下一轮"),
             "说明可与 send 同时输出、结果下一轮可见")
     }
