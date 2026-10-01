@@ -14,7 +14,9 @@ import org.dlucxoket.lucatbot.bot.llm.LLM
  * 解析失败兜底 [ConversationDecision.FALLBACK]（RETURN），避免卡死在会话里。
  */
 class ConversationAgent(
-    llm: LLM = LLM.DEFAULT
+    llm: LLM = LLM.DEFAULT,
+    /** 解析失败的重试次数（附纠正提示重新问；仍失败才兜底 return） */
+    private val maxParseRetries: Int = 2
 ) : Agent<ConversationRequest, ConversationDecision>(llm) {
     override val description: String = """
         会话内决策智能体，决定在聊天会话里接下来做什么：
@@ -28,8 +30,21 @@ class ConversationAgent(
         val systemPrompt = buildSystemPrompt(input)
         val userContent = buildUserContent(input)
         // 图片通道：附件随请求走（无图时等价两参版；测试替身默认忽略图片）
-        val llmOutput = llm.ask(systemPrompt, userContent, input.images)
-        return ConversationDecision.parse(llmOutput)
+        var decision = ConversationDecision.parse(llm.ask(systemPrompt, userContent, input.images))
+        // **解析失败先重试**（附纠正提示重新问），重试耗尽才兜底 return——
+        // 实盘：一次「未知 action / 缺字段」就整轮退出会话太浪费，多数是偶发手误
+        var retried = 0
+        while (decision.isFallback && retried < maxParseRetries) {
+            retried++
+            val nudge = buildString {
+                append("\n\n（注意：你上一次的输出没能解析成决策 JSON——请**只输出纯 JSON**，")
+                append("不要多余文字、不要别的包裹形态，结构为 ")
+                append("{\"action\":\"…\",\"params\":{…},\"reason\":\"…\"}，")
+                append("action 只能是 read_more / send / stay / return / list_tools / tool / view_images）")
+            }
+            decision = ConversationDecision.parse(llm.ask(systemPrompt, userContent + nudge, input.images))
+        }
+        return decision
     }
 
     /** 指令与稳定状态（人格/状态/记忆/待办/操作日志/爬楼状态/输出格式/约束）→ system 消息 */

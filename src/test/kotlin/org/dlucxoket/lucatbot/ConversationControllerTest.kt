@@ -1865,6 +1865,37 @@ class ConversationAgentFallbackTest {
     }
 
     @Test
+    fun `parse failure retries with corrective nudge before giving up`() {
+        // 解析失败先重试（附纠正提示），别一失败就整轮退出会话
+        val llm = FakeLLM(mutableListOf(
+            "我不是JSON",
+            """{"action":""", // 截断的手误
+            """{"action":"stay","params":{"seconds":5},"reason":"重试成功"}"""
+        ))
+        val agent = ConversationAgent(llm)
+
+        val d = agent.processObject(ConversationRequest())
+
+        assertEquals(3, llm.prompts.size, "失败两次、第三次成功（共 3 次调用）")
+        assertEquals(ConversationAction.STAY, d.action, "重试拿到有效决策")
+        assertEquals("重试成功", d.reason)
+        assertTrue(llm.prompts[1].contains("只输出纯 JSON"), "重试带纠正提示：${llm.prompts[1]}")
+        assertTrue(llm.prompts[2].contains("只输出纯 JSON"), "第二次重试同样带提示")
+    }
+
+    @Test
+    fun `exhausted retries fall back to return after limited attempts`() {
+        val llm = FakeLLM(mutableListOf("胡说1", "胡说2", "胡说3", "胡说4"))
+        val agent = ConversationAgent(llm) // 默认 maxParseRetries = 2
+
+        val d = agent.processObject(ConversationRequest())
+
+        assertEquals(ConversationAction.RETURN, d.action, "耗尽重试才兜底 return")
+        assertTrue(d.isFallback, "是兜底结果（不是模型真说了 return）")
+        assertEquals(3, llm.prompts.size, "1 次原始 + 2 次重试，不多打")
+    }
+
+    @Test
     fun `prompt contains action log`() {
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val agent = ConversationAgent(llm)

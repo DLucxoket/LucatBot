@@ -61,6 +61,8 @@ data class ConversationDecision(
     @JsonProperty("memory_queries")
     val memoryQueries: List<String> = emptyList()
 ) {
+    /** 解析失败的兜底结果（不是模型真说了 return）——[ConversationAgent] 据此重试 */
+    val isFallback: Boolean get() = this === FALLBACK
     /** send 的正文——仅旧字符串写法（`"content": "纯文本"`）时非 null；数组写法为 null */
     val content: String? get() = params["content"] as? String
 
