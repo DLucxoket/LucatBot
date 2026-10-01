@@ -182,6 +182,9 @@ class ConversationController(
         // 连续「停留且没人接话」的次数（有新消息即清零）——stay 几次仍无人回应
         // 就该离开：hint 升级要求 return，模型仍不走时由 maxIdleStays 强制兜底
         var stayStreak = 0
+        // 记忆搜索结果（LLM 经顶层 memory_queries 请求）：**一次性**注入下一轮
+        // 「短期记忆」段——没请求时该段与原来逐字相同
+        val pendingMemoryHits = mutableListOf<String>()
         // 发送失败状态（注入下一轮 prompt 通知 LLM，由它决定去留；连续失败达上限强制收尾）
         var sendFailureNote: String? = null
         var sendFailStreak = 0
@@ -281,6 +284,16 @@ class ConversationController(
 
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）
             val reachedHistoryStart = historyResult.messages.size < historyCount
+            // 上一轮 memory_queries 的搜索结果 → 追加在记忆段末尾（一次性，
+            // 取走即清；没有请求过 → 空串，记忆段与原来完全一致）
+            val memoryHitsBlock = if (pendingMemoryHits.isEmpty()) {
+                ""
+            } else {
+                val block = "\n【记忆搜索结果（你上一轮用 memory_queries 请求的关键词，仅本轮可见）】\n" +
+                    pendingMemoryHits.joinToString("\n") { "- $it" }
+                pendingMemoryHits.clear()
+                block
+            }
             val request = ConversationRequest(
                 persona = lucatBot.persona,
                 mood = lucatBot.mood,
@@ -294,7 +307,7 @@ class ConversationController(
                 // 不再只注入当前会话；缺的细节由 LLM 经 MemoryQueryTool 关键词搜
                 shortTermMemory = memoryService.getMemoryOverview(
                     primary = MemorySubject.fromConversation(conversationId)
-                ) + sessionManager.getFatigueHint(conversationId),
+                ) + memoryHitsBlock + sessionManager.getFatigueHint(conversationId),
                 todos = todoService.summaryForPrompt(),
                 actionLog = actionLog.dump(),
                 recentMessages = recentLines,
@@ -328,6 +341,8 @@ class ConversationController(
             // send 动作的 remember 延后到发送成功才写（防「没发出去却记了『我回复了』」）；
             // 上一轮发送仍失败（sendFailureNote 未清）期间，非 send 动作的 remember
             // 一律忽略——失败现场 LLM 补记的多与没发出的消息相关，防假记忆
+            // memory_queries：**当轮**关键词搜，结果注入**下一轮**的「短期记忆」段
+            searchMemories(decision, pendingMemoryHits)
             val deferredRemember = applyDecisionSideEffects(
                 decision, conversationId,
                 suppressRemember = sendFailureNote != null
@@ -692,6 +707,27 @@ class ConversationController(
             todoSettlement.settle(ref, conversationId)
         }
         return deferredRemember
+    }
+
+    /**
+     * 执行本轮的 memory_queries（顶层可选数组：人名/QQ号/聊天里的词/想不起来的细节）
+     * **全局关键词搜**（不限主体——人名、QQ号 常跨会话），每词最多取 3 条、
+     * 每轮最多 3 词（防一次甩一堆关键词）；结果写进 [sink]，下一轮组请求时
+     * 追加到「短期记忆」段末尾后清空（**没请求过 → 记忆段与原来完全一致**）。
+     */
+    private fun searchMemories(decision: ConversationDecision, sink: MutableList<String>) {
+        decision.memoryQueries.take(3).forEach { query ->
+            try {
+                val hits = memoryService.search(query).take(3)
+                sink += "「$query」：" +
+                    if (hits.isEmpty()) "（没搜到）" else hits.joinToString("；") { it.content }
+                log.info("记忆搜索「{}」→ {} 条", query, hits.size)
+            } catch (e: Exception) {
+                log.warn("记忆搜索失败（{}）: {}", query, e.message)
+                sink += "「$query」：（搜索失败）"
+            }
+        }
+        while (sink.size > 8) sink.removeAt(0) // 只保留最近几条，防长期膨胀
     }
 
     /** 写一条短期记忆 + 操作日志（失败只 log，不中断主循环） */

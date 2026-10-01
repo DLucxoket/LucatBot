@@ -45,6 +45,8 @@ enum class ConversationAction {
  * @param remember 值得长期记住的一句话（可选，写入短期记忆）
  * @param todo_add 新增待办内容（可选）
  * @param todo_done 完成待办的 id 或内容片段（可选）
+ * @param memory_queries 想搜记忆的关键词数组（可选；人名/QQ号/聊天里的词/想不起来的细节）——
+ *   与任何动作同时输出，编排层**当轮搜**、结果注入**下一轮** prompt 的「短期记忆」段
  */
 data class ConversationDecision(
     val action: ConversationAction,
@@ -55,7 +57,9 @@ data class ConversationDecision(
     @JsonProperty("todo_add")
     val todo_add: String? = null,
     @JsonProperty("todo_done")
-    val todo_done: String? = null
+    val todo_done: String? = null,
+    @JsonProperty("memory_queries")
+    val memoryQueries: List<String> = emptyList()
 ) {
     /** send 的正文——仅旧字符串写法（`"content": "纯文本"`）时非 null；数组写法为 null */
     val content: String? get() = params["content"] as? String
@@ -216,6 +220,11 @@ data class ConversationDecision(
             val remember = node.get("remember")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
             val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
             val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
+            // 记忆搜索关键词（可选数组；缺省/非数组/空 → 空列表 = 不动记忆段 prompt）
+            val memoryQueries = node.get("memory_queries")?.takeIf { it.isArray }
+                ?.filter { !it.isNull }
+                ?.mapNotNull { it.asText()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                ?: emptyList()
             // SEND 必须带正文，否则视为无效决策兜底退出
             if (action == ConversationAction.SEND && params["content"]?.toString().isNullOrBlank()) {
                 return fail(llmOutput, "send 动作缺 content")
@@ -226,7 +235,8 @@ data class ConversationDecision(
                 reason = reason,
                 remember = remember,
                 todo_add = todoAdd,
-                todo_done = todoDone
+                todo_done = todoDone,
+                memoryQueries = memoryQueries
             )
         }
     }

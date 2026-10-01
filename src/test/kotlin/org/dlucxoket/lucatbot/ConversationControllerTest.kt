@@ -683,6 +683,50 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `memory_queries results injected into next prompt memory section once`() {
+        // 可选字段：与 send 同时输出关键词 → 当轮搜，结果下一轮挂在「短期记忆」段末尾
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-mq", ".json").absolutePath)
+        )
+        memoryService.rememberEvent(MemorySubject.user(123L), "他最喜欢的饮料是可乐")
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"我想想"},"memory_queries":["可乐"],"reason":"回忆一下"}""",
+            """{"action":"send","params":{"content":"好嘞"}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, _) = buildController(llm, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val second = llm.prompts[1]
+        val header = "【记忆搜索结果（你上一轮" // 唯一在注入块里出现的写法（prompt 说明用的是短名）
+        assertTrue(second.contains(header), "搜索结果进下一轮 prompt：$second")
+        assertTrue(second.contains("「可乐」：") && second.contains("他最喜欢的饮料是可乐"),
+            "关键词 + 命中内容：$second")
+        val memIdx = second.indexOf("### 短期记忆")
+        assertTrue(memIdx in 0 until second.indexOf(header),
+            "结果挂在短期记忆段里（$memIdx）：$second")
+        // 一次性：注入后清空，再往后不再重复出现
+        assertFalse(llm.prompts[2].contains(header), "仅下一轮可见：${llm.prompts[2]}")
+    }
+
+    @Test
+    fun `without memory_queries memory section stays unchanged`() {
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-nq", ".json").absolutePath)
+        )
+        memoryService.rememberEvent(MemorySubject.user(123L), "他最喜欢的饮料是可乐")
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertFalse(llm.prompts[0].contains("【记忆搜索结果（你上一轮"),
+            "没给字段 → 记忆段内容不变：${llm.prompts[0]}")
+        assertTrue(llm.prompts[0].contains("### 短期记忆"), "记忆段本身照常存在")
+    }
+
+    @Test
     fun `entering conversation advances read watermark`() {
         // 已读水位：进会话消费未读后推进（重启后未读=水位之后的消息）
         val repo = org.dlucxoket.lucatbot.bot.chathistory.JsonFileReadStateRepository(

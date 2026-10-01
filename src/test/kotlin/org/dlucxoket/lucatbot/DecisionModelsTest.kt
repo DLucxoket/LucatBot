@@ -282,6 +282,26 @@ class ConversationDecisionParseTest {
         assertEquals(ConversationAction.RETURN, d.action)
         assertEquals("累了", d.reason)
     }
+
+    @Test
+    fun `memory_queries parses array and defaults to empty`() {
+        val d = ConversationDecision.parse(
+            """{"action":"send","params":{"content":"在吗"},"memory_queries":["碳酸猫","271524789","可乐"]}"""
+        )
+        assertEquals(listOf("碳酸猫", "271524789", "可乐"), d.memoryQueries, "关键词数组原样取出")
+
+        assertTrue(ConversationDecision.parse("""{"action":"return"}""").memoryQueries.isEmpty(), "缺字段 → 空")
+        assertTrue(ConversationDecision.parse("""{"action":"return","memory_queries":[]}""").memoryQueries.isEmpty(), "空数组 → 空")
+        assertTrue(
+            ConversationDecision.parse("""{"action":"return","memory_queries":"可乐"}""").memoryQueries.isEmpty(),
+            "非数组 → 空（不动记忆段）"
+        )
+        assertTrue(
+            ConversationDecision.parse("""{"action":"return","memory_queries":["  ",null," 可乐 "]}""")
+                .memoryQueries == listOf("可乐"),
+            "空白与 null 过滤、trim"
+        )
+    }
 }
 
 /** SessionDecisionParser：消息列表信封的四种动作与垃圾输出兜底 */
