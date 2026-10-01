@@ -427,6 +427,34 @@ class ConversationDecisionParseTest {
     }
 
     @Test
+    fun `unusable input shapes are dropped instead of leaking the key`() {
+        // 实盘 22:33 GroupRequestTool 报 UnrecognizedPropertyException 的根因：
+        // input 为不可用形态（null/数字/裸词）时旧兜底把 input 键本身平铺进 DTO。
+        // 不可用的包装字段没有信息量——丢弃后由 DTO 默认值兜底。
+        val nullInput = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"X","input":null,"action":"list"}}"""
+        )
+        assertFalse(nullInput.toolInput.containsKey("input"), "null input 不泄漏键：${nullInput.toolInput}")
+
+        val numberInput = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"X","input":123}}"""
+        )
+        assertFalse(numberInput.toolInput.containsKey("input"), "数字 input 不泄漏键")
+
+        // input 是非 JSON 对象的字符串（如裸词 "list"）→ 解不开 → 同样丢弃
+        val bareWord = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"X","input":"list"}}"""
+        )
+        assertFalse(bareWord.toolInput.containsKey("input"), "裸词 input 不泄漏键：${bareWord.toolInput}")
+
+        // 平铺参数（可用信息）照旧保留——只丢不可用的 input 键本身
+        val flat = ConversationDecision.parse(
+            """{"action":"tool","params":{"name":"X","input":null,"id":"7","action":"list"}}"""
+        )
+        assertEquals("7", flat.toolInput["id"]?.toString(), "同层可用字段保留")
+    }
+
+    @Test
     fun `plain json is not mistaken for tool-call envelope`() {
         val d = ConversationDecision.parse("""{"action":"return","reason":"累了"}""")
         assertEquals(ConversationAction.RETURN, d.action)

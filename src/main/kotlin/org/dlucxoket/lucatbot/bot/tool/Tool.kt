@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.bot.tool
 
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.mikuac.shiro.core.Bot
@@ -56,8 +57,18 @@ abstract class Tool<I, O> {
     /** 输入类型的 Class（用于 JSON 反序列化） */
     protected abstract val inputClass: Class<I>
 
-    /** Jackson ObjectMapper（Kotlin 模块，支持 data class 默认值） */
+    /**
+     * Jackson ObjectMapper（Kotlin 模块，支持 data class 默认值）
+     *
+     * **忽略未知字段**（单点配置，2026-10-01 实盘修复）：LLM 生成的入参常带
+     * 多余字段（如把 `input` 包装键平铺进来、或拼错字段名），默认的
+     * FAIL_ON_UNKNOWN_PROPERTIES 会让整个调用抛 `UnrecognizedPropertyException`
+     * ——实盘 GroupRequestTool 首次调用即因此报错。宽容策略下未知字段直接丢弃，
+     * 必填缺失仍由各 DTO 的默认值 + 校验兜底并给出自愈报错；未来新 Tool
+     * 无需逐个记得加 `@JsonIgnoreProperties`。
+     */
     protected val mapper: ObjectMapper = jacksonObjectMapper()
+        .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
 
     /**
      * 绑定的 Shiro Bot 实例（用于调用 OneBot API）

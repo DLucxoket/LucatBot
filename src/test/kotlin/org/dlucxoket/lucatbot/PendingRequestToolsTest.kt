@@ -196,4 +196,20 @@ class PendingRequestToolsTest {
         assertFalse(success == true && error != null, "契约：error 非空不得配 success=true")
         assertNull(error, "空输入默认 list 不应报错：$map")
     }
+
+    @Test
+    fun `unknown fields in input json are ignored not fatal`() {
+        // 实盘 22:33 生产报错复现：toolInputOf 曾把不可用的 input 键平铺进 DTO，
+        // Jackson 默认 FAIL_ON_UNKNOWN_PROPERTIES 直接抛 UnrecognizedPropertyException
+        //（日志：Unrecognized field "input" … 3 known properties: "id","reason","action"）。
+        // 修复=双保险：① toolInputOf 丢弃不可用 input 键；② Tool 基类 mapper 忽略未知字段。
+        newStore()
+
+        // 直接喂带未知字段的 JSON（即便①没拦住，②也应宽容）
+        val r = GroupRequestTool.process("""{"action":"list","input":null,"bogusField":1}""")
+        val mapper = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
+        val map = mapper.readValue(r, Map::class.java)
+        assertNull(map["error"], "未知字段不再导致反序列化失败：$r")
+        assertEquals(true, map["success"], "照常执行 list：$r")
+    }
 }
