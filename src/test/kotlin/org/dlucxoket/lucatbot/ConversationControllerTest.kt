@@ -678,6 +678,8 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("\"wait_message\": 60"), "给上限等待 60 秒：$prompt")
         assertTrue(prompt.contains("别拿 stay 等别人说话"), "stay 动作说明同步点名：$prompt")
         assertTrue(prompt.contains("stay 只留给"), "保留 stay 的正当用途（不等回应）：$prompt")
+        assertTrue(prompt.contains("等下文要用 stay"), "对方话没说完（分段发话）该 stay 等下文：$prompt")
+        assertTrue(prompt.contains("别在人家半句上就接话"), "点名不在半句上接话：$prompt")
     }
 
     @Test
