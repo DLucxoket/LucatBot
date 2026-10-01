@@ -110,6 +110,12 @@ class ConversationController(
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
 
+    /** memory_queries 每轮搜索词上限（prompt 写「数量不限、宁多勿少」，这里只防极端刷量） */
+    private val maxMemoryQueries = 12
+
+    /** 记忆搜索结果行数上限（一次注入「短期记忆」段的体量闸） */
+    private val maxMemoryHitLines = 24
+
     /**
      * 退出记忆整理（幂等、失败不影响退出）——单一职责组件，见 [MemoryReflector]
      *
@@ -712,11 +718,12 @@ class ConversationController(
     /**
      * 执行本轮的 memory_queries（顶层可选数组：人名/QQ号/聊天里的词/想不起来的细节）
      * **全局关键词搜**（不限主体——人名、QQ号 常跨会话），每词最多取 3 条、
-     * 每轮最多 3 词（防一次甩一堆关键词）；结果写进 [sink]，下一轮组请求时
+     * 每轮最多 [maxMemoryQueries] 词（prompt 明确「数量不限、宁多勿少」，
+     * 上限只防一次甩几十个关键词把结果段撑爆）；结果写进 [sink]，下一轮组请求时
      * 追加到「短期记忆」段末尾后清空（**没请求过 → 记忆段与原来完全一致**）。
      */
     private fun searchMemories(decision: ConversationDecision, sink: MutableList<String>) {
-        decision.memoryQueries.take(3).forEach { query ->
+        decision.memoryQueries.take(maxMemoryQueries).forEach { query ->
             try {
                 val hits = memoryService.search(query).take(3)
                 sink += "「$query」：" +
@@ -727,7 +734,7 @@ class ConversationController(
                 sink += "「$query」：（搜索失败）"
             }
         }
-        while (sink.size > 8) sink.removeAt(0) // 只保留最近几条，防长期膨胀
+        while (sink.size > maxMemoryHitLines) sink.removeAt(0) // 只保留最近几条，防长期膨胀
     }
 
     /** 写一条短期记忆 + 操作日志（失败只 log，不中断主循环） */

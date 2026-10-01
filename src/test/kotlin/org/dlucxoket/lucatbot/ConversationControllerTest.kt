@@ -711,6 +711,32 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `many memory_queries are all searched in one round`() {
+        // 关键词数量可以多：一轮 5 个词全部出结果行（上限 12，prompt 写「数量不限」）
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-mq5", ".json").absolutePath)
+        )
+        memoryService.rememberEvent(MemorySubject.user(123L), "他喜欢喝可乐")
+        memoryService.rememberEvent(MemorySubject.user(123L), "碳酸猫是他妈妈")
+        val queries = listOf("可乐", "碳酸猫", "并不存在的词", "群名片", "周五的约定")
+        val llm2 = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"我找找"},"memory_queries":${queries.joinToString(",", prefix = "[", postfix = "]") { "\"$it\"" }}}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, _) = buildController(llm2, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val second = llm2.prompts[1]
+        queries.forEach { q ->
+            assertTrue(second.contains("「$q」："), "词「$q」有结果行（含没搜到的）：$second")
+        }
+        assertTrue(second.contains("（没搜到）"), "没命中的如实标注：$second")
+        assertTrue(second.contains("他喜欢喝可乐") && second.contains("碳酸猫是他妈妈"),
+            "命中的内容带上：$second")
+    }
+
+    @Test
     fun `without memory_queries memory section stays unchanged`() {
         val memoryService = MemoryService(
             JsonFileMemoryRepository(File.createTempFile("mem-nq", ".json").absolutePath)
@@ -724,6 +750,20 @@ class ConversationControllerTest {
         assertFalse(llm.prompts[0].contains("【记忆搜索结果（你上一轮"),
             "没给字段 → 记忆段内容不变：${llm.prompts[0]}")
         assertTrue(llm.prompts[0].contains("### 短期记忆"), "记忆段本身照常存在")
+    }
+
+    @Test
+    fun `prompt documents memory_queries thoroughly and allows many keywords`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("memory_queries"), "字段说明存在")
+        assertTrue(prompt.contains("数量不限"), "明确数量可以多：$prompt")
+        assertTrue(prompt.contains("QQ号"), "关键词取材含 QQ号")
+        assertTrue(prompt.contains("回复、引用里出现的词"), "关键词取材含回复/引用里的词")
+        assertTrue(prompt.contains("拿不准要不要查就写上"), "鼓励多写、别编")
+        assertTrue(prompt.contains("同时") && prompt.contains("下一轮"),
+            "说明可与 send 同时输出、结果下一轮可见")
     }
 
     @Test
