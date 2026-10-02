@@ -204,14 +204,19 @@ class MainLoopController(
     }
 
     /**
-     * 进入空闲并休眠——**时长由 LLM 决定**（idle 的 `params.seconds`，钳 5~1800s），
-     * LLM 没给才回退到按心情随机（[idleMillis]）；@我/@全体 可缩短（最少再等 5s）
+     * 进入空闲并休眠——**时长由 LLM 决定**（idle 的 `params.seconds`，钳 600~7200s
+     * 即 10 分钟 ~ 2 小时），LLM 没给才回退到按心情随机（[idleMillis]，同范围）；
+     * @我/@全体 等 urgent 仍可提前唤醒（ProactiveScheduler 30s 巡查兜底）
      */
     private fun enterIdleAndSleep() {
         lucatBot.goIdle()
         val sleepMs = resolveIdleMillis(messageListController.consumeIdleSeconds(), lucatBot.mood)
         lastIdleStartMs = System.currentTimeMillis()
-        val idleLabel = if (sleepMs < 60_000L) "${sleepMs / 1000} 秒" else "约 ${sleepMs / 60_000} 分钟"
+        val idleLabel = when {
+            sleepMs < 60_000L -> "${sleepMs / 1000} 秒"
+            sleepMs < 3_600_000L -> "约 ${sleepMs / 60_000} 分钟"
+            else -> "约 ${sleepMs / 3_600_000} 小时"
+        }
         actionLog.append("进入空闲（$idleLabel）")
         log.info("进入空闲，休眠 {} ms", sleepMs)
 
@@ -235,18 +240,25 @@ class MainLoopController(
     }
 
     companion object {
-        // 测试用短休眠（正式可恢复 3min / 20min）
-        const val MIN_IDLE_MS = 10 * 1000L
-        const val MAX_IDLE_MS = 60 * 1000L
-
-        /** LLM 指定空闲秒数的钳制范围（5 秒 ~ 30 分钟） */
-        const val MIN_LLM_IDLE_SECONDS = 5
-        const val MAX_LLM_IDLE_SECONDS = 1800
+        /** 心情随机兜底的空闲范围（LLM 没给 seconds 时用）：10 分钟 ~ 2 小时，与 LLM 钳制同档 */
+        const val MIN_IDLE_MS = 10 * 60 * 1000L
+        const val MAX_IDLE_MS = 2 * 60 * 60 * 1000L
 
         /**
-         * 空闲休眠时长：**LLM 在 idle 里给的 seconds 优先**（钳 5~1800s——
-         * 太短像抽风、太长像死机，两头都防）；没给（0：LLM 省略或解析兜底）
-         * 才回退到按心情随机 [idleMillis]
+         * LLM 指定空闲秒数的钳制范围（**10 分钟 ~ 2 小时**）
+         *
+         * 2026-10-01 应主人要求整体调长：此前 5s~30min 太短——真人看完列表
+         * 再打开 QQ 本就是十几分钟起，几秒级的空闲像挂机。下限 600s 会把
+         * 模型偶尔给的短值一并抬起来（想快看消息的场景由 urgent 唤醒兜底，
+         * 不靠缩短空闲）。
+         */
+        const val MIN_LLM_IDLE_SECONDS = 600
+        const val MAX_LLM_IDLE_SECONDS = 7200
+
+        /**
+         * 空闲休眠时长：**LLM 在 idle 里给的 seconds 优先**（钳 600~7200s——
+         * 10 分钟 ~ 2 小时，与「真人不上线」的体感一致）；没给（0：LLM 省略
+         * 或解析兜底）才回退到按心情随机 [idleMillis]（同范围）
          */
         fun resolveIdleMillis(
             llmSeconds: Int,
@@ -260,7 +272,7 @@ class MainLoopController(
             }
 
         /**
-         * 心情加权的空闲时长：累/困/烦 → 更久，开心 → 更短。
+         * 心情加权的空闲时长：累/困/烦 → 更久（贴近 2h 端），开心 → 更短（贴近 10min 端）。
          */
         fun idleMillis(mood: BotMood, random: java.util.Random = java.util.Random()): Long {
             val factor = when (mood.type) {

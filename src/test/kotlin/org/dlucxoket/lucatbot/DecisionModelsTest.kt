@@ -714,7 +714,8 @@ class ActionLogTest {
 class IdleMillisTest {
 
     @Test
-    fun `range is 3 to 20 min`() {
+    fun `range is 10 min to 2 h`() {
+        // 心情随机兜底与 LLM 钳制同档（10 分钟 ~ 2 小时，2026-10-01 应主人要求调长）
         val random = java.util.Random(42)
         BotMood.MoodType.values().forEach { type ->
             val mood = BotMood(type, 0.8)
@@ -724,6 +725,8 @@ class IdleMillisTest {
                     "$type idle $ms out of range")
             }
         }
+        assertEquals(10 * 60 * 1000L, MainLoopController.MIN_IDLE_MS, "下限 10 分钟")
+        assertEquals(2 * 60 * 60 * 1000L, MainLoopController.MAX_IDLE_MS, "上限 2 小时")
     }
 
     @Test
@@ -743,15 +746,17 @@ class IdleMillisTest {
         val mood = BotMood(BotMood.MoodType.NORMAL, 0.5)
         val random = java.util.Random(11)
 
-        assertEquals(600_000L, MainLoopController.resolveIdleMillis(600, mood, random), "LLM 给的秒数直接用")
+        assertEquals(600_000L, MainLoopController.resolveIdleMillis(600, mood, random), "LLM 给的秒数直接用（600s=下限）")
         assertEquals(
             MainLoopController.MAX_LLM_IDLE_SECONDS * 1000L,
-            MainLoopController.resolveIdleMillis(99_999, mood, random), "超上限钳到 1800s"
+            MainLoopController.resolveIdleMillis(99_999, mood, random), "超上限钳到 7200s"
         )
         assertEquals(
             MainLoopController.MIN_LLM_IDLE_SECONDS * 1000L,
-            MainLoopController.resolveIdleMillis(1, mood, random), "低于下限钳到 5s"
+            MainLoopController.resolveIdleMillis(1, mood, random), "低于下限钳到 600s（短值也抬到 10 分钟）"
         )
+        assertEquals(600, MainLoopController.MIN_LLM_IDLE_SECONDS, "LLM 钳制下限 10 分钟")
+        assertEquals(7200, MainLoopController.MAX_LLM_IDLE_SECONDS, "LLM 钳制上限 2 小时")
         val fallback = MainLoopController.resolveIdleMillis(0, mood, random)
         assertTrue(fallback in MainLoopController.MIN_IDLE_MS..MainLoopController.MAX_IDLE_MS,
             "没给 → 按心情随机兜底：$fallback")
