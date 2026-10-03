@@ -2130,6 +2130,26 @@ class ConversationAgentFallbackTest {
     }
 
     @Test
+    fun `vision only for images addressed to the bot`() {
+        // 识图门槛：只有「明确发给你的图」才 view_images——私聊的图 / 群里 @你 的图 /
+        // 明确给你看的图；群友之间互发的图一律不看（省 token、别乱看别人的照片）
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(ConversationRequest())
+        val prompt = llm.prompts.single()
+        assertTrue(prompt.contains("识图只识「发给你的图」"), "门槛规则标题进 prompt：$prompt")
+        assertTrue(prompt.contains("私聊里对方发的图"), "私聊的图默认是发给你的：$prompt")
+        assertTrue(prompt.contains("该消息 **@你** 了"), "群里 @你 才算发给你：$prompt")
+        assertTrue(prompt.contains("群友之间互相发的图"), "点名群友互发的图：$prompt")
+        assertTrue(prompt.contains("一律不要 view_images"), "给出不看的明确动作：$prompt")
+        assertTrue(prompt.contains("这套判断同时决定**看不看图**"), "与「是不是对你说的」判断打通：$prompt")
+        assertTrue(prompt.contains("但只看「发给你的图」"), "view_images 动作说明同步门槛：$prompt")
+        // 没叫机器人 + 不识图就不知道图内容 → 直接不接话，而不是为了接话去识图
+        assertTrue(prompt.contains("需要看图才接得上话时，宁可不接也别去识图"), "接不上就不接、别识图：$prompt")
+        assertTrue(prompt.contains("绝不为了接话去 view_images"), "禁止为接话识图：$prompt")
+        assertTrue(prompt.contains("需要看图才接得上的话，本来就不是对你说的"), "判断段兜底理由：$prompt")
+    }
+
+    @Test
     fun `qq face usage is restrained to necessary cases`() {
         // 表情语法刚教会 LLM，必须同时教会克制——否则容易每条消息都挂个表情
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
