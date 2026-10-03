@@ -14,7 +14,8 @@ shiro:
 llm:
   mimo:
     api-key: ${LLM_API_KEY:api-key}
-    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+#    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+    base-url: "https://api.xiaomimimo.com/v1"
     model-name: "mimo-v2.6-flash"
 #    base-url: "https://api.siliconflow.cn/v1"   #硅基流动
 #    model-name: "Qwen/Qwen3-8B"                 #硅基流动免费模型
