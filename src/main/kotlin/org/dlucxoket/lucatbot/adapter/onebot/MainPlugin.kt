@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot.adapter.onebot
 
 import com.mikuac.shiro.core.Bot
 import com.mikuac.shiro.core.BotPlugin
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 import com.mikuac.shiro.dto.event.message.AnyMessageEvent
 import com.mikuac.shiro.dto.event.request.FriendAddRequestEvent
 import com.mikuac.shiro.enums.MsgTypeEnum
@@ -210,7 +211,10 @@ internal class MainPlugin: BotPlugin() {
                 hint = "这是戳一戳场景：想回应就 send 一句短的（如「干嘛」「戳我干嘛」），不想理就 return"
             )
 
-            val decision = conversationAgent.processObject(request)
+            // token 统计维度：戳一戳这轮调用归到该私聊
+            val decision = TokenUsageScope.withConversation(pokeConvId) {
+                conversationAgent.processObject(request)
+            }
 
             if (decision.action == ConversationAction.SEND) {
                 val content = decision.content.orEmpty()

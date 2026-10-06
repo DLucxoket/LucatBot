@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot.bot.agent
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 
 /**
  * 智能体（Agent）抽象基类
@@ -97,7 +98,7 @@ abstract class Agent<I, O>(
      */
     fun process(json: String): String {
         val input: I = fromJson(json)
-        val output: O = handle(input)
+        val output: O = TokenUsageScope.withAgent(agentTag) { handle(input) }
         return toJson(output)
     }
 
@@ -107,10 +108,20 @@ abstract class Agent<I, O>(
      * 流程：Kotlin 对象 → 调用 [handle] → 返回 [O] 对象，不经过 JSON 序列化。
      * 类型由签名 [I] 保证——调用方传的本就是输入类型，无需运行时适配。
      *
+     * 顺带把 [agentTag] 挂进 **token 用量维度**（LLM 调用发生在 handle 里）——
+     * 按 agent 分类统计就靠这一层，子类不用各自操心。
+     *
      * @param input 输入对象（类型即 [I]）
      * @return 输出对象
      */
-    fun processObject(input: I): O = handle(input)
+    fun processObject(input: I): O = TokenUsageScope.withAgent(agentTag) { handle(input) }
+
+    /**
+     * token 统计里的 agent 名——默认类名（`ConversationAgent` / `SessionPickerAgent` …）
+     *
+     * 需要更贴切的标签（如区分阶段）时子类 override 即可。
+     */
+    protected open val agentTag: String get() = this::class.java.simpleName
 
     /**
      * JSON → OOP（反序列化）

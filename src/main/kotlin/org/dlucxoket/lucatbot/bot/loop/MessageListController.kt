@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.loop
 
 import org.dlucxoket.lucatbot.bot.LucatBot
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ProactiveCandidate
 import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
@@ -96,7 +97,10 @@ class MessageListController(
                 toolNames = toolCatalog.names()
             )
 
-            val decision = sessionPickerAgent.processObject(request)
+            // token 统计维度：消息列表不是会话，用固定标签（否则全记成 unknown）
+            val decision = TokenUsageScope.withConversation("消息列表") {
+                sessionPickerAgent.processObject(request)
+            }
             applyTodoSideEffects(decision)
 
             // 防病态值资源护栏（2026-10-01 调整：**只限连续调用错误，不限工具轮数**）

@@ -127,7 +127,7 @@ class OpenAIAPI: LLM {
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         val response = model.chat(chatRequest)
-        logUsage(response, "文本")
+        recordUsage(response, TokenUsageLedger.Channel.TEXT)
         val text = response.aiMessage().text()
         if (text.isNullOrBlank()) {
             log.warn("LLM 返回空文本（端点异常/输出被吞/finish_reason 截断），调用方会按解析失败兜底")
@@ -138,22 +138,41 @@ class OpenAIAPI: LLM {
     /**
      * 记录一次调用的 token 用量（**量化优先**：先拿真实分布，再谈精简哪里）
      *
-     * 端点不回 usage 时如实标注「未返回」，不猜数；模型名一起打进日志，
-     * 换端点/换模型后的成本差异一眼可比。入参/出参分列，方便对着
-     * 「指令段每轮重发」这条主线看边际成本。
+     * 两处去向：
+     * - **日志**：打全三个维度 `[通道][agent][会话]`——端点不回 usage 时如实标注
+     *   「未返回」，不猜数；模型名一起打，换端点/换模型后的成本差异一眼可比
+     * - **账本**：[TokenUsageLedger.record] 按 通道（文字/图片）× agent × 会话
+     *   三维累计，并落盘 `data/token-usage.jsonl`（append-only，跨重启累计）
+     *
+     * agent/会话两个维度取自 [TokenUsageScope]（Agent 入口与编排层在调用前挂上），
+     * 这里只负责取——[LLM] 接口不因此加参数（ISP）。
      */
-    private fun logUsage(response: ChatResponse, path: String) {
+    private fun recordUsage(response: ChatResponse, channel: TokenUsageLedger.Channel) {
         val usage = response.tokenUsage()
+        val agent = TokenUsageScope.agent()
+        val conversation = TokenUsageScope.conversation()
         if (usage == null) {
-            log.info("LLM用量[{}]：端点未返回 tokenUsage（模型 {}）", path, modelName)
+            log.info(
+                "LLM用量[{}][{}][{}]：端点未返回 tokenUsage（模型 {}）",
+                channel.label, agent, conversation, modelName
+            )
         } else {
             // 显式调 getter：TokenUsage 的同名字段是 private，
             // Kotlin 属性语法会解析到字段上（编译期「不可访问」）
             log.info(
-                "LLM用量[{}]：输入 {} / 输出 {} / 合计 {} token（模型 {}）",
-                path, usage.inputTokenCount(), usage.outputTokenCount(), usage.totalTokenCount(), modelName
+                "LLM用量[{}][{}][{}]：输入 {} / 输出 {} / 合计 {} token（模型 {}）",
+                channel.label, agent, conversation,
+                usage.inputTokenCount(), usage.outputTokenCount(), usage.totalTokenCount(), modelName
             )
         }
+        TokenUsageLedger.record(
+            agent = agent,
+            conversation = conversation,
+            channel = channel,
+            model = modelName,
+            input = usage?.inputTokenCount()?.toLong(),
+            output = usage?.outputTokenCount()?.toLong()
+        )
     }
 
     /**
@@ -184,7 +203,7 @@ class OpenAIAPI: LLM {
             }
             val chatRequest = ChatRequest.builder().messages(messages).build()
             val response = createModel().chat(chatRequest)
-            logUsage(response, "带图")
+            recordUsage(response, TokenUsageLedger.Channel.IMAGE)
             val result = response.aiMessage().text()
             if (result.isNullOrBlank()) {
                 log.warn("LLM 返回空文本（带图请求），调用方会按解析失败兜底")

@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.loop
 
 import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 import org.dlucxoket.lucatbot.bot.agent.data.MemoryReflectItem
 import org.dlucxoket.lucatbot.bot.agent.data.MemoryReflectRequest
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
@@ -157,26 +158,28 @@ class MemoryReflector(
                 log.warn("读取未完成待办失败（跳过待办结算）: {}", e.message)
                 emptyList()
             }
-            val result = memoryAgent.processObject(
-                MemoryReflectRequest(
-                    conversationContent = chatHistoryService.getHistorySummary(
-                        conversationId, reflectHistoryCount
-                    ),
-                    // 判重视野要比默认（5/3/5/3）大——LLM 看不见的已有记忆
-                    // 会被当成新的再记一遍（反复记录的来源之一）；P2 token 精简
-                    // 从 50/30/50/20 收到 30/20/30/15（仍是默认的 6 倍视野，
-                    // 且阶段2 关键词复核会兜住漏网的重复），别再放大回 150 条
-                    existingMemory = memoryService.getMemorySummary(
-                        subject,
-                        factLimit = 30, opinionLimit = 20, eventLimit = 30, relationLimit = 15
-                    ),
-                    timeHint = TimeAwareness.timeHint(),
-                    pendingTodos = pendingTodos.joinToString("\n") {
-                        "- [ ] (${it.id.take(4)}) ${it.content}"
-                    },
-                    fixedMemory = fixedMemory?.current().orEmpty()
+            val result = TokenUsageScope.withConversation(conversationId) {
+                memoryAgent.processObject(
+                    MemoryReflectRequest(
+                        conversationContent = chatHistoryService.getHistorySummary(
+                            conversationId, reflectHistoryCount
+                        ),
+                        // 判重视野要比默认（5/3/5/3）大——LLM 看不见的已有记忆
+                        // 会被当成新的再记一遍（反复记录的来源之一）；P2 token 精简
+                        // 从 50/30/50/20 收到 30/20/30/15（仍是默认的 6 倍视野，
+                        // 且阶段2 关键词复核会兜住漏网的重复），别再放大回 150 条
+                        existingMemory = memoryService.getMemorySummary(
+                            subject,
+                            factLimit = 30, opinionLimit = 20, eventLimit = 30, relationLimit = 15
+                        ),
+                        timeHint = TimeAwareness.timeHint(),
+                        pendingTodos = pendingTodos.joinToString("\n") {
+                            "- [ ] (${it.id.take(4)}) ${it.content}"
+                        },
+                        fixedMemory = fixedMemory?.current().orEmpty()
+                    )
                 )
-            )
+            }
 
             // 固定短记覆盖更新（**同样在「无候选就 return」之前**——整理的本职除了
             // 记新东西，也包括维护这段固定小抄；不写字段 = 不更新）
@@ -206,7 +209,7 @@ class MemoryReflector(
             }
 
             // 阶段2：写入前关键词查库复核——拦改写式重复（精确判重拦不住的）
-            val toWrite = reviewWithKeywordSearch(candidates, subject)
+            val toWrite = reviewWithKeywordSearch(candidates, subject, conversationId)
             if (toWrite.isEmpty()) {
                 log.debug("退出时记忆整理：{} 条候选经关键词复核后无新增", candidates.size)
                 return
@@ -259,7 +262,9 @@ class MemoryReflector(
      */
     private fun reviewWithKeywordSearch(
         candidates: List<MemoryReflectItem>,
-        subject: MemorySubject
+        subject: MemorySubject,
+        /** token 统计维度：复核这轮 LLM 调用归到哪个会话 */
+        conversationId: String
     ): List<MemoryReflectItem> {
         val hits = linkedSetOf<String>()
         for (item in candidates) {
@@ -274,9 +279,11 @@ class MemoryReflector(
         }
         if (hits.isEmpty()) return candidates
         val topHits = hits.take(maxReviewHits)
-        val reviewed = memoryAgent.processObject(
-            MemoryReflectRequest(candidates = candidates, matchedMemories = topHits)
-        )
+        val reviewed = TokenUsageScope.withConversation(conversationId) {
+            memoryAgent.processObject(
+                MemoryReflectRequest(candidates = candidates, matchedMemories = topHits)
+            )
+        }
         if (reviewed.degraded) {
             log.warn("记忆关键词复核失败（保守放行 {} 条候选）", candidates.size)
             return candidates

@@ -91,6 +91,18 @@ class MessageListControllerTest {
     }
 
     @Test
+    fun `llm calls carry picker agent and message list dimensions for token stats`() {
+        // 会话维度挂不上就会全记成 "-"——消息列表用固定标签区分于具体会话
+        val llm = FakeLLM(mutableListOf("""{"action":"idle","reason":"没什么事"}"""))
+        val (controller, _) = buildController(llm)
+
+        assertNull(controller.pickSession(fromIdleWake = false))
+
+        assertEquals("SessionPickerAgent", llm.agentTags.last(), "agent 维度来自 Agent 入口")
+        assertEquals("消息列表", llm.conversationTags.last(), "会话维度由编排层挂固定标签")
+    }
+
+    @Test
     fun `unknown tool feeds error note and loop continues`() {
         val llm = FakeLLM(mutableListOf(
             """{"action":"tool","params":{"name":"NoSuchTool","input":{}},"reason":"瞎调"}""",

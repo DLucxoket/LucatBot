@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.loop
 
 import org.dlucxoket.lucatbot.bot.LucatBot
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 import org.dlucxoket.lucatbot.bot.agent.NotificationAgent
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationAction
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationDecision
@@ -87,7 +88,10 @@ class NotificationDispatcher(
                 shortTermMemory = memoryService.getMemoryOverview(primary = null)
             )
 
-            val decision = notificationAgent.processObject(request)
+            // token 统计维度：通知按「目标会话」归类（便于看哪类会话的通知最烧 token）
+            val decision = TokenUsageScope.withConversation("通知:$convId") {
+                notificationAgent.processObject(request)
+            }
             when (decision.action) {
                 NotificationAction.IGNORE -> {
                     log.info("通知无视：{}（{}）—— {}", senderName, convId, decision.reason ?: "无说明")

@@ -42,8 +42,13 @@ class FakeLLM(private val responses: MutableList<String>) : LLM {
     val prompts = mutableListOf<String>()
     /** 每轮请求携带的图片附件（图片通道断言用；最后一轮为准） */
     var images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage> = emptyList()
+    /** 每次 ask 时的 token 维度上下文（agent / 会话）——统计链路断言用 */
+    val agentTags = mutableListOf<String>()
+    val conversationTags = mutableListOf<String>()
 
     override fun ask(systemPrompt: String, question: String): String {
+        agentTags += org.dlucxoket.lucatbot.bot.llm.TokenUsageScope.agent()
+        conversationTags += org.dlucxoket.lucatbot.bot.llm.TokenUsageScope.conversation()
         prompts += systemPrompt + "\n=====USER=====\n" + question
         return if (responses.isEmpty()) """{"action":"return"}""" else responses.removeAt(0)
     }
@@ -1405,6 +1410,19 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("更早的消息不再展开"), "点明 read_more 不再变长：$prompt")
         assertTrue(prompt.contains("累计覆盖最近 5 条消息"), "窗口被封在上限 5 条：$prompt")
         assertFalse(prompt.contains("已翻到最早消息，没有更早的历史了"), "库里还有 40 条，不能谎称翻到头：$prompt")
+    }
+
+    @Test
+    fun `llm calls carry agent and conversation dimensions for token stats`() {
+        // token 统计三维（通道/agent/会话）里的后两维：agent 由 Agent 入口挂、
+        // 会话由编排层挂——任一断链，账本就会全记成 unknown/-（统计失去意义）
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals("ConversationAgent", llm.agentTags.last(), "agent 维度来自 Agent 入口")
+        assertEquals("private:123", llm.conversationTags.last(), "会话维度来自编排层")
     }
 
     @Test
