@@ -103,4 +103,20 @@ class ToolNotesTest {
         assertTrue(snapshot.any { it.contains("T3 执行结果") }, "最新结果保留")
         assertTrue(snapshot.sumOf { it.length } <= 300 + 300, "预算生效（状态行豁免；状态行变长放宽一档）")
     }
+
+    @Test
+    fun `default budget keeps catalog plus about two results`() {
+        // 生产默认预算 10_000（P1 从 16_000 收紧）：目录 ~3k 常驻 + 1~2 条结果。
+        // 这段每轮注入 user 消息——多留 6k 字符 ≈ 每轮多烧 4k token，
+        // 而第 3 条以后的结果重查一轮的成本并不更高
+        val notes = ToolNotes()
+        notes.recordCatalog(null, "C".repeat(3_000))
+        repeat(3) { notes.recordResult("T$it", "R".repeat(3_000)) }
+
+        val snapshot = notes.snapshot()
+        assertEquals(1, snapshot.count { it.startsWith("（工具目录") }, "目录常驻且只一份")
+        assertFalse(snapshot.any { it.contains("T0 执行结果") }, "最旧结果先被淘汰")
+        assertEquals(2, snapshot.count { it.contains("执行结果") }, "预算内保留约两条结果：${snapshot.map { it.length }}")
+        assertTrue(snapshot.sumOf { it.length } <= 10_000 + 300, "总预算 10_000 生效（状态行豁免）")
+    }
 }

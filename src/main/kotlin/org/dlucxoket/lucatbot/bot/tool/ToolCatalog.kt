@@ -36,12 +36,15 @@ data class ToolCallResult(
  * - 执行走 [Tool.process]（JSON→OOP→JSON 模板），LLM 给的 input 原样过边界
  *
  * @param toolsProvider 工具来源（默认 ToolDiscovery 发现的单例列表）
- * @param maxResultChars 单次执行结果注入 prompt 的最大长度（防爆 context）
+ * @param maxResultChars 单次执行结果注入 prompt 的最大长度（防爆 context）；
+ *   4_000 → **3_000**（P1 token 精简，与 `ToolNotes` 总预算 16k→10k 配套——
+ *   让「目录 ~3k + 1~2 条结果」稳落预算内；关键信息 3k 够放，更长的（长列表/
+ *   网页正文）本就该收窄范围再查）
  * @param orchestrationOnly 目录与调用均排除的工具名（忽略大小写）
  */
 class ToolCatalog(
     private val toolsProvider: () -> List<Tool<*, *>> = { ToolDiscovery.getTools() },
-    private val maxResultChars: Int = 4_000,
+    private val maxResultChars: Int = 3_000,
     private val orchestrationOnly: Set<String> = emptySet()
 ) {
     private val mapper = jacksonObjectMapper()

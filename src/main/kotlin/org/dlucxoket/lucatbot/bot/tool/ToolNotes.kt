@@ -22,8 +22,16 @@ package org.dlucxoket.lucatbot.bot.tool
  *   list_tools 不产生错误计数——它只有「有无匹配」，没有失败态）
  */
 class ToolNotes(
-    /** 目录 + 执行结果的总字符预算（超出淘汰最旧结果） */
-    private val maxTotalChars: Int = 16_000,
+    /**
+     * 目录 + 执行结果的总字符预算（超出淘汰最旧结果）
+     *
+     * 16_000 → **10_000**（P1 token 精简）：目录常驻约 3k 字符（18 个工具的
+     * 描述+参数实测 2970），余量留 1~2 条结果——单条结果本身也从 4_000 收到
+     * 3_000（见 `ToolCatalog.maxResultChars`）。这段每轮都注入 user 消息，
+     * 少 6k 字符 ≈ 每轮省 ~4k token；代价是第 3 条以后的结果更早淘汰、
+     * 需要时再查一次（重查一轮的成本也不高于常驻 6k）
+     */
+    private val maxTotalChars: Int = 10_000,
     /** 连续**调用错误**硬上限（正常工具轮不限；成功一次即清零） */
     private val maxConsecutiveErrors: Int = 3
 ) {

@@ -11,7 +11,7 @@ Kotlin Spring Boot 4.0.3 应用——基于 OneBot 协议（QQ）的模拟真人
 机器人按**固定脚本的主循环**驱动，**核心设计原则：模拟真人在 QQ 中的真实行为**：
 
 - `Agent<I, O>`（泛型抽象类）——基类；每个 Agent 声明自己的输入/输出 OOP 类型，实现 `handle(input: I): O`。
-- 主流程只有两个智能体：`SessionPickerAgent`（消息列表选会话）与 `ConversationAgent`（会话内决策），由 `MainLoopController` / `MessageListController` / `ConversationController` 按固定脚本调用。两者都带 `list_tools`（查/搜工具目录）与 `tool`（按名调用任意 Tool）两个决策动作——由编排层经 `ToolCatalog` 执行（SendMessageTool 等编排专属工具被排除，发送必须走 send 动作记账），结果经 `ToolNotes` 攒取（单份目录去重、16KB 字符预算、连续工具步软提示 + 硬上限兜底）注入下一轮 **user 消息**（固定脚本内嵌工具选择，**不是**自由调度链路）。
+- 主流程只有两个智能体：`SessionPickerAgent`（消息列表选会话）与 `ConversationAgent`（会话内决策），由 `MainLoopController` / `MessageListController` / `ConversationController` 按固定脚本调用。两者都带 `list_tools`（查/搜工具目录）与 `tool`（按名调用任意 Tool）两个决策动作——由编排层经 `ToolCatalog` 执行（SendMessageTool 等编排专属工具被排除，发送必须走 send 动作记账），结果经 `ToolNotes` 攒取（单份目录去重、**10KB 字符预算**——P1 token 精简从 16KB 收紧、只限连续报错的硬上限，正常工具轮不限）注入下一轮 **user 消息**（固定脚本内嵌工具选择，**不是**自由调度链路）。
 - 代码中不再保留自由调度链路（无 DispatcherAgent / AgentChain）。
 
 ### JSON ↔ OOP 边界约定
