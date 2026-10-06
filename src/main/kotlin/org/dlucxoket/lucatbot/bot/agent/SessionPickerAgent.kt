@@ -95,7 +95,7 @@ class SessionPickerAgent(
             ### 你最近的操作
             ${input.actionLog}
             当前时间（北京时间）：${input.timeHint}
-        """.trimIndent()
+        """.trimIndent().fixIndent("            ")
     }
 
     /**
@@ -157,6 +157,6 @@ class SessionPickerAgent(
             以下是当前消息列表的数据：
             ### 未读消息
             $sessionsText$cooldownText$proactiveText
-        """.trimIndent()
+        """.trimIndent().fixIndent("            ")
     }
 }

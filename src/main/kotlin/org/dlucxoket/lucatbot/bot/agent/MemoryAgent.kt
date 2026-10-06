@@ -111,7 +111,7 @@ class MemoryAgent(
             $existing
             【本次会话内容】
             $content$fixedText$todosText$timeLine
-        """.trimIndent()
+        """.trimIndent().fixIndent("            ")
     }
 
     /** 阶段2（写入前关键词复核）任务说明 → system 消息 */
@@ -146,6 +146,6 @@ class MemoryAgent(
             $candidates
             【关键词命中的已有记忆】
             $hits
-        """.trimIndent()
+        """.trimIndent().fixIndent("            ")
     }
 }

@@ -48,11 +48,31 @@ abstract class Agent<I, O>(
             你的信息：
             $description
             ===================================
-        """.trimIndent()
+        """.trimIndent().fixIndent("            ")
     }
 
     /** description 的首行摘要（lazy，同上） */
     val shortDescription: String by lazy { description.substringBefore("\n") }
+
+    /**
+     * 修正 raw string 模板里 **trimIndent 被多行插值打失效** 的左 margin（**省 token**）
+     *
+     * 模板里插了多行值（人格 / 记忆 / 待办 / 操作日志 / 聊天记录…）时，插值续行
+     * 是 0 缩进，把 `trimIndent()` 的 minIndent 拉到 0 → 整段 prompt 保留源码缩进
+     * （实测会话决策 prompt **105/123 行**各带 12 空格，每轮白烧 token）。
+     *
+     * 判定：**首个非空行仍带 [indent]** 才说明 trimIndent 没生效，此时逐行剥掉
+     * 最多一个 [indent]（模板行有、插值续行没有，正好对齐）；已生效（首行 0 缩进）
+     * 则原样返回——**幂等**，两步调用也安全。
+     *
+     * @param indent 模板源码缩进（各 Agent 的 raw string 均为 12 空格）
+     */
+    protected fun String.fixIndent(indent: String): String {
+        val lines = lines()
+        val first = lines.firstOrNull { it.isNotBlank() } ?: return this
+        if (!first.startsWith(indent)) return this
+        return lines.joinToString("\n") { if (it.startsWith(indent)) it.substring(indent.length) else it }
+    }
 
     /**
      * 输入类型的 Class（用于 JSON 反序列化）

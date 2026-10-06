@@ -2000,6 +2000,49 @@ class ConversationAgentFallbackTest {
     }
 
     @Test
+    fun `parse retry drops tool notes but keeps story data`() {
+        // 重试只为修 JSON 形态：工具段（预算内最多 10k 字符）不必再发一遍——
+        // 模型上一轮已读过目录/结果；聊天记录等剧情数据照常带上
+        val llm = FakeLLM(mutableListOf(
+            "我不是JSON",
+            """{"action":"return","reason":"重试成功"}"""
+        ))
+        ConversationAgent(llm).processObject(
+            ConversationRequest(
+                toolNotes = listOf("（工具目录（全部））\n### FakeTool\n功能：查一下"),
+                recentMessages = listOf(
+                    ConversationChatLine(sender = "小红", senderId = "8", time = "14:03", content = "在吗", messageId = 1L)
+                )
+            )
+        )
+
+        assertEquals(2, llm.prompts.size, "一次失败 + 一次重试")
+        assertTrue(llm.prompts[0].contains("### FakeTool"), "首轮带工具段：${llm.prompts[0]}")
+        assertTrue(llm.prompts[1].contains("只输出纯 JSON"), "重试带纠正提示")
+        assertFalse(llm.prompts[1].contains("### FakeTool"), "重试不再重发工具段：${llm.prompts[1]}")
+        assertTrue(llm.prompts[1].contains("- 小红(8) [14:03]（#1）：在吗"), "剧情数据照常：${llm.prompts[1]}")
+    }
+
+    @Test
+    fun `prompt carries no template left margin`() {
+        // raw string + 多行插值会把 trimIndent 的 minIndent 拉到 0，整段 prompt
+        // 保留源码 12 空格左 margin（实测 105/123 行）——fixIndent 按模板缩进
+        // 补一刀，只去 margin 不去内容，每轮省一笔纯空白 token
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        ConversationAgent(llm).processObject(
+            ConversationRequest(
+                actionLog = "[10:00] 进入会话\n[10:01] 发送消息",
+                shortTermMemory = "- 记忆A\n- 记忆B",
+                todos = "- [ ] (ab12) 去看看\n- [ ] (cd34) 回消息"
+            )
+        )
+        val lines = llm.prompts.single().lines()
+        val withMargin = lines.count { it.startsWith("            ") }
+        assertEquals(0, withMargin, "prompt 不该带 12 空格左 margin：$withMargin 行")
+        assertTrue(lines.any { it.startsWith("### 爬楼状态") }, "内容原样保留（只去 margin）")
+    }
+
+    @Test
     fun `prompt contains action log`() {
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val agent = ConversationAgent(llm)

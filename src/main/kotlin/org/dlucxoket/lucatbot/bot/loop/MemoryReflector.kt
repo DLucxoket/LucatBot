@@ -162,11 +162,13 @@ class MemoryReflector(
                     conversationContent = chatHistoryService.getHistorySummary(
                         conversationId, reflectHistoryCount
                     ),
-                    // 判重视野调大（默认 5/3/5/3 太小）：LLM 看不见的已有记忆
-                    // 会被当成新的再记一遍——反复记录的来源之一
+                    // 判重视野要比默认（5/3/5/3）大——LLM 看不见的已有记忆
+                    // 会被当成新的再记一遍（反复记录的来源之一）；P2 token 精简
+                    // 从 50/30/50/20 收到 30/20/30/15（仍是默认的 6 倍视野，
+                    // 且阶段2 关键词复核会兜住漏网的重复），别再放大回 150 条
                     existingMemory = memoryService.getMemorySummary(
                         subject,
-                        factLimit = 50, opinionLimit = 30, eventLimit = 50, relationLimit = 20
+                        factLimit = 30, opinionLimit = 20, eventLimit = 30, relationLimit = 15
                     ),
                     timeHint = TimeAwareness.timeHint(),
                     pendingTodos = pendingTodos.joinToString("\n") {

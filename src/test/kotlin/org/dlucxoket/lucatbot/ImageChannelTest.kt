@@ -100,6 +100,21 @@ class ImageChannelTest {
         assertNull(ImageResolver().resolve(weird.absolutePath, "weird.bin"), "未知格式跳过")
     }
 
+    @Test
+    fun `default size cap is 2MB not 4MB`() {
+        // P2 请求体护栏：base64 膨胀 4/3，6 张顶格原图曾是 ≈32MB 的请求体。
+        // 实盘 QQ 原图多在 1MB 内——超 2MB 的走缺失清单如实告知 LLM「没看到」
+        val over = File.createTempFile("over2m", ".png").apply { writeBytes(pngBytes + ByteArray(2_100_000)) }
+        val ok = File.createTempFile("ok1m", ".png").apply { writeBytes(pngBytes + ByteArray(1_000_000)) }
+        try {
+            assertNull(ImageResolver().resolve(over.absolutePath, "over.png"), "超 2MB 默认跳过")
+            assertNotNull(ImageResolver().resolve(ok.absolutePath, "ok.png"), "1MB 原图照常通过")
+        } finally {
+            over.delete()
+            ok.delete()
+        }
+    }
+
     // ------------------------------------------------------------------
     // HTTP 路径（注入式 fetcher——不打真实网络）
     // ------------------------------------------------------------------

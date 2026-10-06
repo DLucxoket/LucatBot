@@ -43,7 +43,12 @@ class ConversationAgent(
                 append("{\"action\":\"…\",\"params\":{…},\"reason\":\"…\"}，")
                 append("action 只能是 ${ConversationAction.promptList(separator = " / ", quoted = false)}）")
             }
-            decision = ConversationDecision.parse(llm.ask(systemPrompt, userContent + nudge, input.images))
+            // 重试只为修 JSON 形态：**不再重发「### 工具」段**（预算内最多 10k 字符）
+            // ——模型上一轮已读过目录/执行结果，这轮只需按结构重新输出；剧情数据
+            // （聊天记录/记忆/待办）照常带上，决策信息不缺
+            decision = ConversationDecision.parse(
+                llm.ask(systemPrompt, buildUserContent(input, includeTools = false) + nudge, input.images)
+            )
         }
         return decision
     }
@@ -188,7 +193,7 @@ class ConversationAgent(
             ${input.actionLog}
             $crawlStatus
             当前时间（北京时间）：${input.timeHint}$proactiveHint$extraHint
-        """.trimIndent()
+        """.trimIndent().fixIndent("            ")
     }
 
     /**
@@ -197,7 +202,7 @@ class ConversationAgent(
      * 工具上下文含外来内容（查询结果可能整段是别人的聊天），与聊天记录
      * 同放 user——system 只留指令与稳定状态，避免外来内容在指令层升权。
      */
-    private fun buildUserContent(input: ConversationRequest): String {
+    private fun buildUserContent(input: ConversationRequest, includeTools: Boolean = true): String {
         val historyText = input.recentMessages.joinToString("\n") { line ->
             // 行格式「名字(QQ号)」——LLM 靠 QQ 号锚定身份；QQ 号缺失（旧数据）只留名字，不渲染空括号
             val who = when {
@@ -214,14 +219,21 @@ class ConversationAgent(
         } else {
             "\n" + input.newMessageNotes.joinToString("\n")
         }
-        val toolsText = buildString {
-            appendLine("### 工具")
-            if (input.toolNotes.isEmpty()) {
-                appendLine("（暂无——需要查资料或执行动作时，用 list_tools 获取工具目录）")
-            } else {
-                input.toolNotes.forEach { appendLine(it); appendLine() }
-            }
-        }.trimEnd()
+        // 重试轮（includeTools=false）整段省略：只为修 JSON 形态，不再重发工具上下文
+        val toolsText = if (!includeTools) {
+            ""
+        } else {
+            buildString {
+                appendLine("### 工具")
+                if (input.toolNotes.isEmpty()) {
+                    appendLine("（暂无——需要查资料或执行动作时，用 list_tools 获取工具目录）")
+                } else {
+                    input.toolNotes.forEach { appendLine(it); appendLine() }
+                }
+            }.trimEnd()
+        }
+        // 工具段自带尾随空行；省略时不留空行（否则 user 消息顶着两行空白）
+        val toolsBlock = if (toolsText.isEmpty()) "" else "$toolsText\n\n"
         // 视窗顶部提示：记录不是全量（还没翻到最早消息）时点明「上方还有」，
         // LLM 才知道当前看到的只是最近一段，避免误以为已是会话开头
         val topNotice = if (input.reachedHistoryStart || input.recentMessages.isEmpty()) {
@@ -237,11 +249,9 @@ class ConversationAgent(
                 "——是加载问题不是对方没发图"
         }
         return """
-            $toolsText
-
-            以下是当前会话的聊天记录：
+            ${toolsBlock}以下是当前会话的聊天记录：
             ### 最近聊天记录
             $topNotice${historyText.ifBlank { "（新会话）" }}$newMsgText$missingText
-        """.trimIndent()
+        """.trimIndent().fixIndent("            ")
     }
 }

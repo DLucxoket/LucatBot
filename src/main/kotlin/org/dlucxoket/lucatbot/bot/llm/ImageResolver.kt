@@ -30,7 +30,9 @@ private class BoundedLru<K, V>(private val maxSize: Int) : LinkedHashMap<K, V>(1
  *   （**URL 死了 ≠ 救援试过**），救援结局确定（[rescueTried]）后才彻底跳过
  * - **请求头**：QQ 多媒体 CDN（multimedia.nt.qq.com.cn）缺 Referer/UA 直接 400，
  *   下载带浏览器 UA + `Referer: https://qq.com/`
- * - **体积闸**：超过 [maxBytes] 的图放弃（避免 data URI 撑爆请求体）
+ * - **体积闸**：超过 [maxBytes] 的图放弃（避免 data URI 撑爆请求体）——
+ *   4MB → **2MB**（P2 请求体护栏：base64 膨胀 4/3，6 张顶格 ≈ 32MB 请求体；
+ *   实盘 QQ 原图多在 1MB 内，超 2MB 的走缺失清单如实告知 LLM「没看到」）
  * - **失败即 null**：任何拿不到的地址一律返回 null，调用方降级为
  *   「占位符文本、无附件」——图片通道绝不让会话链路失败
  *
@@ -38,7 +40,7 @@ private class BoundedLru<K, V>(private val maxSize: Int) : LinkedHashMap<K, V>(1
  *   成功 / 4xx 负缓存 / 瞬时故障重试，无需打真实网络）
  */
 class ImageResolver(
-    private val maxBytes: Long = 4L * 1024 * 1024,
+    private val maxBytes: Long = 2L * 1024 * 1024,
     private val cacheCapacity: Int = 64,
     private val fetchHttp: (String) -> ByteArray = { httpGet(it) }
 ) {
