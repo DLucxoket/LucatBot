@@ -76,6 +76,9 @@ class ConversationAgent(
             if (input.reachedHistoryStart) {
                 appendLine("- 已翻到最早消息，没有更早的历史了")
             }
+            if (input.historyCapped) {
+                appendLine("- 已读到窗口上限（${input.historyCovered} 条），**更早的消息不再展开**——read_more 不会再变长，按现有上下文决策，别反复翻")
+            }
             appendLine("- 参考聊天记录里每条消息的时间与顶部当前时间，判断消息新旧与停留时机")
         }
 

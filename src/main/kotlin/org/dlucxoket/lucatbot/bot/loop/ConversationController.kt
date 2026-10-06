@@ -80,6 +80,13 @@ class ConversationController(
         { id, ms -> lucatBot.awaitPendingInsert(id, ms) },
     /** 初始读史条数 */
     private val initialHistoryCount: Int = 10,
+    /**
+     * 聊天记录窗口**硬上限**（token 护栏）——`read_more` 的 `historyCount`
+     * 只增不减、原先没有上界：窗口 100 条 × 单行 800 字 ≈ 80k 字符，而且
+     * **每轮决策都全量重发**。到顶后窗口不再变长，prompt 用
+     * `historyCapped` 如实点名，模型据此按现有上下文决策而非反复 read_more
+     */
+    private val maxHistoryWindow: Int = 80,
     /** 退出会话时记忆整理读取的聊天记录条数 */
     private val reflectHistoryCount: Int = 30,
     /**
@@ -343,6 +350,8 @@ class ConversationController(
             // 没有接话对象：本轮无新消息、窗口最后一条还是自己发的（没人等回应）
             val noRoomToTalk = newNotes.isEmpty() && recentLines.lastOrNull()?.isMe == true
             val reachedHistoryStart = historyResult.messages.size < historyCount
+            // 窗口到顶且还没翻到最早 → 如实进 prompt（防反复 read_more 原地空转）
+            val historyCapped = !reachedHistoryStart && historyCount >= maxHistoryWindow
             // 上一轮/更早 memory_queries 的搜索结果 → 追加在记忆段末尾（**不清空**：
             // 一直带着，直到下次给出 memory_queries 才被新结果整体覆盖；
             // 从没请求过 → 空串，记忆段与原来完全一致）
@@ -375,6 +384,7 @@ class ConversationController(
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
+                historyCapped = historyCapped,
                 hint = buildHint(
                     HintInput(
                         readMoreWithInsertStreak = readMoreWithInsertStreak,
@@ -498,14 +508,19 @@ class ConversationController(
             when (decision.action) {
                 ConversationAction.READ_MORE -> {
                     val count = decision.readCount
-                    historyCount += count
+                    val before = historyCount
+                    // 窗口只增不减曾无上界（每轮全量重发）——到顶即封，prompt 如实点名
+                    historyCount = (historyCount + count).coerceAtMost(maxHistoryWindow)
+                    if (historyCount == before) {
+                        log.info("read_more 已到窗口上限（{} 条），窗口不再变长", maxHistoryWindow)
+                    }
                     readMoreRounds++
                     if (hadInserts) readMoreWithInsertStreak++ else readMoreWithInsertStreak = 0
                     if (!hadInserts) {
                         lucatBot.updateMood { it.decay() }
                     }
                     logAct("爬楼 $count 条", why)
-                    log.info("read_more → 累计读取 {}", historyCount)
+                    log.info("read_more → 累计读取 {}（上限 {}）", historyCount, maxHistoryWindow)
                 }
 
                 ConversationAction.SEND -> {

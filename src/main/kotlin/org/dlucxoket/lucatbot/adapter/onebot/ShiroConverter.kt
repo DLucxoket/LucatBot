@@ -144,17 +144,21 @@ object ShiroConverter {
      *
      * 与 [ChatMessage.describe] 同风格：@ 带 QQ/昵称、reply 带回复目标、
      * 图片/表情/表情包带占位符，禁止 base64。
+     * 超长正文按 [ChatMessage.truncateContent] 统一截断（与爬楼路径同口径）。
      *
      * @param event Shiro 消息事件
      * @return 富内容字符串；解析不出任何段时尝试回退到 message 字段
      */
     fun richContent(event: AnyMessageEvent): String {
         val chat = toModelMessage(event)
-        if (chat.messageMembers.isNotEmpty()) {
-            return chat.describe()
+        val described = if (chat.messageMembers.isNotEmpty()) {
+            chat.describe()
+        } else {
+            // CQ 码解析在 model 层（core 的爬楼入档也要用，不能反向依赖 adapter）
+            org.dlucxoket.lucatbot.model.message.CqParser.describe(event.message ?: "")
         }
-        // CQ 码解析在 model 层（core 的爬楼入档也要用，不能反向依赖 adapter）
-        return org.dlucxoket.lucatbot.model.message.CqParser.describe(event.message ?: "")
+        // 实时路径与爬楼路径同口径截断（长文/合并转发防撑爆 prompt 与存储）
+        return org.dlucxoket.lucatbot.model.message.ChatMessage.truncateContent(described)
     }
 
     /** 取第一个非空白值（DTO 字段解析用；CQ 侧在 CqParser 有各自私有副本） */

@@ -137,6 +137,8 @@ class ConversationControllerTest {
         toolCatalog: ToolCatalog = ToolCatalog(),
         /** 假聊天记录行（默认造 historyCount 条；图片附件等场景传自定义行） */
         historyLines: List<HistoryMessageItem>? = null,
+        /** 聊天记录窗口硬上限（token 护栏用例传小值；默认 = 生产 80） */
+        maxHistoryWindow: Int = 80,
         /** 协议侧取图替身（NapCat get_image：ref → 本地路径/URL，null=救援失败） */
         imageSource: (String) -> String? = { null },
         /**
@@ -187,6 +189,7 @@ class ConversationControllerTest {
             toolCatalog = toolCatalog,
             imageSource = imageSource,
             initialHistoryCount = 3,
+            maxHistoryWindow = maxHistoryWindow,
             reflectExecutor = reflectExecutor,
             segmentDelayWait = segmentDelayWait,
             replyWait = replyWait,
@@ -1384,6 +1387,24 @@ class ConversationControllerTest {
         assertTrue(lastPrompt.contains("爬楼状态"), "prompt 应包含爬楼状态段")
         assertTrue(lastPrompt.contains("已爬楼 10 次"), "应显示累计爬楼次数")
         assertTrue(lastPrompt.contains("已翻到最早消息"), "应提示已翻到历史开头")
+    }
+
+    @Test
+    fun `history window is capped and prompt says so instead of growing forever`() {
+        // token 护栏：read_more 的窗口只增不减曾无上界——每轮决策全量重发，
+        // 窗口越大越贵。到顶后窗口封死，且 prompt 如实点名，防反复 read_more 空转
+        val responses = MutableList(3) { """{"action":"read_more","params":{"count":5}}""" }
+        val llm = FakeLLM(responses)
+        val lines = (1..40).map { HistoryMessageItem("用户A", "消息$it", it * 1000L) }
+        val (controller, _, _) = buildController(llm, historyLines = lines, maxHistoryWindow = 5)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts.last()
+        assertTrue(prompt.contains("已读到窗口上限"), "窗口到顶要如实点名：$prompt")
+        assertTrue(prompt.contains("更早的消息不再展开"), "点明 read_more 不再变长：$prompt")
+        assertTrue(prompt.contains("累计覆盖最近 5 条消息"), "窗口被封在上限 5 条：$prompt")
+        assertFalse(prompt.contains("已翻到最早消息，没有更早的历史了"), "库里还有 40 条，不能谎称翻到头：$prompt")
     }
 
     @Test

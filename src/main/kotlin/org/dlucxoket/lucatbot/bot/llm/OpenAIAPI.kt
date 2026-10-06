@@ -6,6 +6,7 @@ import dev.langchain4j.data.message.SystemMessage
 import dev.langchain4j.data.message.TextContent
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
+import dev.langchain4j.model.chat.response.ChatResponse
 import dev.langchain4j.model.openai.OpenAiChatModel
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -126,11 +127,33 @@ class OpenAIAPI: LLM {
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         val response = model.chat(chatRequest)
+        logUsage(response, "文本")
         val text = response.aiMessage().text()
         if (text.isNullOrBlank()) {
             log.warn("LLM 返回空文本（端点异常/输出被吞/finish_reason 截断），调用方会按解析失败兜底")
         }
         return text
+    }
+
+    /**
+     * 记录一次调用的 token 用量（**量化优先**：先拿真实分布，再谈精简哪里）
+     *
+     * 端点不回 usage 时如实标注「未返回」，不猜数；模型名一起打进日志，
+     * 换端点/换模型后的成本差异一眼可比。入参/出参分列，方便对着
+     * 「指令段每轮重发」这条主线看边际成本。
+     */
+    private fun logUsage(response: ChatResponse, path: String) {
+        val usage = response.tokenUsage()
+        if (usage == null) {
+            log.info("LLM用量[{}]：端点未返回 tokenUsage（模型 {}）", path, modelName)
+        } else {
+            // 显式调 getter：TokenUsage 的同名字段是 private，
+            // Kotlin 属性语法会解析到字段上（编译期「不可访问」）
+            log.info(
+                "LLM用量[{}]：输入 {} / 输出 {} / 合计 {} token（模型 {}）",
+                path, usage.inputTokenCount(), usage.outputTokenCount(), usage.totalTokenCount(), modelName
+            )
+        }
     }
 
     /**
@@ -160,7 +183,9 @@ class OpenAIAPI: LLM {
                 listOf(UserMessage(contents))
             }
             val chatRequest = ChatRequest.builder().messages(messages).build()
-            val result = createModel().chat(chatRequest).aiMessage().text()
+            val response = createModel().chat(chatRequest)
+            logUsage(response, "带图")
+            val result = response.aiMessage().text()
             if (result.isNullOrBlank()) {
                 log.warn("LLM 返回空文本（带图请求），调用方会按解析失败兜底")
             }

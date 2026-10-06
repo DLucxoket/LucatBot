@@ -496,7 +496,9 @@ class LucatBot {
     private fun extractRichContent(event: MessageEvent): String {
         val msg = event.message
         return if (msg is org.dlucxoket.lucatbot.model.message.ChatMessage) {
-            msg.describe()
+            // 与爬楼路径同口径截断：长文/合并转发若全量入队，会原样进未读与
+            // 待插入注释、每轮决策重发（实时路径曾漏截，只有爬楼截了 800）
+            org.dlucxoket.lucatbot.model.message.ChatMessage.truncateContent(msg.describe())
         } else {
             ""
         }

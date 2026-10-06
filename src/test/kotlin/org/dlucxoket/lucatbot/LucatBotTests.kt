@@ -21,6 +21,20 @@ import org.junit.jupiter.api.Test
 class ChatMessageTest {
 
     @Test
+    fun `truncateContent caps long content at 800 with ellipsis`() {
+        // 实时入档与爬楼同口径（token 护栏）：长文/合并转发不许全量进 prompt——
+        // 每轮决策都会把历史窗口整段重发
+        val truncated = ChatMessage.truncateContent("长".repeat(900))
+        assertEquals(ChatMessage.MAX_CONTENT_CHARS + 1, truncated.length, "取前 800 字 + 省略号")
+        assertTrue(truncated.endsWith("…"), truncated.takeLast(5))
+        // 恰好 800 字不动、短消息原样返回（不许误伤正常内容）
+        assertEquals(800, ChatMessage.truncateContent("中".repeat(800)).length)
+        assertEquals("短消息", ChatMessage.truncateContent("短消息"))
+        // 幂等：再截一次结果不变（两条入档路径可能先后各截一刀）
+        assertEquals(truncated, ChatMessage.truncateContent(truncated))
+    }
+
+    @Test
     fun `describe text only`() {
         val msg = ChatMessage(listOf(TextMessageMember("hello")))
         assertEquals("hello", msg.describe())

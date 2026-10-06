@@ -149,4 +149,19 @@ open class ChatMessage(
             else -> ""
         }
     }
+
+    companion object {
+        /**
+         * 入档 / 注入 prompt 的正文统一截断上限（**实时与爬楼同口径**）
+         *
+         * 爬楼拉取路径一直有 800 字截断，实时入档曾全量入库——长文、合并转发的
+         * describe 动辄上千字，会原样进历史窗口、未读列表与新消息注释，**每轮
+         * 决策都重发一遍**。统一到本口径后，单条消息对 prompt 的贡献有硬上界。
+         */
+        const val MAX_CONTENT_CHARS = 800
+
+        /** 超长正文统一截断（超出取前 [MAX_CONTENT_CHARS] 字 + 省略号）；不超长原样返回 */
+        fun truncateContent(content: String): String =
+            if (content.length > MAX_CONTENT_CHARS) content.take(MAX_CONTENT_CHARS) + "…" else content
+    }
 }

@@ -467,5 +467,13 @@ data class ConversationRequest(
      * 声称「盯着图看了半天」）。
      */
     @JsonProperty("missingImages")
-    val missingImages: List<String> = emptyList()
+    val missingImages: List<String> = emptyList(),
+
+    /**
+     * 窗口已到**读取上限**（[org.dlucxoket.lucatbot.bot.loop.ConversationController]
+     * 的 maxHistoryWindow）且还没翻到最早——read_more 已经不再变长。
+     * prompt 如实点名「更早的不展开」，防模型反复 read_more 空转。
+     */
+    @JsonProperty("historyCapped")
+    val historyCapped: Boolean = false
 )

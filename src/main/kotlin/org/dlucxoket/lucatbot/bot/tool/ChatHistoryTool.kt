@@ -114,10 +114,9 @@ object ChatHistoryTool : Tool<ChatHistoryRequest, ChatHistoryResult>() {
                 val parsed = ChatMessage(CqParser.toMembers(raw))
                 var content = parsed.describe()
                 if (content.isBlank()) return@forEach
-                // 过长内容（如合并转发 JSON）截断，避免污染 prompt / 存储
-                if (content.length > 800) {
-                    content = content.take(800) + "…"
-                }
+                // 过长内容（如合并转发 JSON）截断，避免污染 prompt / 存储——
+                // 与实时入档共用同一口径（ChatMessage.truncateContent）
+                content = org.dlucxoket.lucatbot.model.message.ChatMessage.truncateContent(content)
                 val imageUrls = parsed.assetUrls().takeIf { it.isNotEmpty() }
 
                 val senderId = msg.senderUserId ?: msg.userId ?: 0L
