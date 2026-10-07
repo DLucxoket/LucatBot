@@ -141,6 +141,14 @@ class MemoryService(
     }
 
     /**
+     * 全量记忆（**只读**，Web 面板统计用——总数/按类型/最近几条）
+     *
+     * 不在 prompt 注入路径上（那条走 [getMemorySummary] / [getMemoryOverview] 的
+     * 分桶限额），所以这里给全量不影响决策成本
+     */
+    fun allMemories(): List<MemoryItem> = repository.findAll()
+
+    /**
      * 获取某个主体的记忆摘要（注入 LLM prompt）
      *
      * 模拟真人回忆："我记得这个人..."

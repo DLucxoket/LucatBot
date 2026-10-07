@@ -1,0 +1,19 @@
+{
+  "name": "lucatbot-web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "LucatBot 控制台——token 用量与机器人状态可视化（构建产物进 src/main/resources/static）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.43"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "vite": "^6.4.4"
+  }
+}

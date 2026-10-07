@@ -136,11 +136,16 @@ Agent 的 `llm` 是组合（has-a），不是继承 LLM。Tool 的 `bot` 同理�
 ## 开发命令
 
 ```bash
-./gradlew run              # 运行机器人（需要 LLM_API_KEY 或兼容的 OpenAI 协议端点）
+./gradlew bootRun         # 运行机器人（没有 `run` 任务；需要 LLM_API_KEY 或兼容的 OpenAI 协议端点）
 ./gradlew test             # 运行所有测试
 ./gradlew build            # 构建（编译 + 测试 + jar）
 ./gradlew compileKotlin    # 仅编译，不跑测试
+
+cd web && npm run build    # 构建控制台前端 → src/main/resources/static（产物已入库，没 Node 也能跑）
+cd web && npm run dev      # 前端开发服务器 5173，/api 代理到 8080（改完记得 npm run build）
 ```
+
+Web 控制台：`http://localhost:8080/`（token 用量 + 机器人状态，只读 API 见 `执行流程.md` 的「Web 控制台」一节）。
 
 ## 核心依赖
 

@@ -101,6 +101,9 @@ class ActionLog(
         }
     }
 
+    /** 结构化快照（**只读副本**，Web 面板用）——按写入顺序（旧 → 新） */
+    fun all(): List<ActionLogEntry> = entries.toList()
+
     fun size(): Int = entries.size
 
     fun clear() {

@@ -101,13 +101,20 @@ class TodoService(
      */
     fun summaryForPrompt(doneLimit: Int = 5): String {
         val pending = pendingSummary()
-        val done = repository.findAll().filter { it.done }
-            .sortedByDescending { it.completedAt ?: it.createdAt }
-            .take(doneLimit)
+        val done = recentDone(doneLimit)
         if (done.isEmpty()) return pending
         val doneLines = done.joinToString("\n") { "- [x] (${it.id.take(4)}) ${it.content}" }
         return pending + "\n最近已完成（办过的事，别再当成没做）：\n" + doneLines
     }
+
+    /**
+     * 最近完成的待办（按 [TodoItem.completedAt] 倒序）——prompt 与 **Web 面板**
+     * 共用同一排序口径（历史完成不删，保留痕迹）
+     */
+    fun recentDone(limit: Int = 5): List<TodoItem> =
+        repository.findAll().filter { it.done }
+            .sortedByDescending { it.completedAt ?: it.createdAt }
+            .take(limit)
 
     /**
      * 持久化到文件

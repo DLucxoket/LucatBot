@@ -70,3 +70,5 @@ replay_pid*
 
 # 运行时持久化数据（聊天记�?记忆�?
 /data/
+# Vue frontend module: deps stay out; build output is committed in src/main/resources/static
+web/node_modules/

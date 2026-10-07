@@ -1,6 +1,7 @@
 package org.dlucxoket.lucatbot.bot.llm
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import org.dlucxoket.lucatbot.bot.persona.TimeFormat
 import org.slf4j.LoggerFactory
 import java.io.File
 
@@ -76,8 +77,13 @@ object TokenUsageLedger {
         TEXT("文字"), IMAGE("图片")
     }
 
-    /** 统计键：agent × 会话 × 通道 */
-    private data class Key(val agent: String, val conversation: String, val channel: Channel)
+    /** 统计键：agent × 会话 × 通道 × 模型（换端点/换模型后成本可比） */
+    private data class Key(
+        val agent: String,
+        val conversation: String,
+        val channel: Channel,
+        val model: String
+    )
 
     /** 一个键上的累计值（calls / 入参 token / 出参 token） */
     private data class Agg(val calls: Long, val input: Long, val output: Long) {
@@ -141,10 +147,10 @@ object TokenUsageLedger {
         val reported = input != null || output != null
         synchronized(lock) {
             ensureLoadedLocked()
-            val key = Key(agent, conversation, channel)
+            val key = Key(agent, conversation, channel, model)
             totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, inTok, outTok)
             if (!reported) noUsageCalls++
-            appendLocked(key, model, inTok, outTok, reported)
+            appendLocked(key, inTok, outTok, reported)
             sinceSummary++
             if (summaryEvery > 0 && sinceSummary >= summaryEvery) {
                 sinceSummary = 0
@@ -153,10 +159,79 @@ object TokenUsageLedger {
         }
     }
 
-    /** 分维度汇总（跨重启累计）——按通道 / 按 agent / 按会话（前 N 个） */
+    /** 分维度汇总（跨重启累计）——按通道 / 按 agent / 按会话（前 N 个） / 按模型 */
     fun summary(topConversations: Int = 8): String = synchronized(lock) {
         ensureLoadedLocked()
         summaryLocked(topConversations)
+    }
+
+    /** 端点没回 usage 的调用数（跨重启累计，前端如实标注「按 0 计」） */
+    fun noUsageCalls(): Long = synchronized(lock) {
+        ensureLoadedLocked()
+        noUsageCalls
+    }
+
+    /**
+     * 结构化快照（**Web API 用**）：按统计键分组的累计值，合计降序
+     *
+     * 与 [summary] 同一份数据，只是不渲染成文本——前端自己决定怎么透视
+     */
+    fun snapshot(): List<Entry> = synchronized(lock) {
+        ensureLoadedLocked()
+        totals.map { (k, v) ->
+            Entry(
+                agent = k.agent,
+                conversation = k.conversation,
+                channel = k.channel.label,
+                model = k.model,
+                calls = v.calls,
+                input = v.input,
+                output = v.output
+            )
+        }.sortedByDescending { it.total }
+    }
+
+    /**
+     * 调用明细（**时间轴/明细表用**）——按 `data/token-usage.jsonl` 解析，时间倒序
+     *
+     * 聚合在内存里、明细在文件里：内存不随调用次数膨胀，历史全量可查。
+     * 无文件（测试关掉了落盘）返回空表
+     */
+    fun history(limit: Int = 500): List<Call> {
+        val path = filePath ?: return emptyList()
+        val file = File(path)
+        if (!file.exists()) return emptyList()
+        return file.readLines(Charsets.UTF_8).mapNotNull { line ->
+            if (line.isBlank()) null else runCatching { parseCall(line) }.getOrNull()
+        }.sortedByDescending { it.epoch }.take(limit)
+    }
+
+    /** 一个统计键的累计值（对外只读） */
+    data class Entry(
+        val agent: String,
+        val conversation: String,
+        val channel: String,
+        val model: String,
+        val calls: Long,
+        val input: Long,
+        val output: Long
+    ) {
+        val total: Long get() = input + output
+    }
+
+    /** 一次调用的明细（读 jsonl 得到） */
+    data class Call(
+        val epoch: Long,
+        val agent: String,
+        val conversation: String,
+        val channel: String,
+        val model: String,
+        val input: Long,
+        val output: Long,
+        /** false = 端点没回 usage（token 按 0 计，前端如实标） */
+        val reported: Boolean
+    ) {
+        val total: Long get() = input + output
     }
 
     // ------------------------------------------------------------------
@@ -178,7 +253,8 @@ object TokenUsageLedger {
                     agent = node.path("agent").asText("unknown"),
                     conversation = node.path("conversation").asText("-"),
                     channel = Channel.entries.firstOrNull { it.label == node.path("channel").asText() }
-                        ?: Channel.TEXT
+                        ?: Channel.TEXT,
+                    model = node.path("model").asText("unknown")
                 )
                 val agg = Agg(
                     calls = node.path("calls").asLong(1L),
@@ -195,17 +271,21 @@ object TokenUsageLedger {
     }
 
     /** 追加一行明细（append-only；失败只记日志，绝不影响调用方的 LLM 链路） */
-    private fun appendLocked(key: Key, model: String, input: Long, output: Long, reported: Boolean) {
+    private fun appendLocked(key: Key, input: Long, output: Long, reported: Boolean) {
         val path = filePath ?: return
         runCatching {
+            val now = System.currentTimeMillis()
             val line = mapper.writeValueAsString(
                 mapOf(
-                    "ts" to java.time.LocalDateTime.now()
-                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    // epoch 供时间轴分桶（旧格式 ts 只有本地时间字符串，读时兜底解析）
+                    "epoch" to now,
+                    "ts" to java.time.LocalDateTime.ofInstant(
+                        java.time.Instant.ofEpochMilli(now), TimeFormat.ZONE
+                    ).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
                     "agent" to key.agent,
                     "conversation" to key.conversation,
                     "channel" to key.channel.label,
-                    "model" to model,
+                    "model" to key.model,
                     "calls" to 1,
                     "in" to input,
                     "out" to output,
@@ -245,7 +325,41 @@ object TokenUsageLedger {
             "｜（其他 ${rest.size} 个会话 ${fmt(restAgg)}）"
         }
         sb.append("\n- 按会话：").append(convText)
+        sb.append("\n- 按模型：").append(
+            render(
+                totals.keys.map { it.model }.distinct().sorted()
+                    .map { m -> m to aggregate { k -> k.model == m } }
+            )
+        )
         return sb.toString()
+    }
+
+    /**
+     * 解析一行 jsonl → 明细
+     *
+     * 旧格式（加 epoch 之前）只有本地时间字符串 ts——按 [TimeFormat.ZONE]
+     * 兜底解析成毫秒时间戳；解析不了就抛给调用方按坏行跳过
+     */
+    private fun parseCall(line: String): Call {
+        val node = mapper.readTree(line)
+        val epoch = if (node.has("epoch")) {
+            node.path("epoch").asLong(0L)
+        } else {
+            java.time.LocalDateTime.parse(
+                node.path("ts").asText(),
+                java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            ).atZone(TimeFormat.ZONE).toInstant().toEpochMilli()
+        }
+        return Call(
+            epoch = epoch,
+            agent = node.path("agent").asText("unknown"),
+            conversation = node.path("conversation").asText("-"),
+            channel = node.path("channel").asText("文字"),
+            model = node.path("model").asText("unknown"),
+            input = node.path("in").asLong(0L),
+            output = node.path("out").asLong(0L),
+            reported = node.path("reported").asBoolean(true)
+        )
     }
 
     /** 按谓词聚合成一行「名称 次数 入/出/合」 */
