@@ -9,6 +9,7 @@ import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.chat.response.ChatResponse
 import dev.langchain4j.model.openai.OpenAiChatModel
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 
@@ -34,7 +35,20 @@ import org.springframework.stereotype.Component
  * 这在低频场景下没问题，但在高频调用时可能有性能开销。
  */
 @Component
-class OpenAIAPI: LLM {
+class OpenAIAPI @Autowired constructor(
+    /**
+     * token 用量账本——**构造注入**（DIP：可替换、可测，不再是绕过 DI 的全局单例）
+     *
+     * Spring 路径由 [TokenUsageConfig] 提供（jsonl 存储、跨重启累计）；
+     * 非 Spring 的 [DEFAULT] 兜底实例走次构造，自带**不落盘**的内存账本。
+     * 标 `@Autowired` 是因为本类还有一个无参次构造——不标 Spring 会挑无参的那条。
+     */
+    private val tokenUsage: TokenUsageAggregator
+) : LLM {
+
+    /** 非 Spring 环境兜底（单元测试 / `LLM.DEFAULT`）：账本只统计不落盘 */
+    constructor() : this(TokenUsageAggregator(InMemoryTokenUsageStore()))
+
     private val log = LoggerFactory.getLogger(OpenAIAPI::class.java)
 
     companion object {
@@ -127,7 +141,7 @@ class OpenAIAPI: LLM {
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         val response = model.chat(chatRequest)
-        recordUsage(response, TokenUsageLedger.Channel.TEXT)
+        recordUsage(response, TokenUsageChannel.TEXT)
         val text = response.aiMessage().text()
         if (text.isNullOrBlank()) {
             log.warn("LLM 返回空文本（端点异常/输出被吞/finish_reason 截断），调用方会按解析失败兜底")
@@ -141,13 +155,14 @@ class OpenAIAPI: LLM {
      * 两处去向：
      * - **日志**：打全三个维度 `[通道][agent][会话]`——端点不回 usage 时如实标注
      *   「未返回」，不猜数；模型名一起打，换端点/换模型后的成本差异一眼可比
-     * - **账本**：[TokenUsageLedger.record] 按 通道（文字/图片）× agent × 会话
-     *   三维累计，并落盘 `data/token-usage.jsonl`（append-only，跨重启累计）
+     * - **账本**：[TokenUsageAggregator.record] 按 通道（文字/图片）× agent × 会话
+     *   三维累计，明细经 [TokenUsageStore] 落盘（append-only，跨重启累计）
      *
      * agent/会话两个维度取自 [TokenUsageScope]（Agent 入口与编排层在调用前挂上），
-     * 这里只负责取——[LLM] 接口不因此加参数（ISP）。
+     * 这里只负责取——[LLM] 接口不因此加参数（ISP）。账本本身是**构造注入**的
+     * （DIP：非 Spring 的兜底实例自带不落盘的内存账本）。
      */
-    private fun recordUsage(response: ChatResponse, channel: TokenUsageLedger.Channel) {
+    private fun recordUsage(response: ChatResponse, channel: TokenUsageChannel) {
         val usage = response.tokenUsage()
         val agent = TokenUsageScope.agent()
         val conversation = TokenUsageScope.conversation()
@@ -165,7 +180,7 @@ class OpenAIAPI: LLM {
                 usage.inputTokenCount(), usage.outputTokenCount(), usage.totalTokenCount(), modelName
             )
         }
-        TokenUsageLedger.record(
+        tokenUsage.record(
             agent = agent,
             conversation = conversation,
             channel = channel,
@@ -203,7 +218,7 @@ class OpenAIAPI: LLM {
             }
             val chatRequest = ChatRequest.builder().messages(messages).build()
             val response = createModel().chat(chatRequest)
-            recordUsage(response, TokenUsageLedger.Channel.IMAGE)
+            recordUsage(response, TokenUsageChannel.IMAGE)
             val result = response.aiMessage().text()
             if (result.isNullOrBlank()) {
                 log.warn("LLM 返回空文本（带图请求），调用方会按解析失败兜底")

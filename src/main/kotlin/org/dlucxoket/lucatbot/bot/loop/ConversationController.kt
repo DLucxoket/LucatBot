@@ -1,7 +1,6 @@
 package org.dlucxoket.lucatbot.bot.loop
 
 import org.dlucxoket.lucatbot.bot.LucatBot
-import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
 import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
@@ -408,10 +407,8 @@ class ConversationController(
             log.info("第 {} 轮决策：调用会话智能体（历史 {} 条、新消息 {} 条、图片 {} 张）",
                 round, historyCount, inserts.size, attachments.images.size)
             val decisionStartMs = System.currentTimeMillis()
-            // token 统计维度：这场 LLM 调用属于哪个会话（账本按 会话 × agent × 通道 分类）
-            var decision = TokenUsageScope.withConversation(conversationId) {
-                conversationAgent.processObject(request)
-            }
+            // 会话维度由 ConversationAgent.conversationTag(input) 自挂（入参自带会话键）
+            var decision = conversationAgent.processObject(request)
             // 决策行带上关键参数（等回信/停留秒数）——否则「发送后为什么 5 分钟没下一步」
             // 在日志里无从判断（实盘：wait_message 300s 静默等待被当成卡死）
             val paramsNote = when (decision.action) {

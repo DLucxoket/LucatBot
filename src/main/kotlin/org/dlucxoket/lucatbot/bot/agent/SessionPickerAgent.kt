@@ -5,6 +5,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.SessionDecisionParser
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.fixIndent
 
 /**
  * 查看会话智能体（消息列表决策）
@@ -28,6 +29,9 @@ class SessionPickerAgent(
     """.trimIndent()
 
     override val inputClass: Class<SessionPickerRequest> = SessionPickerRequest::class.java
+
+    /** token 统计的会话维度：选会话固定发生在「消息列表」上下文 */
+    override fun conversationTag(input: SessionPickerRequest): String = "消息列表"
 
     override fun handle(input: SessionPickerRequest): SessionDecision {
         val systemPrompt = buildSystemPrompt(input)
@@ -95,7 +99,7 @@ class SessionPickerAgent(
             ### 你最近的操作
             ${input.actionLog}
             当前时间（北京时间）：${input.timeHint}
-        """.trimIndent().fixIndent("            ")
+        """.trimIndent().fixIndent()
     }
 
     /**
@@ -157,6 +161,6 @@ class SessionPickerAgent(
             以下是当前消息列表的数据：
             ### 未读消息
             $sessionsText$cooldownText$proactiveText
-        """.trimIndent().fixIndent("            ")
+        """.trimIndent().fixIndent()
     }
 }

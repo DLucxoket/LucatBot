@@ -2,7 +2,7 @@ package org.dlucxoket.lucatbot.bot.loop
 
 import jakarta.annotation.PreDestroy
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
-import org.dlucxoket.lucatbot.bot.llm.TokenUsageLedger
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.slf4j.LoggerFactory
@@ -31,7 +31,9 @@ class ProgramShutdown(
     private val conversationController: ConversationController,
     private val memoryService: MemoryService,
     private val chatHistoryService: ChatHistoryService,
-    private val todoService: TodoService
+    private val todoService: TodoService,
+    /** token 用量账本（构造注入，见 [org.dlucxoket.lucatbot.bot.llm.TokenUsageConfig]） */
+    private val tokenUsage: TokenUsageAggregator
 ) {
     private val log = LoggerFactory.getLogger(ProgramShutdown::class.java)
 
@@ -52,7 +54,7 @@ class ProgramShutdown(
         step("落盘·待办") { todoService.flush() }
         // 终值汇总：按 通道（文字/图片）× agent × 会话 三个维度打一次账
         //（明细在 data/token-usage.jsonl，跨重启累计；停机后再看一眼总量）
-        step("token 用量汇总") { log.info("\n{}", TokenUsageLedger.summary()) }
+        step("token 用量汇总") { log.info("\n{}", tokenUsage.summary()) }
 
         log.info("程序停止：记忆/聊天记录/待办已全部落盘")
     }

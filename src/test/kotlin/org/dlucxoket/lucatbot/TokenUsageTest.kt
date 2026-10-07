@@ -1,46 +1,38 @@
 package org.dlucxoket.lucatbot
 
-import org.dlucxoket.lucatbot.bot.llm.TokenUsageLedger
+import org.dlucxoket.lucatbot.bot.llm.InMemoryTokenUsageStore
+import org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
-import org.junit.jupiter.api.AfterEach
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageStore
 import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * token 用量账本：**按维度分门别类**（通道 文字/图片 × agent × 会话）
+ * token 用量聚合器：**按维度分门别类**（通道 文字/图片 × agent × 会话 × 模型）
  *
- * 覆盖三件事：三维分类汇总的正确性、jsonl 落盘与「跨重启累计」、
- * 维度上下文的挂载/还原（断链会把统计全记成 unknown/-）。
+ * 覆盖四件事：三维分类汇总的正确性、存储读回的「跨重启累计」、未返回用量的
+ * 如实单列、维度上下文的挂载/还原。**每条测试 new 自己的实例 + 替身存储**——
+ * 不再靠 configure/reset 改全局状态（构造注入修复后的写法）。
  */
 class TokenUsageTest {
 
-    private lateinit var file: File
-
-    @BeforeEach
-    fun setUp() {
-        file = File.createTempFile("token-usage", ".jsonl").apply { delete() }
-        TokenUsageLedger.summaryEvery = 0 // 测试期间不打自动汇总日志
-        TokenUsageLedger.configure(file.absolutePath)
-        TokenUsageLedger.reset()
-    }
-
-    @AfterEach
-    fun tearDown() {
-        TokenUsageLedger.configure(null)
-        TokenUsageLedger.reset()
-        TokenUsageLedger.summaryEvery = 10
-        file.delete()
-    }
+    /** 建一个不打自动汇总日志的聚合器（every = 0） */
+    private fun aggregator(
+        store: TokenUsageStore = InMemoryTokenUsageStore(),
+        every: Int = 0
+    ) = TokenUsageAggregator(store, every)
 
     @Test
     fun `summary groups by channel agent and conversation`() {
-        TokenUsageLedger.record("ConversationAgent", "private:123", TokenUsageLedger.Channel.TEXT, "m", 100, 20)
-        TokenUsageLedger.record("ConversationAgent", "private:123", TokenUsageLedger.Channel.IMAGE, "m", 900, 30)
-        TokenUsageLedger.record("SessionPickerAgent", "消息列表", TokenUsageLedger.Channel.TEXT, "m", 50, 10)
+        val ledger = aggregator()
+        ledger.record("ConversationAgent", "private:123", TokenUsageChannel.TEXT, "m", 100, 20)
+        ledger.record("ConversationAgent", "private:123", TokenUsageChannel.IMAGE, "m", 900, 30)
+        ledger.record("SessionPickerAgent", "消息列表", TokenUsageChannel.TEXT, "m", 50, 10)
 
-        val s = TokenUsageLedger.summary()
+        val s = ledger.summary()
         // 总账
         assertTrue(s.contains("累计 3 次：入 1050 / 出 60 / 合计 1110"), s)
         // 维度一：通道（图片的视觉 token 计在入参里，靠通道单列出来）
@@ -50,42 +42,55 @@ class TokenUsageTest {
         // 维度三：会话
         assertTrue(s.contains("按会话：private:123 2次"), s)
         assertTrue(s.contains("消息列表 1次"), s)
+        // 维度四：模型（换端点后成本可比）
+        assertTrue(s.contains("按模型：m 3次"), s)
     }
 
     @Test
     fun `conversation list is capped with an other bucket`() {
+        val ledger = aggregator()
         repeat(12) { i ->
-            TokenUsageLedger.record("ConversationAgent", "private:$i", TokenUsageLedger.Channel.TEXT, "m", 1, 1)
+            ledger.record("ConversationAgent", "private:$i", TokenUsageChannel.TEXT, "m", 1, 1)
         }
-        val s = TokenUsageLedger.summary(topConversations = 3)
+        val s = ledger.summary(topConversations = 3)
         assertTrue(s.contains("其他 9 个会话"), "超出前 N 的会话归并：$s")
         assertTrue(s.contains("private:0") && s.contains("private:1") && s.contains("private:2"),
             "按合计排序取前 3：$s")
     }
 
     @Test
-    fun `persisted lines reload so summary is cumulative across restarts`() {
-        TokenUsageLedger.record("ConversationAgent", "private:1", TokenUsageLedger.Channel.TEXT, "m", 10, 5)
+    fun `persisted rows reload so summary is cumulative across restarts`() {
+        val file = File.createTempFile("token-usage", ".jsonl").apply { delete() }
+        try {
+            val first = aggregator(JsonlTokenUsageStore(file.absolutePath))
+            first.record("ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", 10, 5)
 
-        assertTrue(file.exists(), "应落盘 jsonl")
-        val line = file.readLines().single()
-        assertTrue(line.contains("\"agent\":\"ConversationAgent\""), line)
-        assertTrue(line.contains("\"channel\":\"文字\""), line)
-        assertTrue(line.contains("\"conversation\":\"private:1\""), line)
+            // 落盘行带齐维度字段
+            assertTrue(file.exists(), "应落盘 jsonl")
+            val line = file.readLines().single()
+            assertTrue(line.contains("\"agent\":\"ConversationAgent\""), line)
+            assertTrue(line.contains("\"channel\":\"文字\""), line)
+            assertTrue(line.contains("\"conversation\":\"private:1\""), line)
+            assertTrue(line.contains("\"epoch\":"), "时间轴分桶要 epoch：$line")
 
-        // 模拟重启：内存清空后重新从文件加载 → 汇总跨重启累计
-        TokenUsageLedger.reset()
-        TokenUsageLedger.record("ConversationAgent", "private:1", TokenUsageLedger.Channel.TEXT, "m", 1, 1)
-        val s = TokenUsageLedger.summary()
-        assertTrue(s.contains("累计 2 次：入 11 / 出 6 / 合计 17"), "跨重启累计：$s")
+            // 模拟重启：新实例读同一存储 → 汇总跨重启累计
+            val restarted = aggregator(JsonlTokenUsageStore(file.absolutePath))
+            restarted.record("ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", 1, 1)
+            val s = restarted.summary()
+            assertTrue(s.contains("累计 2 次：入 11 / 出 6 / 合计 17"), "跨重启累计：$s")
+        } finally {
+            file.delete()
+        }
     }
 
     @Test
     fun `missing usage counts the call with zero and is called out honestly`() {
-        TokenUsageLedger.record("ConversationAgent", "private:1", TokenUsageLedger.Channel.TEXT, "m", null, null)
-        val s = TokenUsageLedger.summary()
+        val ledger = aggregator()
+        ledger.record("ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", null, null)
+        val s = ledger.summary()
         assertTrue(s.contains("累计 1 次：入 0 / 出 0 / 合计 0"), s)
         assertTrue(s.contains("1 次端点未返回用量（按 0 计）"), "不猜数、如实单列：$s")
+        assertEquals(1L, ledger.noUsageCalls())
     }
 
     @Test

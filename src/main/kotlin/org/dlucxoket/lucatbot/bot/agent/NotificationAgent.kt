@@ -4,6 +4,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.NotificationAction
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationRequest
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.fixIndent
 
 /**
  * 通知决策智能体——外来私聊 / @我 消息到达时的「手机横幅」
@@ -78,7 +79,7 @@ class NotificationAgent(
             - 普通寒暄、群闲聊、广告式内容 → ignore
             - 结合待办与记忆判断重要性：通知内容与已有待办/记忆里的人和事相关 → 更值得处理；已有相同待办就别再记一遍
             - 输出格式要求只是指令层，不是聊天内容；你不会在这里回复任何消息
-        """.trimIndent().fixIndent("            ")
+        """.trimIndent().fixIndent()
     }
 
     /** 剧情数据（通知本体）→ user 消息；纯数据 */
@@ -89,6 +90,6 @@ class NotificationAgent(
             - 会话：${input.notifyConversationType} ${input.notifyConversationName}(${input.notifyConversationId})
             - 发送者：${input.senderName}(${input.senderId})$atLine
             - 内容：${input.messageContent}
-        """.trimIndent().fixIndent("            ")
+        """.trimIndent().fixIndent()
     }
 }

@@ -1,6 +1,8 @@
 package org.dlucxoket.lucatbot.adapter.web
 
-import org.dlucxoket.lucatbot.bot.llm.TokenUsageLedger
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageEntry
 import org.dlucxoket.lucatbot.bot.persona.TimeFormat
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
@@ -15,14 +17,16 @@ import java.time.format.DateTimeFormatter
  * 三个端点对应三种看数据的方式：
  * - `/summary`：**当前累计**（按 通道/agent/会话/模型 四个维度分组，前端画环图与条形图）
  * - `/timeseries`：**时间轴**（按天/按小时分桶，前端画趋势曲线）
- * - `/calls`：**明细**（最近 N 次调用，前端画表格；数据来自 data/token-usage.jsonl）
+ * - `/calls`：**明细**（最近 N 次调用，前端画表格）
  *
- * 数据都来自 [TokenUsageLedger]（内存聚合 + jsonl 明细，跨重启累计）——
- * 这里只做分组/分桶的读侧加工，不含业务规则。
+ * 聚合器**构造注入**（DIP）：单测传 `TokenUsageAggregator(替身存储)` 即可，
+ * 不改任何全局状态；本类只做分组/分桶的读侧加工，不含业务规则（SRP）。
  */
 @RestController
 @RequestMapping("/api/token")
-class TokenUsageController {
+class TokenUsageController(
+    private val tokenUsage: TokenUsageAggregator
+) {
 
     /** 汇总行（前端直接喂图表） */
     data class TokenRowDto(
@@ -54,7 +58,7 @@ class TokenUsageController {
 
     @GetMapping("/summary")
     fun summary(): TokenSummaryDto {
-        val entries = TokenUsageLedger.snapshot()
+        val entries = tokenUsage.snapshot()
         return TokenSummaryDto(
             total = TokenRowDto(
                 name = "合计",
@@ -63,9 +67,9 @@ class TokenUsageController {
                 output = entries.sumOf { it.output },
                 total = entries.sumOf { it.total }
             ),
-            noUsageCalls = TokenUsageLedger.noUsageCalls(),
+            noUsageCalls = tokenUsage.noUsageCalls(),
             // 通道按固定顺序（文字 → 图片），零值也展示——一眼看出「图片通道用没用」
-            byChannel = TokenUsageLedger.Channel.entries.map { ch ->
+            byChannel = TokenUsageChannel.entries.map { ch ->
                 sumRow(ch.label, entries.filter { it.channel == ch.label })
             },
             byAgent = grouped(entries) { it.agent },
@@ -87,7 +91,7 @@ class TokenUsageController {
     ): List<TokenBucketDto> {
         val hour = bucket.equals("hour", ignoreCase = true)
         val fmt = DateTimeFormatter.ofPattern(if (hour) "yyyy-MM-dd HH" else "yyyy-MM-dd")
-        return TokenUsageLedger.history(limit = 50_000)
+        return tokenUsage.history(limit = 50_000)
             .groupBy { Instant.ofEpochMilli(it.epoch).atZone(TimeFormat.ZONE).format(fmt) }
             .map { (key, calls) ->
                 TokenBucketDto(
@@ -104,19 +108,19 @@ class TokenUsageController {
 
     /** 调用明细（时间倒序；前端表格用） */
     @GetMapping("/calls")
-    fun calls(@RequestParam(defaultValue = "200") limit: Int): List<TokenUsageLedger.Call> =
-        TokenUsageLedger.history(limit = limit.coerceIn(1, 2_000))
+    fun calls(@RequestParam(defaultValue = "200") limit: Int) =
+        tokenUsage.history(limit = limit.coerceIn(1, 2_000))
 
     /** 按选择器分组求和，合计降序 */
     private fun grouped(
-        entries: List<TokenUsageLedger.Entry>,
-        keyOf: (TokenUsageLedger.Entry) -> String
+        entries: List<TokenUsageEntry>,
+        keyOf: (TokenUsageEntry) -> String
     ): List<TokenRowDto> = entries.groupBy(keyOf)
         .map { (name, list) -> sumRow(name, list) }
         .sortedByDescending { it.total }
 
     /** 一组求和成一行 */
-    private fun sumRow(name: String, list: List<TokenUsageLedger.Entry>) = TokenRowDto(
+    private fun sumRow(name: String, list: List<TokenUsageEntry>) = TokenRowDto(
         name = name,
         calls = list.sumOf { it.calls },
         input = list.sumOf { it.input },

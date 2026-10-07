@@ -4,6 +4,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.fixIndent
 
 /**
  * 会话内决策智能体
@@ -26,6 +27,10 @@ class ConversationAgent(
     """.trimIndent()
 
     override val inputClass: Class<ConversationRequest> = ConversationRequest::class.java
+
+    /** token 统计的会话维度：入参自带会话键——编排层不必再包 `withConversation` */
+    override fun conversationTag(input: ConversationRequest): String? =
+        input.conversationId.takeIf { it.isNotBlank() }
 
     override fun handle(input: ConversationRequest): ConversationDecision {
         val systemPrompt = buildSystemPrompt(input)
@@ -193,7 +198,7 @@ class ConversationAgent(
             ${input.actionLog}
             $crawlStatus
             当前时间（北京时间）：${input.timeHint}$proactiveHint$extraHint
-        """.trimIndent().fixIndent("            ")
+        """.trimIndent().fixIndent()
     }
 
     /**
@@ -252,6 +257,6 @@ class ConversationAgent(
             ${toolsBlock}以下是当前会话的聊天记录：
             ### 最近聊天记录
             $topNotice${historyText.ifBlank { "（新会话）" }}$newMsgText$missingText
-        """.trimIndent().fixIndent("            ")
+        """.trimIndent().fixIndent()
     }
 }

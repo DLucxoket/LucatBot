@@ -3,7 +3,9 @@ package org.dlucxoket.lucatbot
 import org.dlucxoket.lucatbot.adapter.web.StateController
 import org.dlucxoket.lucatbot.adapter.web.TokenUsageController
 import org.dlucxoket.lucatbot.bot.LucatBot
-import org.dlucxoket.lucatbot.bot.llm.TokenUsageLedger
+import org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
 import org.dlucxoket.lucatbot.bot.loop.ActionLog
 import org.dlucxoket.lucatbot.bot.memory.JsonFileMemoryRepository
 import org.dlucxoket.lucatbot.bot.memory.MemoryService
@@ -12,7 +14,6 @@ import org.dlucxoket.lucatbot.bot.todo.JsonFileTodoRepository
 import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.dlucxoket.lucatbot.model.session.SessionManager
 import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.test.web.servlet.setup.MockMvcBuilders
@@ -22,6 +23,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import org.junit.jupiter.api.Assertions.*
 
 /**
  * Web API（`web/` Vue 面板的数据源）
@@ -29,28 +31,25 @@ import java.time.format.DateTimeFormatter
  * - token 统计：summary 四维分组 / timeseries 分桶 / calls 明细
  * - 状态总览：心情、待办、记忆、状态机当前态
  *
- * 用 standalone MockMvc（不起 Spring 上下文），token 账本指向临时文件隔离。
+ * 用 standalone MockMvc（不起 Spring 上下文）；聚合器**构造注入**临时文件存储
+ * ——不碰全局状态，测试之间天然隔离（DIP 修复后的写法）。
  */
 class WebApiTest {
 
     private lateinit var file: File
+    private lateinit var ledger: TokenUsageAggregator
 
     @BeforeEach
     fun setUp() {
         file = File.createTempFile("token-api", ".jsonl").apply { delete() }
-        TokenUsageLedger.summaryEvery = 0
-        TokenUsageLedger.configure(file.absolutePath)
-        TokenUsageLedger.reset()
-        TokenUsageLedger.record("ConversationAgent", "private:123", TokenUsageLedger.Channel.TEXT, "m1", 100, 20)
-        TokenUsageLedger.record("ConversationAgent", "private:123", TokenUsageLedger.Channel.IMAGE, "m1", 900, 30)
-        TokenUsageLedger.record("SessionPickerAgent", "消息列表", TokenUsageLedger.Channel.TEXT, "m2", 50, 10)
+        ledger = TokenUsageAggregator(JsonlTokenUsageStore(file.absolutePath), summaryEvery = 0)
+        ledger.record("ConversationAgent", "private:123", TokenUsageChannel.TEXT, "m1", 100, 20)
+        ledger.record("ConversationAgent", "private:123", TokenUsageChannel.IMAGE, "m1", 900, 30)
+        ledger.record("SessionPickerAgent", "消息列表", TokenUsageChannel.TEXT, "m2", 50, 10)
     }
 
     @AfterEach
     fun tearDown() {
-        TokenUsageLedger.configure(null)
-        TokenUsageLedger.reset()
-        TokenUsageLedger.summaryEvery = 10
         file.delete()
     }
 
@@ -58,7 +57,7 @@ class WebApiTest {
 
     @Test
     fun `summary returns four dimensions grouped and sorted`() {
-        mvc(TokenUsageController())
+        mvc(TokenUsageController(ledger))
             .perform(get("/api/token/summary"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.total.calls").value(3))
@@ -93,8 +92,10 @@ class WebApiTest {
             } + "\n",
             Charsets.UTF_8
         )
+        // 换一个只读该文件的聚合器（明细端点读存储，不看内存聚合）
+        val fresh = TokenUsageAggregator(JsonlTokenUsageStore(file.absolutePath), summaryEvery = 0)
 
-        mvc(TokenUsageController())
+        mvc(TokenUsageController(fresh))
             .perform(get("/api/token/timeseries").param("bucket", "day"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.length()").value(1))
@@ -102,7 +103,7 @@ class WebApiTest {
             .andExpect(jsonPath("$[0].calls").value(3))
             .andExpect(jsonPath("$[0].total").value(45))
 
-        mvc(TokenUsageController())
+        mvc(TokenUsageController(fresh))
             .perform(get("/api/token/timeseries").param("bucket", "hour").param("limit", "2"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.length()").value(2))
@@ -120,8 +121,9 @@ class WebApiTest {
             ).joinToString("\n") + "\n",
             Charsets.UTF_8
         )
+        val fresh = TokenUsageAggregator(JsonlTokenUsageStore(file.absolutePath), summaryEvery = 0)
 
-        val body = mvc(TokenUsageController())
+        val body = mvc(TokenUsageController(fresh))
             .perform(get("/api/token/calls").param("limit", "10"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.length()").value(3))
