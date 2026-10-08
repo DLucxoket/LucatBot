@@ -67,7 +67,8 @@ class SessionListSpokeAgoTest {
                 JsonFileTodoRepository(File.createTempFile("todos-spoke", ".json").absolutePath)
             ),
             actionLog = ActionLog(),
-            sessionPickerAgent = SessionPickerAgent(llm)
+            sessionPickerAgent = SessionPickerAgent(llm),
+            shortCircuitWhenIdle = false // 本组测试要看 prompt：关掉 P1 空转短路
         )
 
         controller.pickSession(fromIdleWake = false)
@@ -103,7 +104,8 @@ class SessionListSpokeAgoTest {
                 JsonFileTodoRepository(File.createTempFile("todos-ban", ".json").absolutePath)
             ),
             actionLog = ActionLog(),
-            sessionPickerAgent = SessionPickerAgent(llm)
+            sessionPickerAgent = SessionPickerAgent(llm),
+            shortCircuitWhenIdle = false // 本组测试要看 prompt：关掉 P1 空转短路
         )
 
         controller.pickSession(fromIdleWake = false)
@@ -134,7 +136,8 @@ class SessionListSpokeAgoTest {
                 JsonFileTodoRepository(File.createTempFile("todos-pro", ".json").absolutePath)
             ),
             actionLog = ActionLog(),
-            sessionPickerAgent = SessionPickerAgent(llm)
+            sessionPickerAgent = SessionPickerAgent(llm),
+            shortCircuitWhenIdle = false // 本组测试要看 prompt：关掉 P1 空转短路
         )
 
         controller.pickSession(fromIdleWake = false)
@@ -172,7 +175,8 @@ class SessionListSpokeAgoTest {
                 JsonFileTodoRepository(File.createTempFile("todos-brief", ".json").absolutePath)
             ),
             actionLog = ActionLog(),
-            sessionPickerAgent = SessionPickerAgent(llm)
+            sessionPickerAgent = SessionPickerAgent(llm),
+            shortCircuitWhenIdle = false // 本组测试要看 prompt：关掉 P1 空转短路
         )
 
         controller.pickSession(fromIdleWake = false)
@@ -215,7 +219,8 @@ class SessionListSpokeAgoTest {
                 JsonFileTodoRepository(File.createTempFile("todos-newest", ".json").absolutePath)
             ),
             actionLog = ActionLog(),
-            sessionPickerAgent = SessionPickerAgent(llm)
+            sessionPickerAgent = SessionPickerAgent(llm),
+            shortCircuitWhenIdle = false // 本组测试要看 prompt：关掉 P1 空转短路
         )
 
         controller.pickSession(fromIdleWake = false)

@@ -81,7 +81,8 @@ class NotificationDispatcherTest {
                 chatHistoryService = chatHistoryService,
                 todoService = todoService,
                 actionLog = actionLog,
-                sessionPickerAgent = SessionPickerAgent(FakeLLM(mutableListOf()))
+                sessionPickerAgent = SessionPickerAgent(FakeLLM(mutableListOf())),
+                shortCircuitWhenIdle = false // 本测试要看 prompt：关掉 P1 空转短路
             ),
             conversationController = conversationController,
             actionLog = actionLog

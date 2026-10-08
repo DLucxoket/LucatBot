@@ -40,9 +40,26 @@ class MessageListController(
     private val actionLog: ActionLog,
     private val sessionPickerAgent: SessionPickerAgent = SessionPickerAgent(),
     /** 工具目录与调用网关（list_tools / tool 动作的执行层） */
-    private val toolCatalog: ToolCatalog = ToolCatalog()
+    private val toolCatalog: ToolCatalog = ToolCatalog(),
+    /**
+     * **P1 空转短路**：没有任何需要 LLM 权衡的东西（无未读、无待办、主动候选
+     * 也没到评估间隔）→ 直接返回 null 去空闲，**不烧一轮决策 prompt**
+     * （实测选会话每次 ≈5.5k token，空转醒来是调用次数的最大来源）。
+     * 置 false 恢复「每次都问 LLM」（测试用；生产默认开）。
+     */
+    private val shortCircuitWhenIdle: Boolean = true
 ) {
     private val log = LoggerFactory.getLogger(MessageListController::class.java)
+
+    /**
+     * 「可主动找的人」的评估间隔——**空闲醒来每次都问一遍 LLM 太烧**
+     * （13 次选会话调用里多数是这种空转），且主动消息本身也不该那么密：
+     * 无未读时每 [proactiveEvaluateEveryMs] 才让 LLM 评估一次要不要主动找人
+     */
+    private val proactiveEvaluateEveryMs: Long = 20 * 60_000L
+
+    /** 上次「主动找人」评估的时间（仅主循环单线程读写） */
+    private var lastProactiveEvaluatedAt = 0L
 
     /** 待办结算（todo_done 路径）：标完成 + 「已办」记忆留痕 + 操作日志 */
     private val todoSettlement = TodoSettlement(todoService, memoryService, actionLog)
@@ -69,9 +86,24 @@ class MessageListController(
     fun pickSession(fromIdleWake: Boolean): SessionPick? {
         lastIdleSeconds = 0 // 本轮重新记录（选中会话/工具超限兜底 → 保持 0 = 随机兜底）
         val sessions = collectSessions()
-        actionLog.append("查看消息列表（${sessions.sumOf { it.unreadCount }}条未读）")
-
+        val unreadCount = sessions.sumOf { it.unreadCount }
         val candidates = if (fromIdleWake) collectProactiveCandidates() else emptyList()
+
+        // P1 空转短路：没未读、没待办、主动候选也没到评估间隔 → 直接去空闲。
+        // 这种情况下问 LLM 的结论必然也是 idle——省掉一整轮（≈5.5k token）
+        val proactiveDue = candidates.isNotEmpty() &&
+            System.currentTimeMillis() - lastProactiveEvaluatedAt >= proactiveEvaluateEveryMs
+        if (shortCircuitWhenIdle && unreadCount == 0 && todoService.pending().isEmpty() && !proactiveDue) {
+            log.info(
+                "消息列表空转（未读 0、待办 0、主动候选{}）→ 短路去空闲，不调 LLM",
+                if (candidates.isEmpty()) "无" else "未到评估间隔"
+            )
+            actionLog.append("消息列表：无未读无待办，直接空闲（没调 LLM）")
+            return null
+        }
+        if (candidates.isNotEmpty()) lastProactiveEvaluatedAt = System.currentTimeMillis()
+        actionLog.append("查看消息列表（${unreadCount}条未读）")
+
         // 冷却中的会话（刚退出还没满 2 分钟）→ 注入「刚退出」提示段，由 **prompt**
         // 约束别马上再进（列表照样可见、不硬过滤——@我/急事模型可自行权衡）
         val cooldownNotes = lucatBot.recentlyLeft().map { (conv, remainMs) ->

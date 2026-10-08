@@ -48,7 +48,12 @@ class MessageListControllerTest {
         /** 传入即可在外部操作未读/冷却（会话冷却测试） */
         lucatBot: LucatBot = LucatBot(),
         /** 传入即可让某些会话进「最近活跃」列表 */
-        sessionManager: SessionManager = SessionManager()
+        sessionManager: SessionManager = SessionManager(),
+        /**
+         * P1 空转短路——测试默认关（保留「每次都问 LLM」的旧行为，让既有用例
+         * 照常驱动决策脚本）；短路本身的两条用例显式传 true
+         */
+        shortCircuitWhenIdle: Boolean = false
     ): Pair<MessageListController, ActionLog> {
         val controller = MessageListController(
             lucatBot = lucatBot,
@@ -62,9 +67,61 @@ class MessageListControllerTest {
             todoService = todoService,
             actionLog = ActionLog(),
             sessionPickerAgent = SessionPickerAgent(llm),
-            toolCatalog = toolCatalog
+            toolCatalog = toolCatalog,
+            shortCircuitWhenIdle = shortCircuitWhenIdle
         )
         return controller to ActionLog()  // actionLog 内部实例外部不可见，断言走 prompt/返回值
+    }
+
+    @Test
+    fun `short circuit skips llm when there is nothing to decide`() {
+        // P1：无未读、无待办、不是空闲唤醒（= 没有主动候选）→ 结论必然 idle，
+        // 问 LLM 纯属烧钱（实测选会话每次 ≈5.5k token）
+        val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val (controller, _) = buildController(llm, shortCircuitWhenIdle = true)
+
+        assertNull(controller.pickSession(fromIdleWake = false), "没事可判 → 去空闲")
+        assertTrue(llm.prompts.isEmpty(), "短路：一次 LLM 都不调")
+    }
+
+    @Test
+    fun `short circuit still asks llm when there is unread`() {
+        val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val lucatBot = LucatBot()
+        // 未读进的是**未读队列**（不是会话内的待插入队列）——消息列表读的是前者
+        lucatBot.restoreUnread(
+            listOf(
+                LucatBot.UnreadMessage(
+                    conversationId = "private:123",
+                    conversationType = LucatBot.ConversationType.PRIVATE,
+                    senderId = 456L,
+                    senderName = "用户B",
+                    content = "在吗"
+                )
+            )
+        )
+        val (controller, _) = buildController(llm, shortCircuitWhenIdle = true, lucatBot = lucatBot)
+
+        assertNull(controller.pickSession(fromIdleWake = false))
+        assertEquals(1, llm.prompts.size, "有未读必须问 LLM（短路不许吃掉正事）")
+    }
+
+    @Test
+    fun `proactive evaluation is throttled so idle wakes do not burn a round each`() {
+        // 空闲唤醒每次都问「要不要主动找人」是调用次数的最大来源——
+        // 现在每 20 分钟才评估一次，中间的唤醒短路去睡觉
+        val sessionManager = SessionManager().apply {
+            addMessage("private:123", "小红", "在吗", senderId = 456L)
+        }
+        val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
+        val (controller, _) = buildController(
+            llm, shortCircuitWhenIdle = true, sessionManager = sessionManager
+        )
+
+        controller.pickSession(fromIdleWake = true) // 到间隔 → 评估一次主动找人
+        controller.pickSession(fromIdleWake = true) // 20 分钟内 → 短路
+
+        assertEquals(1, llm.prompts.size, "主动找人的评估被限流，不是每次醒来都烧一轮")
     }
 
     @Test
