@@ -876,6 +876,10 @@ class ConversationControllerTest {
             keywordLLM.prompts.single().contains("他喜欢什么颜色来着"),
             "拆词 agent 拿到的是聊天窗口：${keywordLLM.prompts.single()}"
         )
+        assertEquals(
+            listOf("private:123"), keywordLLM.conversationTags,
+            "拆词调用要挂在本会话上（漏了就记到默认 `-`，面板归不到任何会话）"
+        )
         assertFalse(first.contains("第一轮不要直接 send"), "首轮不再被禁止发话")
     }
 

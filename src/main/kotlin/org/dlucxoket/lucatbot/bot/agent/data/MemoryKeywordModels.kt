@@ -10,11 +10,16 @@ import com.fasterxml.jackson.annotation.JsonProperty
  * 这个是**进场时拆该搜什么**——一个往里写，一个往外查。
  *
  * @param conversationContent 当前聊天记录窗口（多行纯文本，含新消息注释）
+ * @param conversationId 所处会话键——**token 统计的会话维度**（`Agent.conversationTag`
+ *   从入参自推；不带就会记成默认的 `-`，面板上归不到任何会话）
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class MemoryKeywordRequest(
     @JsonProperty("conversationContent")
-    val conversationContent: String = ""
+    val conversationContent: String = "",
+
+    @JsonProperty("conversationId")
+    val conversationId: String = ""
 )
 
 /**

@@ -37,6 +37,15 @@ class MemoryKeywordAgent(
 
     override val inputClass: Class<MemoryKeywordRequest> = MemoryKeywordRequest::class.java
 
+    /**
+     * token 统计的会话维度：入参自带会话键——**自推**，编排层不必再包 `withConversation`
+     *
+     * 实盘踩过：这个 agent 早于该钩子的梳理、又没人在调用点挂会话 → 用量全记到
+     * 默认 `-`，面板「按会话」里归不到任何会话。入参带 id 是最稳的一条路。
+     */
+    override fun conversationTag(input: MemoryKeywordRequest): String? =
+        input.conversationId.takeIf { it.isNotBlank() }
+
     /** token 统计：这个 agent 只干一件事（拆词），动作标签恒定 */
     override fun usageAction(input: MemoryKeywordRequest, output: MemoryKeywordResult): String? =
         "拆词"

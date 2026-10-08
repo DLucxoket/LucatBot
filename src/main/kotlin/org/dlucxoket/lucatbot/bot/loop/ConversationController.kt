@@ -899,7 +899,11 @@ class ConversationController(
         val startedAt = System.currentTimeMillis()
         runCatching {
             val keywords = memoryKeywordAgent.processObject(
-                MemoryKeywordRequest(conversationContent = window.joinToString("\n"))
+                MemoryKeywordRequest(
+                    conversationContent = window.joinToString("\n"),
+                    // 会话维度随入参走（token 统计：漏了它这轮就记到默认 `-`）
+                    conversationId = conversationId
+                )
             ).keywords
             if (keywords.isEmpty()) {
                 log.debug("进场预搜：拆词为空（寒暄/无信息量），不搜")
