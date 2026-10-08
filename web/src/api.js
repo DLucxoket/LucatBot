@@ -44,6 +44,38 @@ export const timeText = (epoch, withDate = true) => {
   return withDate ? `${date} ${time}` : time
 }
 
+/**
+ * 决策动作 → 中文展示名（只在展示层翻译，底层记账仍存 wire 名）
+ * 词表来源：ConversationAction / SessionAction / NotificationAction + 拆词/复核/复盘；
+ * 未收录的新动作原样展示，历史「-」行显示为「未标注」
+ */
+const ACTION_LABELS = {
+  '-': '未标注',
+  // 会话内（ConversationAction）
+  send: '发送消息',
+  read_more: '翻楼读历史',
+  stay: '原地停留',
+  return: '离开会话',
+  // 消息列表（SessionAction）
+  open_conversation: '打开会话',
+  // 共用工具动作
+  list_tools: '查工具目录',
+  tool: '调用工具',
+  view_images: '查看图片',
+  // 通知（NotificationAction）
+  ignore: '通知：不处理',
+  todo: '通知：记待办',
+  open: '通知：当场打开',
+  // 空闲（SessionAction.IDLE）
+  idle: '空闲待命'
+}
+
+/** 动作名汉化：有映射用中文，没映射（含拆词/复核/复盘等已是中文的）原样返回 */
+export const actionLabel = (name) => {
+  const key = name == null || name === '' ? '-' : String(name)
+  return ACTION_LABELS[key] || key
+}
+
 /** 「多久之前」（前端本地时区） */
 export function agoText(epoch) {
   if (!epoch) return '-'

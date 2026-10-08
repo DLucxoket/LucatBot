@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue'
-import { fetchSummary, fetchTimeseries, fetchCalls, fmt, compact, timeText } from '../api.js'
+import { fetchSummary, fetchTimeseries, fetchCalls, fmt, compact, timeText, actionLabel } from '../api.js'
 import StatCard from './StatCard.vue'
 import BarList from './BarList.vue'
 import DonutChart from './DonutChart.vue'
@@ -31,7 +31,12 @@ const metrics = [
   { key: 'output', label: '出参' }
 ]
 
-const rows = computed(() => (summary.value ? summary.value[dim.value] : []))
+// 「按动作」维度汉化展示（记账仍存 wire 名，见 api.js 的 actionLabel）
+const rows = computed(() =>
+  summary.value
+    ? summary.value[dim.value].map((r) => (dim.value === 'byAction' ? { ...r, name: actionLabel(r.name) } : r))
+    : []
+)
 
 async function load() {
   loading.value = true
@@ -153,7 +158,7 @@ onMounted(load)
               <td>{{ c.agent }}</td>
               <td>{{ c.conversation }}</td>
               <td>
-                <span v-if="c.firstRound" class="pill ok">首轮</span>{{ c.action || '-' }}
+                <span v-if="c.firstRound" class="pill ok">首轮</span>{{ actionLabel(c.action) }}
               </td>
               <td>
                 <span class="pill" :class="c.channel === '图片' ? 'warn' : 'ok'">{{ c.channel }}</span>
