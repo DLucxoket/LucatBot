@@ -72,6 +72,8 @@ class LucatBot {
         val content: String,
         val isAtMe: Boolean = false,
         val isAtAll: Boolean = false,
+        /** 回复的目标是机器人自己的消息（「回复我」= 冲我来的；唤醒资格同 @我） */
+        val isReplyToMe: Boolean = false,
         val timestamp: Long = 0L,
         /** OneBot message_id（待插入注释渲染成「（#id）」，供 LLM 直接回复新消息） */
         val messageId: Long? = null,
@@ -264,18 +266,27 @@ class LucatBot {
      * - 其他会话 @我/@全体 → NOTIFY
      * - 其他会话普通消息 → IGNORE（进未读）
      *
+     * **通知/唤醒资格**（[hasWakeWorthyUnread] 同口径）：私聊、@我、@全体、
+     * **回复我**——普通群聊消息只攒未读，不叫醒空闲的机器人。
+     *
      * @param event 消息事件
      * @param isAtMe 是否 @了机器人
      * @param isAtAll 是否 @全体成员
+     * @param isReplyToMe 是否在回复机器人自己的消息（MainPlugin 查档得出）
      * @return 处理动作
      */
-    fun handleMessage(event: MessageEvent, isAtMe: Boolean, isAtAll: Boolean): MessageAction {
+    fun handleMessage(
+        event: MessageEvent,
+        isAtMe: Boolean,
+        isAtAll: Boolean,
+        isReplyToMe: Boolean = false
+    ): MessageAction {
         val conversationId = event.conversationId
 
         return when (state) {
             // 没在管 QQ → 全部进未读，心情衰减
             is State.Idle -> {
-                addUnread(event, conversationId, isAtMe, isAtAll)
+                addUnread(event, conversationId, isAtMe, isAtAll, isReplyToMe)
                 updateMood { it.decay() }
                 MessageAction.IGNORE
             }
@@ -286,10 +297,10 @@ class LucatBot {
                     updateMood { it.boost() }  // 有人找我，心情好一点
                     // 通知类消息同样入未读：通知通道判「无视」后，选会话侧
                     // 仍要能看到它（判「跳转」进会话时 consumeUnread 自动清）
-                    addUnread(event, conversationId, isAtMe, isAtAll)
+                    addUnread(event, conversationId, isAtMe, isAtAll, isReplyToMe)
                     MessageAction.NOTIFY
                 } else {
-                    addUnread(event, conversationId, isAtMe, isAtAll)
+                    addUnread(event, conversationId, isAtMe, isAtAll, isReplyToMe)
                     updateMood { it.decay() }
                     MessageAction.IGNORE
                 }
@@ -307,11 +318,11 @@ class LucatBot {
                 } else if (isAtMe || isAtAll) {
                     // 其他会话但 @我/@全体 → 通知通道（同样入未读，无视可见/跳转即清）
                     updateMood { it.boost() }
-                    addUnread(event, conversationId, isAtMe, isAtAll)
+                    addUnread(event, conversationId, isAtMe, isAtAll, isReplyToMe)
                     MessageAction.NOTIFY
                 } else {
                     // 其他会话普通消息 → 未读（被冷落，心情微降）
-                    addUnread(event, conversationId, isAtMe, isAtAll)
+                    addUnread(event, conversationId, isAtMe, isAtAll, isReplyToMe)
                     updateMood { it.drop() }
                     MessageAction.IGNORE
                 }
@@ -360,6 +371,26 @@ class LucatBot {
      */
     fun hasUnreadAtAll(conversationId: String): Boolean {
         return unreadQueue.any { it.conversationId == conversationId && it.isAtAll }
+    }
+
+    /**
+     * 某个会话是否有**回复机器人**的未读（会话行渲染「(@回复你)」标记用）
+     */
+    fun hasUnreadReplyToMe(conversationId: String): Boolean {
+        return unreadQueue.any { it.conversationId == conversationId && it.isReplyToMe }
+    }
+
+    /**
+     * 某个会话是否有**值得叫醒空闲机器人**的未读——
+     * **私聊 / @我 / @全体 / 回复我** 四类冲我来的消息；
+     * 普通群聊消息只攒未读，等主循环按心情自然醒来（ProactiveScheduler
+     * 的 30s 巡查只认这里，`未读 ≥3 条就唤醒` 的旧规则已删）。
+     */
+    fun hasWakeWorthyUnread(conversationId: String): Boolean {
+        return unreadQueue.any {
+            it.conversationId == conversationId &&
+                (it.isAtMe || it.isAtAll || it.isReplyToMe || it.conversationType == ConversationType.PRIVATE)
+        }
     }
 
     /**
@@ -474,7 +505,13 @@ class LucatBot {
     /**
      * 加入未读队列
      */
-    private fun addUnread(event: MessageEvent, conversationId: String, isAtMe: Boolean, isAtAll: Boolean) {
+    private fun addUnread(
+        event: MessageEvent,
+        conversationId: String,
+        isAtMe: Boolean,
+        isAtAll: Boolean,
+        isReplyToMe: Boolean = false
+    ) {
         unreadQueue.add(
             UnreadMessage(
                 conversationId = conversationId,
@@ -484,6 +521,7 @@ class LucatBot {
                 content = extractRichContent(event),
                 isAtMe = isAtMe,
                 isAtAll = isAtAll,
+                isReplyToMe = isReplyToMe,
                 timestamp = event.timestamp,
                 messageId = event.messageId
             )

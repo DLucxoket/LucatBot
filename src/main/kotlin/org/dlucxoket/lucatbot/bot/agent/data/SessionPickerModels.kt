@@ -44,6 +44,8 @@ data class SessionSummaryLine(
     val lastMessage: String = "",
     val isAtMe: Boolean = false,
     val isAtAll: Boolean = false,
+    /** 有未读是**回复机器人自己**的（行渲染「(@回复你)」，与 @我 同级的优先信号） */
+    val isReplyToMe: Boolean = false,
     /**
      * 机器人上次在该会话发言距今（"刚刚"/"3分钟前"/…；null = 还没说过话）——
      * 选会话优先级依据：**刚发过言且还有未读**的会话优先（对话正热）。

@@ -11,7 +11,10 @@ import org.springframework.stereotype.Component
  * 空闲定时唤醒
  *
  * 主循环自己会按心情休眠 3~20min；这里做兜底巡查：
- * 空闲期间攒了未读（尤其 @我/@全体）时，缩短休眠提前醒来。
+ * 空闲期间攒了**值得叫醒的未读**（私聊 / @我 / @全体 / 回复我）时缩短休眠提前醒来。
+ *
+ * **普通群聊消息不唤醒**（应主人要求）：闲聊未读只攒着，等主循环按心情自然醒来；
+ * 旧规则「未读 ≥3 条就唤醒」已删——那会让群聊一热闹就把空闲的机器人拽起来。
  */
 @Component
 class ProactiveScheduler(
@@ -31,14 +34,11 @@ class ProactiveScheduler(
             val summary = lucatBot.getUnreadSummary()
             if (summary.isEmpty()) return
 
-            val urgent = summary.keys.any {
-                lucatBot.hasUnreadAtMe(it) || lucatBot.hasUnreadAtAll(it)
-            }
-            val total = summary.values.sum()
+            // 只有「冲我来的」未读才配把空闲的机器人叫醒（普通群聊消息不算）
+            val wakeWorthy = summary.keys.any { lucatBot.hasWakeWorthyUnread(it) }
 
-            // 空闲休眠中且有值得看的未读 → 唤醒
-            if (mainLoopController.isIdleSleeping && (urgent || total >= 3)) {
-                log.info("空闲中发现未读会话 {}，唤醒主循环", summary)
+            if (mainLoopController.isIdleSleeping && wakeWorthy) {
+                log.info("空闲中发现值得处理的未读 {}，唤醒主循环", summary)
                 mainLoopController.notifyUrgent()
             }
         } catch (e: Exception) {

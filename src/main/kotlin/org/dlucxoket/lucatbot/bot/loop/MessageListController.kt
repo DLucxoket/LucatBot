@@ -223,6 +223,7 @@ class MessageListController(
                 lastMessage = last?.content.orEmpty(),
                 isAtMe = lucatBot.hasUnreadAtMe(convId),
                 isAtAll = lucatBot.hasUnreadAtAll(convId),
+                isReplyToMe = lucatBot.hasUnreadReplyToMe(convId),
                 botSpokeAgo = chatHistoryService.lastBotSpeakTime(convId)?.let { formatDuration(now - it) },
                 suspectedBanDate = lucatBot.suspectedBanSince(convId)?.let { formatBanDate(it) },
                 memoryBrief = briefFor(convId)

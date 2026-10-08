@@ -128,6 +128,18 @@ class ChatHistoryService(
     }
 
     /**
+     * 被引用的 message_id 是否是**机器人自己发的**（「回复我」判定）
+     *
+     * 「回复 #id」只带 id 不带发送者——回复目标是不是自己，唯一可靠依据是本地档
+     * 里那条消息的 `isFromBot`（发送回执与爬楼入档都存了 message_id）。
+     * 档里查不到（老消息/异机消息）→ false，按普通引用处理——**宁可少唤醒不多唤醒**。
+     */
+    fun isBotMessage(conversationId: String, messageId: Long): Boolean =
+        repository.findByConversation(conversationId, 0).any {
+            it.messageId == messageId && it.isFromBot
+        }
+
+    /**
      * 启动清理：把存储层的孪生双份行合并为一条（幂等，每次启动跑一遍）
      *
      * 存量双份（实时/回执行 × 爬楼 `hist:` 行）此前只在读取时折叠、存储层

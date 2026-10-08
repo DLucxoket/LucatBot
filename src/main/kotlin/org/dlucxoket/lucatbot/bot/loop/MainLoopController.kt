@@ -74,7 +74,8 @@ class MainLoopController(
     }
 
     /**
-     * 空闲唤醒信号：@我/@全体 缩短休眠（最少再等 5s）
+     * 空闲唤醒信号：**私聊 / @我 / @全体 / 回复我** 等冲我来的消息缩短休眠
+     * （最少再等 5s）；普通群聊消息不发此信号——只攒未读等自然醒来
      */
     fun notifyUrgent() {
         synchronized(lock) {

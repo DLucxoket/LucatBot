@@ -95,11 +95,13 @@ internal class MainPlugin: BotPlugin() {
             // 状态机决策：进未读 / 待插入 / 通知
             val isAtMe = isAtMe(event, bot.selfId)
             val isAtAll = chatMessage?.isAtAll() ?: false
-            val action = lucatBot.handleMessage(modelEvent, isAtMe, isAtAll)
+            val convId = modelEvent.conversationId
+            // 「回复我」= 被回复消息是机器人自己发的——与 @我/@全体 同属「冲我来的」
+            val isReplyToMe = repliesToMe(chatMessage, convId)
+            val action = lucatBot.handleMessage(modelEvent, isAtMe, isAtAll, isReplyToMe)
 
             // 无论是否立刻处理，都先记聊天记录与短期记忆
             chatHistoryService.recordMessage(modelEvent, content)
-            val convId = modelEvent.conversationId
             sessionManager.addMessage(
                 convId, modelEvent.sender.displayName, content,
                 senderId = modelEvent.sender.qqNumber
@@ -252,4 +254,17 @@ internal class MainPlugin: BotPlugin() {
                 seg.getStringData("qq")?.toLongOrNull() == selfId
         }
     }
+
+    /**
+     * 这条消息是不是在**回复机器人**（引用目标是自己发的消息）
+     *
+     * 回复段只带被回复消息的 message_id，发送者要查本地档
+     * （[org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService.isBotMessage]）：
+     * 档里没有 → false，按普通引用处理——**宁可少唤醒不多唤醒**。
+     * 「回复我」与「@我」同属唤醒/未读标记的同一资格口径。
+     */
+    private fun repliesToMe(chatMessage: ChatMessage?, conversationId: String): Boolean =
+        chatMessage?.messageMembers
+            ?.filterIsInstance<org.dlucxoket.lucatbot.model.message.member.ReplyMessageMember>()
+            ?.any { chatHistoryService.isBotMessage(conversationId, it.replyToId) } == true
 }
