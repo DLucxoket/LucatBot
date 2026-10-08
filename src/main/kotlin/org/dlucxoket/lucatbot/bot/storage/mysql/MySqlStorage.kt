@@ -101,6 +101,7 @@ class MySqlStorage(private val config: MySqlConfig) {
             ensureColumn(conn, "chat_history", "image_urls", "image_urls TEXT NULL")
             ensureColumn(conn, "chat_history", "memorized", "memorized BOOLEAN NOT NULL DEFAULT FALSE")
             ensureColumn(conn, "todos", "completed_at", "completed_at DATETIME(3) NULL")
+            ensureColumn(conn, "todos", "planned_at", "planned_at DATETIME(3) NULL")
             if (legacy != null) restoreLegacy(conn, legacy)
         }
         if (config.importFromJson) {
@@ -524,7 +525,8 @@ class MySqlStorage(private val config: MySqlConfig) {
                 created_at DATETIME(3) NOT NULL,
                 done BOOLEAN NOT NULL DEFAULT FALSE,
                 conversation_id VARCHAR(64) NULL,
-                completed_at DATETIME(3) NULL
+                completed_at DATETIME(3) NULL,
+                planned_at DATETIME(3) NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent(),
             """

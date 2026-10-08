@@ -865,7 +865,8 @@ class ConversationController(
             }
         decision.todo_add?.let { content ->
             try {
-                todoService.add(content, conversationId)
+                // plannedAt = LLM 给的「预计执行时间」（todo_add_time，宽松解析；没给 = null）
+                todoService.add(content, conversationId, plannedAt = decision.todoAddTime)
                 actionLog.append("待办+：$content", conversationId = conversationId)
             } catch (e: Exception) {
                 log.warn("todo_add 写入失败: {}", e.message)

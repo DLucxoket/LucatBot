@@ -188,7 +188,8 @@ class MessageListController(
     private fun applyTodoSideEffects(decision: SessionDecision) {
         decision.todoAdd?.let { content ->
             try {
-                todoService.add(content)
+                // plannedAt = LLM 给的「预计执行时间」（todo_add_time，宽松解析；没给 = null）
+                todoService.add(content, plannedAt = decision.todoAddTime)
                 actionLog.append("待办+：$content")
             } catch (e: Exception) {
                 log.warn("todo_add 写入失败: {}", e.message)

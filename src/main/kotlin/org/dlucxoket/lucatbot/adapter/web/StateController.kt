@@ -32,9 +32,12 @@ class StateController(
     data class TodoDto(
         val id: String,
         val content: String,
+        /** 创建时间（epoch 毫秒） */
         val createdAt: Long,
         val completedAt: Long?,
-        val conversationId: String?
+        val conversationId: String?,
+        /** 预计执行时间（epoch 毫秒；null = 没设）——面板可设/可清 */
+        val plannedAt: Long?
     )
 
     data class MemoryDto(val content: String, val type: String, val createdAt: Long)
@@ -88,6 +91,7 @@ class StateController(
     }
 
     private fun TodoItem.toDto() = TodoDto(
-        id = id, content = content, createdAt = createdAt, completedAt = completedAt, conversationId = conversationId
+        id = id, content = content, createdAt = createdAt, completedAt = completedAt,
+        conversationId = conversationId, plannedAt = plannedAt
     )
 }

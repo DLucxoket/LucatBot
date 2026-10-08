@@ -19,6 +19,16 @@ interface TodoRepository {
     fun save(todo: TodoItem)
 
     /**
+     * 删除一条待办（**取消**——与 [save] 的「标完成」不同：从清单里**移除**）
+     *
+     * 取消后既不进「最近已完成」、也**不再注入 prompt**——陈年待办堆着只会
+     * 白烧 token，还会稀释「待办 = 现在该干的事」这个行动理由信号
+     *
+     * @param id 精确 id；不存在时静默 no-op（幂等）
+     */
+    fun delete(id: String)
+
+    /**
      * 获取所有待办（含已完成）
      */
     fun findAll(): List<TodoItem>

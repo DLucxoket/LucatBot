@@ -18,8 +18,13 @@ class MySqlTodoRepository(
     override fun save(todo: TodoItem) {
         storage.update(
             INSERT, todo.id, todo.content, MySqlTime.of(todo.createdAt), todo.done,
-            todo.conversationId, todo.completedAt?.let { MySqlTime.of(it) }
+            todo.conversationId, todo.completedAt?.let { MySqlTime.of(it) },
+            todo.plannedAt?.let { MySqlTime.of(it) }
         )
+    }
+
+    override fun delete(id: String) {
+        storage.update("DELETE FROM todos WHERE id = ?", id) // 写入即落库，无缓存一致性问题
     }
 
     override fun findAll(): List<TodoItem> =
@@ -40,16 +45,17 @@ class MySqlTodoRepository(
         createdAt = MySqlTime.toEpochMs(rs, "created_at"),
         done = rs.getBoolean("done"),
         conversationId = rs.getString("conversation_id"),
-        completedAt = MySqlTime.toEpochMsOrNull(rs, "completed_at")
+        completedAt = MySqlTime.toEpochMsOrNull(rs, "completed_at"),
+        plannedAt = MySqlTime.toEpochMsOrNull(rs, "planned_at")
     )
 
     companion object {
         internal const val INSERT =
-            "INSERT INTO todos (id, content, created_at, done, conversation_id, completed_at) " +
-                "VALUES (?,?,?,?,?,?) " +
+            "INSERT INTO todos (id, content, created_at, done, conversation_id, completed_at, planned_at) " +
+                "VALUES (?,?,?,?,?,?,?) " +
                 "ON DUPLICATE KEY UPDATE content=VALUES(content), created_at=VALUES(created_at), " +
                 "done=VALUES(done), conversation_id=VALUES(conversation_id), " +
-                "completed_at=VALUES(completed_at)"
+                "completed_at=VALUES(completed_at), planned_at=VALUES(planned_at)"
 
         /** json 同步用：主键冲突即跳过（待办勾完成状态不被旧 json 改回）——由 [INSERT] 派生防漂移 */
         internal val INSERT_IGNORE: String

@@ -89,7 +89,8 @@ object LlmJson {
     private val STRUCT_TAGS = setOf("function", "invoke", "parameter", "output", "content")
 
     /** 可从参数标签提到信封**顶层**的字段（与 JSON 信封的顶层字段一致） */
-    private val TOP_LEVEL_FIELDS = listOf("memory_queries", "remember", "todo_add", "todo_done")
+    private val TOP_LEVEL_FIELDS =
+        listOf("memory_queries", "remember", "todo_add", "todo_add_time", "todo_done")
 
     /**
      * tool-call 形态的原文 → 纯 JSON 信封（`{"action":…,"params":{…},"reason":…}`）

@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.bot.todo
 
+import org.dlucxoket.lucatbot.bot.persona.TimeFormat
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
@@ -24,21 +25,57 @@ class TodoService(
     /**
      * 新增一条待办
      *
-     * 去重：pending 中已有相同 content 则不重复加，直接返回已有条目。
+     * 去重：pending 中已有相同 content 则不重复加（**但会顺带补上新给的预计时间**，
+     * 别把计划丢掉），直接返回该条目。
      *
      * @param content 待办内容
      * @param conversationId 可选关联会话
+     * @param plannedAt 预计执行时间（epoch 毫秒；可空）
      */
-    fun add(content: String, conversationId: String? = null): TodoItem {
+    fun add(content: String, conversationId: String? = null, plannedAt: Long? = null): TodoItem {
         val trimmed = content.trim()
         repository.findAll()
             .firstOrNull { !it.done && it.content == trimmed }
-            ?.let { return it }
+            ?.let { existing ->
+                if (plannedAt != null && existing.plannedAt != plannedAt) {
+                    val updated = existing.copy(plannedAt = plannedAt)
+                    repository.save(updated)
+                    return updated
+                }
+                return existing
+            }
 
-        val item = TodoItem(content = trimmed, conversationId = conversationId)
+        val item = TodoItem(content = trimmed, conversationId = conversationId, plannedAt = plannedAt)
         repository.save(item)
-        log.info("新增待办: ${item.id.take(4)} $trimmed")
+        log.info(
+            "新增待办: {} {}{}",
+            item.id.take(4), trimmed,
+            plannedAt?.let { "（预计 ${TimeFormat.listLine(it)}）" } ?: ""
+        )
         return item
+    }
+
+    /**
+     * 设置 / 清除**预计执行时间**（面板用）
+     *
+     * 匹配口径与 [cancel] 一致：id 精确 / ≥4 位前缀，**不做 content 模糊匹配**
+     *
+     * @param epoch 目标时间（毫秒）；**null = 清除预计**
+     * @return 更新后的条目；无匹配 → null（幂等）
+     */
+    fun setPlannedAt(id: String, epoch: Long?): TodoItem? {
+        if (id.isBlank()) return null
+        val all = repository.findAll()
+        val target = all.firstOrNull { it.id == id }
+            ?: all.firstOrNull { id.length >= 4 && it.id.startsWith(id) }
+            ?: return null
+        repository.save(target.copy(plannedAt = epoch))
+        log.info(
+            "{}待办预计时间: {} {}",
+            if (epoch == null) "清除" else "设置", target.id.take(4),
+            epoch?.let { TimeFormat.listLine(it) } ?: ""
+        )
+        return target.copy(plannedAt = epoch)
     }
 
     /**
@@ -81,14 +118,55 @@ class TodoService(
     }
 
     /**
+     * **取消**一条待办（面板用）——从清单里删除，不是标完成
+     *
+     * 匹配口径比 [complete] 收窄：只认 **id 精确 / id 前缀**（≥4 位），
+     * **不做 content 模糊匹配**——取消是破坏性操作，按内容猜容易误删。
+     *
+     * @return 被取消的条目；无匹配 → null（幂等，重复取消不报错）
+     */
+    fun cancel(id: String): TodoItem? {
+        if (id.isBlank()) return null
+        val all = repository.findAll()
+        val target = all.firstOrNull { it.id == id }
+            ?: all.firstOrNull { id.length >= 4 && it.id.startsWith(id) }
+            ?: return null
+        repository.delete(target.id)
+        log.info("取消待办: ${target.id.take(4)} ${target.content}")
+        return target
+    }
+
+    /**
+     * 批量取消**全部未完成**待办（面板「清空未完成」——治「后台一直挂着 N 条
+     * 陈年待办」：那些条目每轮都注入 prompt，白烧 token 还稀释行动理由）
+     *
+     * 只删未完成项（已完成是历史痕迹，保留）；返回被删条目供日志与面板回显
+     */
+    fun cancelAllPending(): List<TodoItem> {
+        val targets = pending()
+        targets.forEach { repository.delete(it.id) }
+        if (targets.isNotEmpty()) log.info("清空未完成待办 ${targets.size} 条")
+        return targets
+    }
+
+    /**
      * 待办摘要（注入 LLM prompt，多行）
      *
-     * 格式：`- [ ] (id前4位) content`；无待办返回「（无待办）」。
+     * 格式：`- [ ] (id前4) content（MM-dd 建 · 预计 MM-dd HH:mm）`——**创建时间**与
+     * **预计执行时间**都进 prompt（机器人据此判断「这件放了多久」「是不是该做了」）；
+     * 没设预计就只带建的日期。空清单 → 「（无待办）」。
      */
     fun pendingSummary(): String {
         val items = pending()
         if (items.isEmpty()) return "（无待办）"
-        return items.joinToString("\n") { "- [ ] (${it.id.take(4)}) ${it.content}" }
+        return items.joinToString("\n") { item ->
+            val stamp = buildString {
+                append("（").append(TimeFormat.monthDay(item.createdAt)).append(" 建")
+                item.plannedAt?.let { append(" · 预计 ").append(TimeFormat.listLine(it)) }
+                append("）")
+            }
+            "- [ ] (${item.id.take(4)}) ${item.content}$stamp"
+        }
     }
 
     /**

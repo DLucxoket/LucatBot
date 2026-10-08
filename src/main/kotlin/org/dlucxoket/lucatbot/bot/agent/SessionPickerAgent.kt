@@ -78,7 +78,7 @@ class SessionPickerAgent(
             - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）${fixedToolNames}
             - tool：调用一个工具。params：{"name": "工具名", "input": { ...参数，格式见目录里的「参数」... }}
             - reason 是内心动机（不会发给用户）
-            - "todo_add"（托付了之后要做的事）/ "todo_done"（清单里的事做完了）是可选的 JSON 顶层字段，普通扫列表不要往里写，可与其他 action 同时出现
+            - "todo_add"（托付了之后要做的事）/ "todo_done"（清单里的事做完了）是可选的 JSON 顶层字段，普通扫列表不要往里写，可与其他 action 同时出现；要标什么时候做就同给 `"todo_add_time": "yyyy-MM-dd HH:mm"`（预计执行，可省）
 
             proactive 用于**主动发起会话**，两类场景：
             ① 下方「可主动找的人」区块列出的对象；

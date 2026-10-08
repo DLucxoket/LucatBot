@@ -183,6 +183,8 @@ enum class SessionAction(val wire: String) {
  * @param toolName CALL_TOOL 的目标工具名
  * @param toolInput CALL_TOOL 的入参对象
  * @param todoAdd 新增待办内容（可选，与 action 无关的副作用字段，任何决策都可携带）
+ * @param todoAddTime 预计执行时间（可选，epoch 毫秒——`todo_add_time` 经
+ *   [TodoPlannedTime] 宽松解析；认不出 = null，只丢时间不丢待办）
  * @param todoDone 完成待办的 id 或内容片段（可选，同上）
  * @param reason 内心动机（不发出）
  * @param idleSeconds IDLE 的空闲休眠秒数（`params.seconds`；0 = LLM 没给 →
@@ -195,6 +197,7 @@ data class SessionDecision(
     val toolName: String? = null,
     val toolInput: Map<String, Any?> = emptyMap(),
     val todoAdd: String? = null,
+    val todoAddTime: Long? = null,
     val todoDone: String? = null,
     val reason: String? = null,
     val idleSeconds: Int = 0
@@ -233,7 +236,9 @@ object SessionDecisionParser {
         val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
         val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
 
-        return when (SessionAction.fromWire(actionText)) {
+        // 动作分支原样解析（todo_add / todo_done 由各分支携带）；预计时间在出口
+        // 统一 attach——7 个分支不用各自传参，认不出 → null 也不影响动作与待办本身
+        val decision = when (SessionAction.fromWire(actionText)) {
             SessionAction.OPEN_CONVERSATION -> {
                 val pick = SessionPickParser.parse(normalized)
                     ?: return idleLogged(llmOutput, "open_conversation 参数无效，兜底空闲", todoAdd, todoDone)
@@ -274,6 +279,10 @@ object SessionDecisionParser {
             // when 已覆盖全部枚举值——此处仅为 Kotlin 穷尽性收口（fromWire 未收录的名字）
             null -> idleLogged(llmOutput, "未知 action=$actionText，兜底空闲", todoAdd, todoDone)
         }
+        return decision.copy(
+            todoAddTime = node.get("todo_add_time")?.takeIf { !it.isNull }?.asText()
+                ?.let { TodoPlannedTime.parse(it) }
+        )
     }
 
     /** 兜底空闲（副作用字段照样保留——LLM 已经说要记的待办不能因 action 无效丢掉） */

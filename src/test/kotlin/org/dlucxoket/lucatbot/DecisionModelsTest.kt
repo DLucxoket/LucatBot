@@ -591,6 +591,34 @@ class SessionDecisionParserTest {
         assertNull(SessionDecisionParser.parse("""{"action":"idle"}""").todoAdd)
         assertNull(SessionDecisionParser.parse("""{"action":"idle","todo_add":"  "}""").todoAdd)
     }
+
+    @Test
+    fun `todo_add_time parses leniently and never drops the todo`() {
+        // 完整日期 → 毫秒
+        val d = ConversationDecision.parse(
+            """{"action":"return","todo_add":"去XX群看看","todo_add_time":"2026-10-07 14:30"}"""
+        )
+        assertEquals("去XX群看看", d.todo_add)
+        assertNotNull(d.todoAddTime)
+
+        // 认不出的时间 → null，**但待办照留**（绝不能因为时间格式丢事）
+        val bad = ConversationDecision.parse(
+            """{"action":"return","todo_add":"提醒他交房租","todo_add_time":"明天下午"}"""
+        )
+        assertEquals("提醒他交房租", bad.todo_add, "时间烂也不丢待办")
+        assertNull(bad.todoAddTime)
+
+        // 没给时间 → null（老行为不变）
+        assertNull(ConversationDecision.parse("""{"action":"return","todo_add":"x"}""").todoAddTime)
+
+        // 选会话侧同款（出口统一 attach，任何动作都带得上）
+        val s = SessionDecisionParser.parse(
+            """{"action":"idle","todo_add":"买票","todo_add_time":"2026-10-07 14:30"}"""
+        )
+        assertEquals("买票", s.todoAdd)
+        assertNotNull(s.todoAddTime)
+        assertEquals(SessionAction.IDLE, s.action, "带时间不影响动作解析")
+    }
 }
 
 /** LlmJson 剥离 markdown 代码块、提取 JSON 的边界测试 */

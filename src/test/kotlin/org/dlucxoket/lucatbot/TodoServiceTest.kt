@@ -84,12 +84,49 @@ class TodoServiceTest {
         assertEquals("（无待办）", service.pendingSummary())
 
         val item = service.add("帮他看群")
-        assertEquals("- [ ] (${item.id.take(4)}) 帮他看群", service.pendingSummary())
+        assertEquals(
+            "- [ ] (${item.id.take(4)}) 帮他看群（${org.dlucxoket.lucatbot.bot.persona.TimeFormat.monthDay(item.createdAt)} 建）",
+            service.pendingSummary(),
+            "行尾带**创建时间**（没设预计就只有建的日期）"
+        )
 
         service.add("提醒他交房租")
         val multi = service.pendingSummary()
         assertTrue(multi.contains("\n"))
         assertEquals(2, multi.lines().size)
+        repo.shutdown()
+    }
+
+    @Test
+    fun `planned time can be set cleared and shows with created time in summary`() {
+        val repo = JsonFileTodoRepository(tempPath())
+        val service = TodoService(repo)
+
+        val planned = System.currentTimeMillis() + 3 * 3_600_000L
+        val item = service.add("提醒他交房租", plannedAt = planned)
+        assertEquals(planned, item.plannedAt, "新增即带预计执行时间")
+        val line = service.pendingSummary()
+        assertTrue(line.contains("建"), "创建时间进 prompt：$line")
+        assertTrue(line.contains("预计"), "预计执行时间进 prompt：$line")
+
+        // 同内容去重，但会把新的预计时间补上（别把计划丢了）
+        val again = service.add("提醒他交房租", plannedAt = planned + 60_000L)
+        assertEquals(item.id, again.id, "同内容不重复加")
+        assertEquals(planned + 60_000L, again.plannedAt, "去重时补上新计划")
+
+        // 面板路径：按 id 前缀设置 / 清除
+        val set = service.setPlannedAt(item.id.take(4), planned)
+        assertNotNull(set)
+        assertEquals(planned, set!!.plannedAt)
+        val cleared = service.setPlannedAt(item.id, null)
+        assertNotNull(cleared)
+        assertNull(cleared!!.plannedAt, "null = 清除预计")
+        assertFalse(service.pendingSummary().contains("预计"), "清掉后不再展示预计")
+        assertNull(service.setPlannedAt("不存在的id", planned), "无匹配 → null（幂等）")
+
+        // 取消（与本批同属待办操作）
+        assertEquals(item.id, service.cancel(item.id.take(4))?.id, "按前缀取消")
+        assertTrue(service.pending().isEmpty(), "取消后从清单消失")
         repo.shutdown()
     }
 

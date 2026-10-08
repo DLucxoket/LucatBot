@@ -95,6 +95,9 @@ enum class ConversationAction(val wire: String) {
  * @param reason 内心动机（不会发出去）
  * @param remember 值得长期记住的一句话（可选，写入短期记忆）
  * @param todo_add 新增待办内容（可选）
+ * @param todo_add_time 预计执行时间（可选；LLM 按 prompt 的「当前时间」给
+ *   `yyyy-MM-dd HH:mm`，经 [TodoPlannedTime] 宽松解析成毫秒——**认不出只丢时间、
+ *   不丢待办**，面板路径另可补设）
  * @param todo_done 完成待办的 id 或内容片段（可选）
  * @param memory_queries 想搜记忆的关键词数组（可选；人名/QQ号/聊天里的词/想不起来的细节）——
  *   与任何动作同时输出，编排层**当轮搜**、结果注入**下一轮** prompt 的「短期记忆」段
@@ -113,6 +116,9 @@ data class ConversationDecision(
     val remember: String? = null,
     @JsonProperty("todo_add")
     val todo_add: String? = null,
+    /** 预计执行时间（epoch 毫秒；解析失败 = null——只丢时间不丢待办） */
+    @JsonProperty("todo_add_time")
+    val todoAddTime: Long? = null,
     @JsonProperty("todo_done")
     val todo_done: String? = null,
     @JsonProperty("memory_queries")
@@ -282,6 +288,9 @@ data class ConversationDecision(
             val reason = node.get("reason")?.takeIf { !it.isNull }?.asText()
             val remember = node.get("remember")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
             val todoAdd = node.get("todo_add")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
+            // 预计执行时间：宽松解析（见 TodoPlannedTime），认不出 → null，不拦 todo_add
+            val todoAddTime = node.get("todo_add_time")?.takeIf { !it.isNull }?.asText()
+                ?.let { TodoPlannedTime.parse(it) }
             val todoDone = node.get("todo_done")?.takeIf { !it.isNull }?.asText()?.takeIf { it.isNotBlank() }
             // 记忆搜索关键词（可选数组；缺省/非数组/空 → 空列表 = 不动记忆段 prompt）
             val memoryQueries = node.get("memory_queries")?.takeIf { it.isArray }
@@ -298,6 +307,7 @@ data class ConversationDecision(
                 reason = reason,
                 remember = remember,
                 todo_add = todoAdd,
+                todoAddTime = todoAddTime,
                 todo_done = todoDone,
                 memoryQueries = memoryQueries,
                 // 搜索型停留 = 合成的 memory-alias stay，或真 stay 同时带了搜索词

@@ -50,6 +50,13 @@ class JsonFileTodoRepository(
         flusher.markDirty()
     }
 
+    override fun delete(id: String) {
+        if (cache.remove(id) != null) {
+            dirty = true
+            flusher.markDirty() // 与 save 同一条防抖落盘链路（约 5s 后写盘，退出兜底）
+        }
+    }
+
     override fun findAll(): List<TodoItem> {
         return cache.values.toList()
     }
