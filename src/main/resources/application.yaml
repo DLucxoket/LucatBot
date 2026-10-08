@@ -21,6 +21,9 @@ llm:
     
     base-url: "https://discovery-api.intern-ai.org.cn/v1"
     model-name: "deepseek-v4-flash-vision"
+    # 输出上限（token）：推理型模型别把预算全耗在 reasoning 上交白卷
+    #（content 为空 → langchain4j `text cannot be null` → 曾被当成端点故障打断对话）
+    max-tokens: 4096
     
 #    base-url: "https://api.siliconflow.cn/v1"   #硅基流动
 #    model-name: "Qwen/Qwen3-8B"                 #硅基流动免费模型

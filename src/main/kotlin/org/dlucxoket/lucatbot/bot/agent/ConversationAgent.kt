@@ -57,10 +57,17 @@ class ConversationAgent(
         var retried = 0
         while (decision.isFallback && retried < maxParseRetries) {
             if (output.isBlank()) {
-                // 空响应 = **端点坏了**（OpenAIAPI 已分级降级成空串），不是格式手误——
-                // 带纠正提示重发同样的请求只会再空转 maxParseRetries 轮，直接兜底
-                log.warn("LLM 返回空响应，跳过重试直接兜底 return（会话 {}）", input.conversationId)
-                break
+                // 空响应 = **端点交白卷**（OpenAIAPI 已补过一次重试），不是格式手误——
+                // 带纠正提示再发只会继续空。**也别直接 return 离开会话**：实盘一次空
+                // 响应曾把对话打断（read_more 刚翻完楼就退了）。原地短暂 stay 等下一轮，
+                // 端点恢复即续上；连挂几轮由 stayStreak 护栏强制收尾（成本≈每次 1 个空请求）
+                log.warn("LLM 仍返回空响应，暂留会话稍后再试（会话 {}）", input.conversationId)
+                return ConversationDecision(
+                    action = ConversationAction.STAY,
+                    params = mapOf("seconds" to 10),
+                    reason = "端点空响应：原地稍等再试，不打断对话",
+                    isFallback = true
+                )
             }
             retried++
             val nudge = buildString {

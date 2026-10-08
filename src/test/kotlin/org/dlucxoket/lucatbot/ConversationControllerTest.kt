@@ -2062,16 +2062,19 @@ class ConversationAgentFallbackTest {
     }
 
     @Test
-    fun `blank response skips retries and falls back directly`() {
-        // 端点偶发坏响应（实盘：SSE `data:` 被当 JSON 解析炸）→ OpenAIAPI 降级成空串。
-        // 空响应不是「格式手误」，带纠正提示重发同样的请求只会再空转两轮——直接兜底
+    fun `blank response stays in session instead of leaving`() {
+        // 端点交白卷（实盘：`text cannot be null`——推理型模型把输出预算耗在 reasoning
+        // 上，content 为空）。OpenAIAPI 已补过一次重试 → 既不该带纠正提示再重发
+        //（同样只会空），**也不该直接 return 离开会话打断对话**：原地短暂 stay 等端点
+        // 恢复，连挂几轮由 stayStreak 护栏强制收尾
         val llm = FakeLLM(mutableListOf(""))
 
         val d = ConversationAgent(llm).processObject(ConversationRequest(conversationId = "private:1"))
 
-        assertTrue(d.isFallback, "空响应按解析失败兜底")
-        assertEquals(ConversationAction.RETURN, d.action)
-        assertEquals(1, llm.prompts.size, "空响应不重试（重发同样只会再空）")
+        assertTrue(d.isFallback, "空响应是兜底结果（不是模型真说了 stay）")
+        assertEquals(ConversationAction.STAY, d.action, "暂留会话，而不是离开")
+        assertEquals(10, d.staySeconds, "短退避等端点恢复")
+        assertEquals(1, llm.prompts.size, "不重发（重发同样只会再空）")
     }
 
     @Test

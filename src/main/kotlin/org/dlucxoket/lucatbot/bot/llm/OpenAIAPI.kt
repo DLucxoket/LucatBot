@@ -92,6 +92,18 @@ class OpenAIAPI : LLM {
         ?: System.getProperty("llm.mimo.model-name")
         ?: "mimo-v2.5"
 
+    /**
+     * 单次**输出**上限（token），yaml `llm.mimo.max-tokens` 可调（缺省 4096）
+     *
+     * 为什么显式给：deepseek-v4 这类推理型模型会先吐 reasoning——输出预算太小时
+     * reasoning 耗完就交白卷（`content` 为空 → langchain4j 抛
+     * `text cannot be null` → 实盘把这轮判成端点故障、对话被无谓打断）。
+     * 给个明确上限让它有预算把答案写完；我们要的是短 JSON，**上限只是天花板不是成本**
+     *（Int 带 @Value 默认值，yaml 缺项也回退 4096，不会像 String 那样被空串覆盖）。
+     */
+    @Value($$"${llm.mimo.max-tokens:4096}")
+    private var maxTokens: Int = 4096
+
 
     /**
      * 构建 LangChain4j 的 OpenAiChatModel 实例
@@ -105,9 +117,32 @@ class OpenAIAPI : LLM {
             .baseUrl(baseUrl)
             .apiKey(apiKey)
             .modelName(modelName)
+            .maxTokens(maxTokens)  // 给推理型模型留足输出预算（见字段注释：空响应的最可能成因）
             .timeout(java.time.Duration.ofSeconds(120))  // 2 分钟超时
             .maxRetries(2)
             .build()
+    }
+
+    /**
+     * 发一次请求，**非配置类失败补一次重试**（300ms 后）
+     *
+     * langchain4j 自带的 `maxRetries=2` 只覆盖传输层重试，这两类它不管：
+     * - **`text cannot be null`**——HTTP 200 但 `content` 为空（实盘 deepseek-v4：
+     *   推理型模型把预算耗在 reasoning 上交白卷），在响应转换阶段抛异常；
+     * - **转换前就炸的畸形响应**（SSE `data: …` 当 JSON 那类）。
+     *
+     * 空响应重试一次多半能救回来——实盘一次空响应曾把整段对话打断（read_more
+     * 刚翻完楼就 return 离开）。救不回再走 [degradeOrThrow] 的分级降级。
+     */
+    private fun chatWithOneRetry(model: OpenAiChatModel, request: ChatRequest): ChatResponse {
+        try {
+            return model.chat(request)
+        } catch (e: Exception) {
+            if (isConfigFailure(e.message)) throw e // 配置错误重试也没用，别浪费一次
+            log.warn("LLM 调用失败（{}），300ms 后补一次重试", e.message)
+        }
+        runCatching { Thread.sleep(300) } // 中断（停机）就直接往下走，让重试自然失败并降级
+        return model.chat(request)
     }
 
     /**
@@ -146,9 +181,9 @@ class OpenAIAPI : LLM {
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         val response = try {
-            model.chat(chatRequest)
+            chatWithOneRetry(model, chatRequest)
         } catch (e: Exception) {
-            // 端点偶发坏响应（实盘：响应体是 SSE `data: …`，JSON 解析炸）→ 分级兜底
+            // 端点偶发坏响应（实盘：SSE `data: …` 被当 JSON 解析）→ 分级兜底
             return degradeOrThrow(e, TokenUsageChannel.TEXT)
         }
         recordUsage(response, TokenUsageChannel.TEXT)
@@ -253,7 +288,7 @@ class OpenAIAPI : LLM {
                 listOf(UserMessage(contents))
             }
             val chatRequest = ChatRequest.builder().messages(messages).build()
-            val response = createModel().chat(chatRequest)
+            val response = chatWithOneRetry(createModel(), chatRequest) // 同文本路：非配置失败补一次
             recordUsage(response, TokenUsageChannel.IMAGE)
             val result = response.aiMessage().text()
             if (result.isNullOrBlank()) {
