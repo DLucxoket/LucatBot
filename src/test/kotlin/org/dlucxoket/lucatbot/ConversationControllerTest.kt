@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
 import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
+import org.dlucxoket.lucatbot.bot.agent.MemoryKeywordAgent
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationChatLine
@@ -140,6 +141,11 @@ class ConversationControllerTest {
         memoryLLM: FakeLLM = FakeLLM(mutableListOf()),
         /** 工具目录网关（list_tools / tool 集成测试用假工具目录） */
         toolCatalog: ToolCatalog = ToolCatalog(),
+        /**
+         * 进场预搜的**拆词智能体**（P2）——默认替身（空词表），既不真调 LLM、
+         * 也不污染决策脚本的 prompts；要断言预搜行为就传自己的替身
+         */
+        memoryKeywordAgent: MemoryKeywordAgent = MemoryKeywordAgent(FakeLLM(mutableListOf())),
         /** 假聊天记录行（默认造 historyCount 条；图片附件等场景传自定义行） */
         historyLines: List<HistoryMessageItem>? = null,
         /** 聊天记录窗口硬上限（token 护栏用例传小值；默认 = 生产 80） */
@@ -189,6 +195,7 @@ class ConversationControllerTest {
             actionLog = actionLog,
             conversationAgent = ConversationAgent(llm),
             memoryAgent = MemoryAgent(memoryLLM),
+            memoryKeywordAgent = memoryKeywordAgent,
             chatHistoryTool = historyTool,
             sendMessageTool = sendTool,
             toolCatalog = toolCatalog,
@@ -760,7 +767,7 @@ class ConversationControllerTest {
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        val header = "【记忆搜索结果（你之前" // 唯一在注入块里出现的写法（prompt 说明用短名）
+        val header = "【记忆搜索结果（进场预搜" // 唯一在注入块里出现的写法（prompt 说明用短名）
         val second = llm.prompts[1]
         assertTrue(second.contains(header), "搜索结果进下一轮 prompt：$second")
         assertTrue(second.contains("「可乐」：") && second.contains("他最喜欢的饮料是可乐"),
@@ -821,7 +828,7 @@ class ConversationControllerTest {
 
         assertEquals(listOf("走啊"), sendTool.sent,
             "第一轮搜记忆不被强制破冰成「在吗」，第二轮正常开口")
-        assertTrue(llm.prompts[1].contains("【记忆搜索结果（你之前"),
+        assertTrue(llm.prompts[1].contains("【记忆搜索结果（进场预搜"),
             "搜索结果进第二轮（先搜后说）：${llm.prompts[1]}")
     }
 
@@ -836,9 +843,40 @@ class ConversationControllerTest {
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        assertFalse(llm.prompts[0].contains("【记忆搜索结果（你之前"),
-            "没给字段 → 记忆段内容不变：${llm.prompts[0]}")
+        assertFalse(llm.prompts[0].contains("【记忆搜索结果（进场预搜"),
+            "没给字段、且拆词替身空词表没预搜 → 记忆段内容不变：${llm.prompts[0]}")
         assertTrue(llm.prompts[0].contains("### 短期记忆"), "记忆段本身照常存在")
+    }
+
+    @Test
+    fun `entry prefetch injects memory into first round without forcing search`() {
+        // P2 核心链路：拆词 agent 拿窗口拆出「蓝色」→ 查库命中 → **首轮 prompt 就带记忆**，
+        // 决策智能体不必再「先 memory_queries + stay 一轮」——每次进场省一整轮
+        val keywordLLM = FakeLLM(mutableListOf("""{"keywords": ["蓝色"]}"""))
+        val decisionLLM = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem", ".json").absolutePath)
+        )
+        memoryService.rememberFact(MemorySubject.user(999L), "他最喜欢的颜色是蓝色", listOf("蓝色"))
+
+        val (controller, _, _) = buildController(
+            decisionLLM,
+            memoryKeywordAgent = MemoryKeywordAgent(keywordLLM),
+            memoryService = memoryService,
+            historyLines = listOf(HistoryMessageItem("用户A", "他喜欢什么颜色来着", 1000L))
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val first = decisionLLM.prompts[0]
+        assertTrue(first.contains("【记忆搜索结果"), "首轮就带记忆结果：$first")
+        assertTrue(first.contains("他最喜欢的颜色是蓝色"), "命中内容进首轮：$first")
+        assertEquals(1, keywordLLM.prompts.size, "进场只拆一次词")
+        assertTrue(
+            keywordLLM.prompts.single().contains("他喜欢什么颜色来着"),
+            "拆词 agent 拿到的是聊天窗口：${keywordLLM.prompts.single()}"
+        )
+        assertFalse(first.contains("第一轮不要直接 send"), "首轮不再被禁止发话")
     }
 
     @Test
@@ -857,10 +895,12 @@ class ConversationControllerTest {
         assertTrue(prompt.contains("想说的话里的关键词也要一起搜"),
             "想说的话里的关键词也要搜：$prompt")
         assertTrue(prompt.contains("发表情 → 搜"), "表情场景点名：$prompt")
-        assertTrue(prompt.contains("刚进会话先别急着开口"),
-            "进会话先搜记忆再说话的规则存在：$prompt")
-        assertTrue(prompt.contains("只是等自己的搜索结果，不算等回应"),
-            "第一轮的 stay 用途说明（免得和「等回应别 stay」打架）：$prompt")
+        assertTrue(prompt.contains("进场记忆已备好"),
+            "P2：进场预搜记忆已注入，首轮可直接回话（取代旧「首轮强制先搜再说话」）：$prompt")
+        assertTrue(prompt.contains("首轮可直接据此回话"),
+            "点名首轮不必先搜：$prompt")
+        assertFalse(prompt.contains("第一轮不要直接 send"),
+            "旧的首轮禁发令随进场预搜一并移除（否则预搜白做）：$prompt")
         assertTrue(prompt.contains("绝不许把 action 写成 memory_queries"),
             "点名 memory_queries 不是动作（实盘把它当 action 输出过两次）：$prompt")
         assertTrue(prompt.contains("同时") && prompt.contains("下一轮"),
@@ -2015,6 +2055,19 @@ class ConversationAgentFallbackTest {
         assertEquals(ConversationAction.RETURN, d.action, "耗尽重试才兜底 return")
         assertTrue(d.isFallback, "是兜底结果（不是模型真说了 return）")
         assertEquals(3, llm.prompts.size, "1 次原始 + 2 次重试，不多打")
+    }
+
+    @Test
+    fun `blank response skips retries and falls back directly`() {
+        // 端点偶发坏响应（实盘：SSE `data:` 被当 JSON 解析炸）→ OpenAIAPI 降级成空串。
+        // 空响应不是「格式手误」，带纠正提示重发同样的请求只会再空转两轮——直接兜底
+        val llm = FakeLLM(mutableListOf(""))
+
+        val d = ConversationAgent(llm).processObject(ConversationRequest(conversationId = "private:1"))
+
+        assertTrue(d.isFallback, "空响应按解析失败兜底")
+        assertEquals(ConversationAction.RETURN, d.action)
+        assertEquals(1, llm.prompts.size, "空响应不重试（重发同样只会再空）")
     }
 
     @Test

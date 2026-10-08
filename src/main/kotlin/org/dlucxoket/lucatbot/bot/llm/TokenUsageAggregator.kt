@@ -29,12 +29,14 @@ class TokenUsageAggregator(
 ) {
     private val log = LoggerFactory.getLogger(TokenUsageAggregator::class.java)
 
-    /** 统计键：agent × 会话 × 通道 × 模型（换端点/换模型后成本可比） */
+    /** 统计键：agent × 会话 × 通道 × 模型 × 动作 × 是否进场首轮（换端点/换模型后成本可比） */
     private data class Key(
         val agent: String,
         val conversation: String,
         val channel: TokenUsageChannel,
-        val model: String
+        val model: String,
+        val action: String,
+        val firstRound: Boolean
     )
 
     /** 一个键上的累计值（calls / 入参 token / 出参 token；不可变 + plus 累加） */
@@ -53,10 +55,12 @@ class TokenUsageAggregator(
     private var sinceSummary = 0
 
     /**
-     * 记一次 LLM 调用（[OpenAIAPI] 每次拿到响应后调用）
+     * 记一次 LLM 调用（由 [org.dlucxoket.lucatbot.bot.agent.Agent] 在 handle 结束时调用）
      *
      * @param input 入参 token（含图片请求的视觉 token）；端点未返回记 0 并计一次 noUsage
      * @param output 出参 token
+     * @param action 这次调用产出的决策动作（send / idle / read_more…；没打上 = "-"）
+     * @param firstRound 是否本会话首轮（进场首轮占比统计）
      */
     fun record(
         agent: String,
@@ -64,12 +68,14 @@ class TokenUsageAggregator(
         channel: TokenUsageChannel,
         model: String,
         input: Long?,
-        output: Long?
+        output: Long?,
+        action: String = "-",
+        firstRound: Boolean = false
     ) {
         val inTok = input ?: 0L
         val outTok = output ?: 0L
         val reported = input != null || output != null
-        val key = Key(agent, conversation, channel, model)
+        val key = Key(agent, conversation, channel, model, action, firstRound)
         synchronized(lock) {
             ensureLoadedLocked()
             totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, inTok, outTok)
@@ -83,7 +89,9 @@ class TokenUsageAggregator(
                     model = model,
                     input = inTok,
                     output = outTok,
-                    reported = reported
+                    reported = reported,
+                    action = action,
+                    firstRound = firstRound
                 )
             )
             sinceSummary++
@@ -106,6 +114,12 @@ class TokenUsageAggregator(
         noUsage
     }
 
+    /** 进场首轮的调用次数（跨重启累计）——面板算「进场首轮占比」用 */
+    fun firstRoundCalls(): Long = synchronized(lock) {
+        ensureLoadedLocked()
+        aggregate { it.firstRound }.calls
+    }
+
     /**
      * 结构化快照（**Web API 用**）：按统计键分组的累计值，合计降序
      *
@@ -119,6 +133,8 @@ class TokenUsageAggregator(
                 conversation = k.conversation,
                 channel = k.channel.label,
                 model = k.model,
+                action = k.action,
+                firstRound = k.firstRound,
                 calls = v.calls,
                 input = v.input,
                 output = v.output
@@ -147,7 +163,9 @@ class TokenUsageAggregator(
                 agent = row.agent,
                 conversation = row.conversation,
                 channel = TokenUsageChannel.fromLabel(row.channel),
-                model = row.model
+                model = row.model,
+                action = row.action,
+                firstRound = row.firstRound
             )
             // 明细一行 = 一次调用（calls 恒为 1，模型里不再带该字段）
             totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, row.input, row.output)
@@ -193,6 +211,16 @@ class TokenUsageAggregator(
                     .map { m -> m to aggregate { k -> k.model == m } }
             )
         )
+        sb.append("\n- 按动作：").append(
+            render(
+                totals.keys.map { it.action }.distinct().sorted()
+                    .map { a -> a to aggregate { k -> k.action == a } }
+            )
+        )
+        val firstRounds = aggregate { k -> k.firstRound }
+        if (firstRounds.calls > 0) {
+            sb.append("\n- 进场首轮：${firstRounds.calls} 次（入 ${firstRounds.input} / 出 ${firstRounds.output}）")
+        }
         return sb.toString()
     }
 
@@ -205,3 +233,12 @@ class TokenUsageAggregator(
     private fun aggregate(predicate: (Key) -> Boolean): Agg =
         totals.filterKeys(predicate).values.reduceOrNull { a, b -> a + b } ?: Agg(0, 0, 0)
 }
+
+/**
+ * 各 Agent 的**默认账本**：不落盘的内存实现（单测零配置、不污染 `data/`）
+ *
+ * 生产由 `LoopConfig` 注入容器里的**同一个** bean——不注入也能跑，但各 Agent
+ * 会各记各的，面板上的分组就碎了（装配守卫测试专门盯这一点）。
+ */
+fun inMemoryTokenUsage(): TokenUsageAggregator =
+    TokenUsageAggregator(InMemoryTokenUsageStore(), summaryEvery = 0)

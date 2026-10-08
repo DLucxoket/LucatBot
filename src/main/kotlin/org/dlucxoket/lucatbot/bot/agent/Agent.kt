@@ -3,8 +3,10 @@ package org.dlucxoket.lucatbot.bot.agent
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 import org.dlucxoket.lucatbot.bot.llm.fixIndent
+import org.dlucxoket.lucatbot.bot.llm.inMemoryTokenUsage
 
 /**
  * 智能体（Agent）抽象基类
@@ -28,7 +30,17 @@ abstract class Agent<I, O>(
      * 直接 new Agent）走 OpenAIAPI 兜底实例；Spring 环境下 LlmConfig 已注册
      * 容器管理的 OpenAIAPI Bean，ask() 调用会转发到该 Bean（@Value 配置生效）。
      */
-    protected val llm: LLM = LLM.DEFAULT
+    protected val llm: LLM = LLM.DEFAULT,
+
+    /**
+     * token 用量账本——**构造注入**（DIP：可替换、可测，不是全局单例）
+     *
+     * 本类在 handle 结束时把暂存在 [TokenUsageScope] 里的用量连同**决策标签**
+     * （[usageAction] / [usageFirstRound]）统一记账——只有问的人知道这一问得出了
+     * 什么结论。默认值给一份不落盘的内存账本（单测零配置）；生产由 LoopConfig
+     * 注入容器里的同一个 bean（否则各 Agent 各记各的，面板就碎了）。
+     */
+    private val tokenUsage: TokenUsageAggregator = inMemoryTokenUsage()
 ) {
     /** Jackson ObjectMapper（Kotlin 模块，支持 data class 默认值） */
     protected val mapper: ObjectMapper = jacksonObjectMapper()
@@ -82,7 +94,6 @@ abstract class Agent<I, O>(
         val output: O = withUsageScope(input) { handle(input) }
         return toJson(output)
     }
-
     /**
      * OOP 边界入口（Agent/Tool 链内部调用）
      *
@@ -114,16 +125,62 @@ abstract class Agent<I, O>(
      */
     protected open fun conversationTag(input: I): String? = null
 
-    /** 统一挂 token 维度：agent 必挂，会话按 [conversationTag] 能推就挂（嵌套可还原） */
-    private fun <T> withUsageScope(input: I, block: () -> T): T =
+    /**
+     * 这次调用产出的**决策动作**标签（P5 观测：`send` / `idle` / `read_more` …）
+     *
+     * 默认 null = 不打标（记为 `-`）。子类从输出里取——只有问的人知道这一问的结论，
+     * 所以记账时机放在 handle 之后（传输层 [org.dlucxoket.lucatbot.bot.llm.OpenAIAPI]
+     * 只负责把 usage 暂存进 [TokenUsageScope]）。
+     */
+    protected open fun usageAction(input: I, output: O): String? = null
+
+    /** 是否**本会话首轮**（进场首轮占比统计）；默认 false */
+    protected open fun usageFirstRound(input: I): Boolean = false
+
+    /**
+     * 统一挂 token 维度：agent 必挂，会话按 [conversationTag] 能推就挂（嵌套可还原）
+     *
+     * handle 结束（含异常）时在**会话维度作用域内**把暂存用量记进账本——
+     * 保证明细里的会话字段读的是这一问真正挂的那个值
+     */
+    private fun withUsageScope(input: I, block: () -> O): O =
         TokenUsageScope.withAgent(agentTag) {
+            TokenUsageScope.drainUsage() // 防御：清掉上一次异常路径的残留，别记错账
             val conversation = conversationTag(input)
             if (conversation.isNullOrBlank()) {
-                block()
+                runAndFlush(input, block)
             } else {
-                TokenUsageScope.withConversation(conversation, block)
+                TokenUsageScope.withConversation(conversation) { runAndFlush(input, block) }
             }
         }
+
+    /** 跑 handle，**无论成败**都把这一问的用量带上决策标签记进账本 */
+    private fun runAndFlush(input: I, block: () -> O): O {
+        var output: O? = null
+        try {
+            val result = block()
+            output = result
+            return result
+        } finally {
+            val pending = TokenUsageScope.drainUsage()
+            if (pending.isNotEmpty()) {
+                val action = output?.let { usageAction(input, it) } ?: "-"
+                val firstRound = output != null && usageFirstRound(input)
+                pending.forEach { u ->
+                    tokenUsage.record(
+                        agent = agentTag,
+                        conversation = TokenUsageScope.conversation(),
+                        channel = u.channel,
+                        model = u.model,
+                        input = u.input,
+                        output = u.output,
+                        action = action,
+                        firstRound = firstRound
+                    )
+                }
+            }
+        }
+    }
 
     /**
      * JSON → OOP（反序列化）

@@ -2,6 +2,8 @@ package org.dlucxoket.lucatbot.bot.loop
 
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
+import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
+import org.dlucxoket.lucatbot.bot.agent.MemoryKeywordAgent
 import org.dlucxoket.lucatbot.bot.agent.SessionPickerAgent
 import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryService
 import org.dlucxoket.lucatbot.bot.llm.ImageResolver
@@ -77,7 +79,9 @@ class LoopConfig {
         chatHistoryService: ChatHistoryService,
         todoService: TodoService,
         actionLog: ActionLog,
-        toolCatalog: ToolCatalog
+        toolCatalog: ToolCatalog,
+        /** token 账本（P5）：**所有 Agent 注入同一个 bean**，否则面板上的分组会碎 */
+        tokenUsageAggregator: org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
     ): MessageListController = MessageListController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
@@ -85,7 +89,7 @@ class LoopConfig {
         chatHistoryService = chatHistoryService,
         todoService = todoService,
         actionLog = actionLog,
-        sessionPickerAgent = SessionPickerAgent(),
+        sessionPickerAgent = SessionPickerAgent(tokenUsage = tokenUsageAggregator),
         toolCatalog = toolCatalog
     )
 
@@ -100,7 +104,9 @@ class LoopConfig {
         toolCatalog: ToolCatalog,
         imageResolver: ImageResolver,
         readStateService: org.dlucxoket.lucatbot.bot.readstate.ReadStateService,
-        fixedMemory: org.dlucxoket.lucatbot.bot.memory.FixedMemory
+        fixedMemory: org.dlucxoket.lucatbot.bot.memory.FixedMemory,
+        /** token 账本（P5）：**所有 Agent 注入同一个 bean**，否则面板上的分组会碎 */
+        tokenUsageAggregator: org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
     ): ConversationController = ConversationController(
         lucatBot = lucatBot,
         sessionManager = sessionManager,
@@ -108,7 +114,9 @@ class LoopConfig {
         chatHistoryService = chatHistoryService,
         todoService = todoService,
         actionLog = actionLog,
-        conversationAgent = ConversationAgent(),
+        conversationAgent = ConversationAgent(tokenUsage = tokenUsageAggregator),
+        memoryAgent = MemoryAgent(tokenUsage = tokenUsageAggregator),
+        memoryKeywordAgent = MemoryKeywordAgent(tokenUsage = tokenUsageAggregator),
         chatHistoryTool = ChatHistoryTool as Tool<ChatHistoryRequest, ChatHistoryResult>,
         sendMessageTool = SendMessageTool as Tool<SendMessageRequest, SendMessageResult>,
         toolCatalog = toolCatalog,
@@ -130,7 +138,9 @@ class LoopConfig {
         todoService: TodoService,
         chatHistoryService: ChatHistoryService,
         memoryService: MemoryService,
-        actionLog: ActionLog
+        actionLog: ActionLog,
+        /** token 账本（P5）：**所有 Agent 注入同一个 bean**，否则面板上的分组会碎 */
+        tokenUsageAggregator: org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
     ): NotificationDispatcher = NotificationDispatcher(
         lucatBot = lucatBot,
         conversationController = conversationController,
@@ -138,6 +148,9 @@ class LoopConfig {
         todoService = todoService,
         chatHistoryService = chatHistoryService,
         memoryService = memoryService,
-        actionLog = actionLog
+        actionLog = actionLog,
+        notificationAgent = org.dlucxoket.lucatbot.bot.agent.NotificationAgent(
+            tokenUsage = tokenUsageAggregator
+        )
     )
 }

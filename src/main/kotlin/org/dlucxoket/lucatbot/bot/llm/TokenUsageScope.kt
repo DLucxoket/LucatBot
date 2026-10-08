@@ -52,4 +52,29 @@ object TokenUsageScope {
             conversationTag.set(prev)
         }
     }
+
+    // ------------------------------------------------------------------
+    // 用量暂存（**记录时机上移**：传输层存、Agent 出来时带决策标签记账）
+    // ------------------------------------------------------------------
+
+    private val pending = ThreadLocal.withInitial { mutableListOf<TokenUsagePending>() }
+
+    /**
+     * [org.dlucxoket.lucatbot.bot.llm.OpenAIAPI] 拿到 usage 后暂存（本线程）
+     *
+     * 维度（agent/会话）此刻已挂在 [TokenUsageScope] 上，flush 时一并读——
+     * 明细的 `action`/`firstRound` 只有产出决策的 Agent 知道，故延后到那里记账
+     */
+    fun stashUsage(usage: TokenUsagePending) {
+        pending.get() += usage
+    }
+
+    /** 取走本线程暂存的用量（[org.dlucxoket.lucatbot.bot.agent.Agent] 记账后即空） */
+    fun drainUsage(): List<TokenUsagePending> {
+        val bucket = pending.get()
+        if (bucket.isEmpty()) return emptyList()
+        val copy = bucket.toList()
+        bucket.clear()
+        return copy
+    }
 }

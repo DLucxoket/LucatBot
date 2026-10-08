@@ -5,7 +5,9 @@ import org.dlucxoket.lucatbot.bot.agent.data.SessionDecisionParser
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.fixIndent
+import org.dlucxoket.lucatbot.bot.llm.inMemoryTokenUsage
 
 /**
  * 查看会话智能体（消息列表决策）
@@ -20,8 +22,10 @@ import org.dlucxoket.lucatbot.bot.llm.fixIndent
  * - `list_tools` / `tool` → 编排层执行后带结果重新决策
  */
 class SessionPickerAgent(
-    llm: LLM = LLM.DEFAULT
-) : Agent<SessionPickerRequest, SessionDecision>(llm) {
+    llm: LLM = LLM.DEFAULT,
+    /** token 账本（构造注入，见 [Agent]）——生产由 LoopConfig 注入容器里同一个 bean */
+    tokenUsage: TokenUsageAggregator = inMemoryTokenUsage()
+) : Agent<SessionPickerRequest, SessionDecision>(llm, tokenUsage) {
     override val description: String = """
         查看会话智能体，模拟真人扫一眼QQ消息列表后决定进哪个会话。
         一次最多打开一个会话，也可以选择什么都不看去空闲；
@@ -29,6 +33,10 @@ class SessionPickerAgent(
     """.trimIndent()
 
     override val inputClass: Class<SessionPickerRequest> = SessionPickerRequest::class.java
+
+    /** token 统计：这一问得出的动作（open_conversation / idle / list_tools…） */
+    override fun usageAction(input: SessionPickerRequest, output: SessionDecision): String? =
+        output.action.wire
 
     /** token 统计的会话维度：选会话固定发生在「消息列表」上下文 */
     override fun conversationTag(input: SessionPickerRequest): String = "消息列表"

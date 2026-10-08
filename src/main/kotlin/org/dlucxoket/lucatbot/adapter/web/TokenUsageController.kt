@@ -41,10 +41,14 @@ class TokenUsageController(
         val total: TokenRowDto,
         /** 端点没回 usage 的调用数（token 按 0 计，如实展示） */
         val noUsageCalls: Long,
+        /** 进场首轮的调用次数（P5：验证「进场预搜 + 首轮可直接回话」省了几轮） */
+        val firstRoundCalls: Long,
         val byChannel: List<TokenRowDto>,
         val byAgent: List<TokenRowDto>,
         val byConversation: List<TokenRowDto>,
-        val byModel: List<TokenRowDto>
+        val byModel: List<TokenRowDto>,
+        /** 按这次调用产出的决策动作分组（send / idle / read_more / 拆词…） */
+        val byAction: List<TokenRowDto>
     )
 
     /** 时间分桶行；[bucket] 为可排序的 `yyyy-MM-dd` 或 `yyyy-MM-dd HH` */
@@ -68,13 +72,15 @@ class TokenUsageController(
                 total = entries.sumOf { it.total }
             ),
             noUsageCalls = tokenUsage.noUsageCalls(),
+            firstRoundCalls = tokenUsage.firstRoundCalls(),
             // 通道按固定顺序（文字 → 图片），零值也展示——一眼看出「图片通道用没用」
             byChannel = TokenUsageChannel.entries.map { ch ->
                 sumRow(ch.label, entries.filter { it.channel == ch.label })
             },
             byAgent = grouped(entries) { it.agent },
             byConversation = grouped(entries) { it.conversation },
-            byModel = grouped(entries) { it.model }
+            byModel = grouped(entries) { it.model },
+            byAction = grouped(entries) { it.action }
         )
     }
 

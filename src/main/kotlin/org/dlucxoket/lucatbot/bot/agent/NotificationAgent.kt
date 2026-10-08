@@ -4,7 +4,9 @@ import org.dlucxoket.lucatbot.bot.agent.data.NotificationAction
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.NotificationRequest
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.fixIndent
+import org.dlucxoket.lucatbot.bot.llm.inMemoryTokenUsage
 
 /**
  * 通知决策智能体——外来私聊 / @我 消息到达时的「手机横幅」
@@ -17,8 +19,10 @@ import org.dlucxoket.lucatbot.bot.llm.fixIndent
  * 由本 agent 当场决定；解析失败兜底 IGNORE（消息已入档+进未读，不丢不打断）。
  */
 class NotificationAgent(
-    llm: LLM = LLM.DEFAULT
-) : Agent<NotificationRequest, NotificationDecision>(llm) {
+    llm: LLM = LLM.DEFAULT,
+    /** token 账本（构造注入，见 [Agent]）——生产由 LoopConfig 注入容器里同一个 bean */
+    tokenUsage: TokenUsageAggregator = inMemoryTokenUsage()
+) : Agent<NotificationRequest, NotificationDecision>(llm, tokenUsage) {
     override val description: String = """
         通知决策智能体：手机刚收到一条新消息通知（横幅），
         瞄一眼决定：点开查看、划掉无视、还是记成待办稍后处理。
@@ -26,6 +30,10 @@ class NotificationAgent(
     """.trimIndent()
 
     override val inputClass: Class<NotificationRequest> = NotificationRequest::class.java
+
+    /** token 统计：这一问得出的动作（ignore / todo / open） */
+    override fun usageAction(input: NotificationRequest, output: NotificationDecision): String? =
+        output.action.wire
 
     override fun handle(input: NotificationRequest): NotificationDecision {
         val systemPrompt = buildSystemPrompt(input)

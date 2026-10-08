@@ -55,7 +55,10 @@ class JsonlTokenUsageStore(private val path: String?) : TokenUsageStore {
                     "calls" to 1,
                     "in" to record.input,
                     "out" to record.output,
-                    "reported" to record.reported
+                    "reported" to record.reported,
+                    // 决策标签（P5）：旧格式行没有这两项 → 读时回落 "-"/false
+                    "action" to record.action,
+                    "firstRound" to record.firstRound
                 )
             )
             val file = File(target)
@@ -99,7 +102,9 @@ class JsonlTokenUsageStore(private val path: String?) : TokenUsageStore {
             model = node.path("model").asText("unknown"),
             input = node.path("in").asLong(0L),
             output = node.path("out").asLong(0L),
-            reported = node.path("reported").asBoolean(true)
+            reported = node.path("reported").asBoolean(true),
+            action = node.path("action").asText("-").ifBlank { "-" },
+            firstRound = node.path("firstRound").asBoolean(false)
         )
     }
 }

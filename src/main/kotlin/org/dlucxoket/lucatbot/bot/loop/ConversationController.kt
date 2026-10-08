@@ -3,6 +3,8 @@ package org.dlucxoket.lucatbot.bot.loop
 import org.dlucxoket.lucatbot.bot.LucatBot
 import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
 import org.dlucxoket.lucatbot.bot.agent.MemoryAgent
+import org.dlucxoket.lucatbot.bot.agent.MemoryKeywordAgent
+import org.dlucxoket.lucatbot.bot.agent.data.MemoryKeywordRequest
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationChatLine
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
@@ -53,6 +55,12 @@ class ConversationController(
     private val actionLog: ActionLog,
     private val conversationAgent: ConversationAgent = ConversationAgent(),
     private val memoryAgent: MemoryAgent = MemoryAgent(),
+    /**
+     * 进场记忆预搜的**关键词拆分智能体**（P2）——首轮决策前对聊天记录拆词、
+     * 查库，结果与**首轮决策一起注入**；取代旧的「首轮强制 memory_queries + stay」，
+     * 每次进场省掉一整轮全量决策 prompt（≈9.8k token）
+     */
+    private val memoryKeywordAgent: MemoryKeywordAgent = MemoryKeywordAgent(),
     private val chatHistoryTool: Tool<ChatHistoryRequest, ChatHistoryResult>,
     private val sendMessageTool: Tool<SendMessageRequest, SendMessageResult>,
     /** 工具目录与调用网关（list_tools / tool 动作的执行层） */
@@ -131,6 +139,9 @@ class ConversationController(
 
     /** 记忆搜索结果行数上限（一次注入「短期记忆」段的体量闸） */
     private val maxMemoryHitLines = 24
+
+    /** 进场预搜喂给拆词智能体的聊天窗口行数上限（拆词只要近况，不要全史） */
+    private val entryWindowLines = 14
 
     /**
      * 退出记忆整理（幂等、失败不影响退出）——单一职责组件，见 [MemoryReflector]
@@ -337,6 +348,19 @@ class ConversationController(
                 "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]$idTag：${resolveRef(it.content)}"
             }
 
+            // 首轮决策前：**进场预搜记忆**（P2）——单拎的拆词智能体对当前窗口拆词 →
+            // 查库，命中直接进 pendingMemoryHits，与首轮 prompt 一起注入。旧流程把
+            // 「先搜再说话」写死在决策 prompt 里（首轮强制 memory_queries + stay 等结果），
+            // 每次进场多烧一整轮；现在首轮即可回话，memory_queries 留给中途补搜。
+            if (round == 0) {
+                prefetchEntryMemories(
+                    newNotes.takeLast(6) + recentLines.takeLast(entryWindowLines)
+                        .map { "${it.sender}：${it.content.take(200)}" },
+                    pendingMemoryHits,
+                    conversationId
+                )
+            }
+
             // 图片通道（**按需供图**）：默认不取材、不附内容——只有上一轮
             // view_images 请求过才把成果附到本轮（一次性）；未请求时附件与
             // 缺失清单皆空，省下载也省 token
@@ -358,7 +382,7 @@ class ConversationController(
             val memoryHitsBlock = if (pendingMemoryHits.isEmpty()) {
                 ""
             } else {
-                "\n【记忆搜索结果（你之前用 memory_queries 请求的关键词；再次请求会覆盖）】\n" +
+                "\n【记忆搜索结果（进场预搜 + 你用 memory_queries 请求的关键词；再次请求会覆盖）】\n" +
                     pendingMemoryHits.joinToString("\n") { "- $it" }
             }
             val request = ConversationRequest(
@@ -385,6 +409,8 @@ class ConversationController(
                 historyCovered = historyCount,
                 reachedHistoryStart = reachedHistoryStart,
                 historyCapped = historyCapped,
+                // 首轮标记（P5 观测：进场首轮占比——round++ 在下面，故此处 0 = 首轮）
+                entryRound = round == 0,
                 hint = buildHint(
                     HintInput(
                         readMoreWithInsertStreak = readMoreWithInsertStreak,
@@ -851,6 +877,52 @@ class ConversationController(
             todoSettlement.settle(ref, conversationId)
         }
         return deferredRemember
+    }
+
+    /**
+     * **进场预搜记忆**（P2）：拆词 → 查库 → 结果与首轮决策一起注入
+     *
+     * 由 [MemoryKeywordAgent] 把当前窗口拆成可搜关键词，逐词查库写进 [sink]。
+     * 与 [searchMemories] 的分工：那个是**会话中途**按 LLM 自己给的词补搜
+     * （会 `clear()` 整体覆盖），这个是**进场时**替 LLM 先跑一遍（只增不覆盖）。
+     *
+     * 三重兜底，**绝不阻断进场**：窗口空白直接跳过；拆词/搜索异常一律吞掉
+     * （当没有记忆）；命中按内容去重并受 [maxMemoryHitLines] 封顶。
+     *
+     * @param window 拆词窗口（新消息注释 + 最近若干条历史，已截断）
+     * @param sink 命中写入处（首轮 prompt 的【记忆搜索结果】段）
+     * @param conversationId 所处会话（操作日志带上）
+     */
+    private fun prefetchEntryMemories(window: List<String>, sink: MutableList<String>, conversationId: String) {
+        if (window.none { it.isNotBlank() }) return
+        val startedAt = System.currentTimeMillis()
+        runCatching {
+            val keywords = memoryKeywordAgent.processObject(
+                MemoryKeywordRequest(conversationContent = window.joinToString("\n"))
+            ).keywords
+            if (keywords.isEmpty()) {
+                log.debug("进场预搜：拆词为空（寒暄/无信息量），不搜")
+                return
+            }
+            keywords.take(maxMemoryQueries).forEach { query ->
+                try {
+                    memoryService.search(query).take(3).forEach { hit ->
+                        if (sink.size >= maxMemoryHitLines) return@forEach
+                        if (sink.any { it.contains(hit.content) }) return@forEach // 内容去重
+                        sink += "「$query」：${hit.content}"
+                    }
+                } catch (e: Exception) {
+                    log.warn("进场预搜搜索失败（{}）: {}", query, e.message)
+                }
+            }
+            log.info(
+                "进场预搜：{} 词 → {} 条记忆（{}ms）",
+                keywords.size, sink.size, System.currentTimeMillis() - startedAt
+            )
+            if (sink.isNotEmpty()) actionLog.append("进场预搜记忆 ${sink.size} 条", conversationId = conversationId)
+        }.onFailure { e ->
+            log.warn("进场记忆预搜失败（照常进场，首轮没记忆上下文）: {}", e.message)
+        }
     }
 
     /**

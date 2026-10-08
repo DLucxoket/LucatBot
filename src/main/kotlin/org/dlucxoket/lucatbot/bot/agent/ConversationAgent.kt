@@ -4,7 +4,10 @@ import org.dlucxoket.lucatbot.bot.agent.data.ConversationAction
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationDecision
 import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.fixIndent
+import org.dlucxoket.lucatbot.bot.llm.inMemoryTokenUsage
+import org.slf4j.LoggerFactory
 
 /**
  * 会话内决策智能体
@@ -18,8 +21,12 @@ import org.dlucxoket.lucatbot.bot.llm.fixIndent
 class ConversationAgent(
     llm: LLM = LLM.DEFAULT,
     /** 解析失败的重试次数（附纠正提示重新问；仍失败才兜底 return） */
-    private val maxParseRetries: Int = 2
-) : Agent<ConversationRequest, ConversationDecision>(llm) {
+    private val maxParseRetries: Int = 2,
+    /** token 账本（构造注入，见 [Agent]）——生产由 LoopConfig 注入容器里同一个 bean */
+    tokenUsage: TokenUsageAggregator = inMemoryTokenUsage()
+) : Agent<ConversationRequest, ConversationDecision>(llm, tokenUsage) {
+
+    private val log = LoggerFactory.getLogger(ConversationAgent::class.java)
     override val description: String = """
         会话内决策智能体，决定在聊天会话里接下来做什么：
         爬楼看历史、发一条消息、停留一会儿、或者退出会话。
@@ -27,6 +34,13 @@ class ConversationAgent(
     """.trimIndent()
 
     override val inputClass: Class<ConversationRequest> = ConversationRequest::class.java
+
+    /** token 统计：这一问得出的动作（send / idle / read_more…）——「按动作」分组用 */
+    override fun usageAction(input: ConversationRequest, output: ConversationDecision): String? =
+        output.action.wire
+
+    /** token 统计：是否进场首轮（面板算「进场首轮占比」，验证 P2 省了几轮） */
+    override fun usageFirstRound(input: ConversationRequest): Boolean = input.entryRound
 
     /** token 统计的会话维度：入参自带会话键——编排层不必再包 `withConversation` */
     override fun conversationTag(input: ConversationRequest): String? =
@@ -36,11 +50,18 @@ class ConversationAgent(
         val systemPrompt = buildSystemPrompt(input)
         val userContent = buildUserContent(input)
         // 图片通道：附件随请求走（无图时等价两参版；测试替身默认忽略图片）
-        var decision = ConversationDecision.parse(llm.ask(systemPrompt, userContent, input.images))
+        var output = llm.ask(systemPrompt, userContent, input.images)
+        var decision = ConversationDecision.parse(output)
         // **解析失败先重试**（附纠正提示重新问），重试耗尽才兜底 return——
         // 实盘：一次「未知 action / 缺字段」就整轮退出会话太浪费，多数是偶发手误
         var retried = 0
         while (decision.isFallback && retried < maxParseRetries) {
+            if (output.isBlank()) {
+                // 空响应 = **端点坏了**（OpenAIAPI 已分级降级成空串），不是格式手误——
+                // 带纠正提示重发同样的请求只会再空转 maxParseRetries 轮，直接兜底
+                log.warn("LLM 返回空响应，跳过重试直接兜底 return（会话 {}）", input.conversationId)
+                break
+            }
             retried++
             val nudge = buildString {
                 append("\n\n（注意：你上一次的输出没能解析成决策 JSON——请**只输出纯 JSON**，")
@@ -51,9 +72,10 @@ class ConversationAgent(
             // 重试只为修 JSON 形态：**不再重发「### 工具」段**（预算内最多 10k 字符）
             // ——模型上一轮已读过目录/执行结果，这轮只需按结构重新输出；剧情数据
             // （聊天记录/记忆/待办）照常带上，决策信息不缺
-            decision = ConversationDecision.parse(
-                llm.ask(systemPrompt, buildUserContent(input, includeTools = false) + nudge, input.images)
+            output = llm.ask(
+                systemPrompt, buildUserContent(input, includeTools = false) + nudge, input.images
             )
+            decision = ConversationDecision.parse(output)
         }
         return decision
     }
@@ -125,7 +147,7 @@ class ConversationAgent(
               - **没有要查的就省略该字段或给 []**；**拿不准要不要查就写上**——搜一下总比凭印象编强（搜不到会如实标「没搜到」）
               - 可与 send 等任何动作**同时**输出；结果**下一轮起一直带在**「### 短期记忆」末尾的【记忆搜索结果】里，**直到你再次给出 memory_queries 才被新结果整体覆盖**
               - ⚠️ **memory_queries 不是动作**：`action` 只能是 ${ConversationAction.promptList(separator = " / ", quoted = false)}，**绝不许把 action 写成 memory_queries**。想「只搜不说话」→ 输出 `{"action":"stay","params":{"seconds":2},"memory_queries":[…]}`
-            - **刚进会话先别急着开口（先搜记忆再说话）**：进来的**第一轮不要直接 send**——先用 memory_queries 把回话要用的词搜一遍（关系、梗与表情、约定、**你要说的话里的关键词**），可与 read_more 同时；本轮用 `stay`（1~3 秒，**只是等自己的搜索结果，不算等回应**）或 read_more，**下一轮拿到【记忆搜索结果】再决定说什么**；确实没什么可搜的才直接决策
+            - **进场记忆已备好，第一轮就能回话**：你进会话时，系统已用一个专职的拆词智能体把当前聊天拆成关键词、查过长期记忆，命中结果直接放在下方【记忆搜索结果】里——**不必再「先搜再说话」，首轮可直接据此回话**；缺细节、或聊到中途想起要查的东西，再用 memory_queries 补搜（结果从下一轮起一直带着，再次请求才整体覆盖）
             - **该搜就搜，memory_queries 别省（要勤奋）**：只要这轮回复或决策**可能依赖以前的事**（人与关系、约定承诺、上次聊到哪、不确定的细节、引用里的人事物——清单见上一条）→ **这一轮顺手带上 memory_queries**（不必等答不上来才补，先搜再答）；**只有纯闲聊**、完全不依赖过去时才省略。**拿不准就写**
             
             约束：

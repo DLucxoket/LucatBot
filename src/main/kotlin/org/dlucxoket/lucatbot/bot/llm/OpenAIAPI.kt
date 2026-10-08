@@ -9,7 +9,6 @@ import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.chat.response.ChatResponse
 import dev.langchain4j.model.openai.OpenAiChatModel
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 
@@ -35,19 +34,7 @@ import org.springframework.stereotype.Component
  * 这在低频场景下没问题，但在高频调用时可能有性能开销。
  */
 @Component
-class OpenAIAPI @Autowired constructor(
-    /**
-     * token 用量账本——**构造注入**（DIP：可替换、可测，不再是绕过 DI 的全局单例）
-     *
-     * Spring 路径由 [TokenUsageConfig] 提供（jsonl 存储、跨重启累计）；
-     * 非 Spring 的 [DEFAULT] 兜底实例走次构造，自带**不落盘**的内存账本。
-     * 标 `@Autowired` 是因为本类还有一个无参次构造——不标 Spring 会挑无参的那条。
-     */
-    private val tokenUsage: TokenUsageAggregator
-) : LLM {
-
-    /** 非 Spring 环境兜底（单元测试 / `LLM.DEFAULT`）：账本只统计不落盘 */
-    constructor() : this(TokenUsageAggregator(InMemoryTokenUsageStore()))
+class OpenAIAPI : LLM {
 
     private val log = LoggerFactory.getLogger(OpenAIAPI::class.java)
 
@@ -59,6 +46,24 @@ class OpenAIAPI @Autowired constructor(
          * 时才转发到此实例。Spring 环境下本字段通常不会被创建。
          */
         val DEFAULT: OpenAIAPI by lazy { OpenAIAPI() }
+
+        /** 配置类错误的识别标记（命中即**上抛**，不降级——见 [degradeOrThrow]） */
+        private val CONFIG_ERROR_MARKERS = listOf(
+            "401", "403", "404",
+            "unauthorized", "forbidden",
+            "api key", "apikey", "invalid model", "model not found", "does not exist"
+        )
+
+        /**
+         * 是否属于**配置类**错误（鉴权/端点/模型名）——该上抛、不该降级成空串
+         *
+         * 判定刻意保守：**识别不了就当可降级**（宁可多一条 WARN，也别把一次
+         * 坏响应判成配错、让整条链路崩回原样）。公开为纯函数便于单测。
+         */
+        fun isConfigFailure(message: String?): Boolean {
+            val m = message ?: return false
+            return CONFIG_ERROR_MARKERS.any { m.contains(it, ignoreCase = true) }
+        }
     }
 
     /*
@@ -140,7 +145,12 @@ class OpenAIAPI @Autowired constructor(
             .build()
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
-        val response = model.chat(chatRequest)
+        val response = try {
+            model.chat(chatRequest)
+        } catch (e: Exception) {
+            // 端点偶发坏响应（实盘：响应体是 SSE `data: …`，JSON 解析炸）→ 分级兜底
+            return degradeOrThrow(e, TokenUsageChannel.TEXT)
+        }
         recordUsage(response, TokenUsageChannel.TEXT)
         val text = response.aiMessage().text()
         if (text.isNullOrBlank()) {
@@ -150,17 +160,43 @@ class OpenAIAPI @Autowired constructor(
     }
 
     /**
+     * 端点异常的**分级兜底**
+     *
+     * 实盘故障：端点偶发返回 SSE（响应体以 `data:` 开头），langchain4j 解析
+     * `JsonParseException: Unrecognized token 'data'`，`maxRetries=2` 用尽后异常
+     * 一路抛到主循环（会话轮还会连带整段退出）。这类**坏响应/网络问题**不值得
+     * 打崩链路——降级成**空串**，调用方走既有的「LLM 返回空文本 → 解析失败兜底」
+     * 路径（决策轮兜底 return、选会话兜底 idle、记忆整理兜底空结果）。
+     *
+     * 但**配置类错误**（鉴权/端点/模型名）必须**上抛**——伪装成「模型没说话」
+     * 会让排查方向跑偏；配错端点时每轮一条 WARN 也远比一次 ERROR 难发现。
+     *
+     * 降级时**同样记一笔账**（用量未知 → 0 token + 计入「未返回用量」）：
+     * 失败调用是可用性信号，面板上要看得见。
+     */
+    private fun degradeOrThrow(e: Exception, channel: TokenUsageChannel): String {
+        if (isConfigFailure(e.message)) throw e
+        log.warn(
+            "LLM 调用失败（{}），降级为空串让调用方按解析失败兜底（模型 {}，通道 {}）",
+            e.message, modelName, channel.label
+        )
+        TokenUsageScope.stashUsage(TokenUsagePending(channel, modelName, null, null))
+        return ""
+    }
+
+    /**
      * 记录一次调用的 token 用量（**量化优先**：先拿真实分布，再谈精简哪里）
      *
      * 两处去向：
      * - **日志**：打全三个维度 `[通道][agent][会话]`——端点不回 usage 时如实标注
      *   「未返回」，不猜数；模型名一起打，换端点/换模型后的成本差异一眼可比
-     * - **账本**：[TokenUsageAggregator.record] 按 通道（文字/图片）× agent × 会话
-     *   三维累计，明细经 [TokenUsageStore] 落盘（append-only，跨重启累计）
+     * - **暂存**：[TokenUsageScope.stashUsage] 把原始用量挂到当前线程，由产出这次
+     *   调用的 [org.dlucxoket.lucatbot.bot.agent.Agent] 在 handle 结束时带**决策标签**
+     *   （send / idle / … 与进场首轮）统一记进 [TokenUsageAggregator]——
+     *   传输层看不到决策结果，补标就得改写 append-only 明细，故记账时机上移
      *
      * agent/会话两个维度取自 [TokenUsageScope]（Agent 入口与编排层在调用前挂上），
-     * 这里只负责取——[LLM] 接口不因此加参数（ISP）。账本本身是**构造注入**的
-     * （DIP：非 Spring 的兜底实例自带不落盘的内存账本）。
+     * 这里只负责取——[LLM] 接口不因此加参数（ISP）。
      */
     private fun recordUsage(response: ChatResponse, channel: TokenUsageChannel) {
         val usage = response.tokenUsage()
@@ -180,13 +216,13 @@ class OpenAIAPI @Autowired constructor(
                 usage.inputTokenCount(), usage.outputTokenCount(), usage.totalTokenCount(), modelName
             )
         }
-        tokenUsage.record(
-            agent = agent,
-            conversation = conversation,
-            channel = channel,
-            model = modelName,
-            input = usage?.inputTokenCount()?.toLong(),
-            output = usage?.outputTokenCount()?.toLong()
+        TokenUsageScope.stashUsage(
+            TokenUsagePending(
+                channel = channel,
+                model = modelName,
+                input = usage?.inputTokenCount()?.toLong(),
+                output = usage?.outputTokenCount()?.toLong()
+            )
         )
     }
 

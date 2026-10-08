@@ -4,7 +4,7 @@
 
 | 分组 | 端点 | 页面 |
 |------|------|------|
-| token 用量 | `/api/token/summary`、`/api/token/timeseries`、`/api/token/calls` | Token 用量页：总账卡片、**通道（文字/图片）**环图、**agent/会话/模型**维度条形图、趋势折线、调用明细表 |
+| token 用量 | `/api/token/summary`、`/api/token/timeseries`、`/api/token/calls` | Token 用量页：总账卡片（含**进场首轮次数**）、**通道（文字/图片）**环图、**agent/会话/动作/模型**维度条形图、趋势折线、调用明细表（**动作列 + 首轮徽标**） |
 | 机器人状态 | `/api/state/overview` | 机器人状态页：状态机当前态、心情、待办、记忆（总量/按类型/最近几条）、操作日志、未读与最近会话 |
 
 ## 开发

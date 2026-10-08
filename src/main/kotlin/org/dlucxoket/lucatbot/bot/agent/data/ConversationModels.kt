@@ -475,5 +475,12 @@ data class ConversationRequest(
      * prompt 如实点名「更早的不展开」，防模型反复 read_more 空转。
      */
     @JsonProperty("historyCapped")
-    val historyCapped: Boolean = false
+    val historyCapped: Boolean = false,
+
+    /**
+     * 是否**本会话首轮**（P5 观测：进场首轮占比——面板用来验证「进场预搜 + 首轮
+     * 可直接回话」省掉了多少轮）。编排层在组请求时按轮次写入。
+     */
+    @JsonProperty("entryRound")
+    val entryRound: Boolean = false
 )

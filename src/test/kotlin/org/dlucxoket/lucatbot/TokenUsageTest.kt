@@ -1,9 +1,13 @@
 package org.dlucxoket.lucatbot
 
+import org.dlucxoket.lucatbot.bot.agent.ConversationAgent
+import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.llm.InMemoryTokenUsageStore
 import org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore
+import org.dlucxoket.lucatbot.bot.llm.LLM
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
+import org.dlucxoket.lucatbot.bot.llm.TokenUsagePending
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageScope
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageStore
 import org.junit.jupiter.api.Assertions.*
@@ -115,4 +119,46 @@ class TokenUsageTest {
         assertEquals("unknown", TokenUsageScope.agent(), "顶层执行完回到默认")
         assertEquals("-", TokenUsageScope.conversation())
     }
+
+    @Test
+    fun `decision action and entry round are recorded with the usage`() {
+        // P5 核心链路：端点只回 usage（暂存）→ Agent 出来时带**决策标签**统一记账——
+        // 只有问的人知道这一问得出了 send/idle，传输层补标就得改写 append-only 明细
+        val llm = UsageFakeLLM(mutableListOf("""{"action":"send","params":{"content":"在吗"}}"""))
+        val ledger = TokenUsageAggregator(InMemoryTokenUsageStore(), summaryEvery = 0)
+
+        ConversationAgent(llm, tokenUsage = ledger).processObject(
+            ConversationRequest(conversationId = "private:1", entryRound = true)
+        )
+
+        val row = ledger.history().single()
+        assertEquals("send", row.action, "动作标签来自 Agent 的 usageAction 钩子")
+        assertTrue(row.firstRound, "进场首轮标记来自入参 entryRound")
+        assertEquals("private:1", row.conversation, "会话维度从入参自推")
+        assertEquals("ConversationAgent", row.agent)
+        assertEquals("test-model", row.model)
+        assertEquals(1000L, row.input)
+
+        // 两个新维度都能进汇总
+        val s = ledger.summary()
+        assertTrue(s.contains("按动作：send 1次"), "按动作分组：$s")
+        assertTrue(s.contains("进场首轮：1 次"), "进场首轮统计：$s")
+        assertEquals(1L, ledger.firstRoundCalls())
+    }
+}
+
+/** 假 LLM：回答前先往暂存里塞一条用量（模拟真实端点回 tokenUsage 的时序） */
+private class UsageFakeLLM(private val responses: MutableList<String>) : LLM {
+    override fun ask(systemPrompt: String, question: String): String {
+        TokenUsageScope.stashUsage(
+            TokenUsagePending(channel = TokenUsageChannel.TEXT, model = "test-model", input = 1_000, output = 50)
+        )
+        return if (responses.isEmpty()) """{"action":"return"}""" else responses.removeAt(0)
+    }
+
+    override fun ask(
+        systemPrompt: String,
+        question: String,
+        images: List<org.dlucxoket.lucatbot.bot.llm.PromptImage>
+    ): String = ask(systemPrompt, question)
 }

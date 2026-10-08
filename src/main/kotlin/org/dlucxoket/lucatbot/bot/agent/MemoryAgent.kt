@@ -3,7 +3,9 @@ package org.dlucxoket.lucatbot.bot.agent
 import org.dlucxoket.lucatbot.bot.agent.data.MemoryReflectRequest
 import org.dlucxoket.lucatbot.bot.agent.data.MemoryReflectResult
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.fixIndent
+import org.dlucxoket.lucatbot.bot.llm.inMemoryTokenUsage
 import org.slf4j.LoggerFactory
 
 /**
@@ -17,8 +19,10 @@ import org.slf4j.LoggerFactory
  * 解析失败或 LLM 异常一律兜底为空结果——记忆整理失败绝不影响退出流程。
  */
 class MemoryAgent(
-    llm: LLM = LLM.DEFAULT
-) : Agent<MemoryReflectRequest, MemoryReflectResult>(llm) {
+    llm: LLM = LLM.DEFAULT,
+    /** token 账本（构造注入，见 [Agent]）——生产由 LoopConfig 注入容器里同一个 bean */
+    tokenUsage: TokenUsageAggregator = inMemoryTokenUsage()
+) : Agent<MemoryReflectRequest, MemoryReflectResult>(llm, tokenUsage) {
     private val log = LoggerFactory.getLogger(MemoryAgent::class.java)
 
     override val description: String = """
@@ -30,6 +34,10 @@ class MemoryAgent(
     """.trimIndent()
 
     override val inputClass: Class<MemoryReflectRequest> = MemoryReflectRequest::class.java
+
+    /** token 统计：退出整理的两个阶段（阶段1 复盘 / 阶段2 关键词复核） */
+    override fun usageAction(input: MemoryReflectRequest, output: MemoryReflectResult): String? =
+        if (input.candidates.isNotEmpty()) "复核" else "复盘"
 
     override fun handle(input: MemoryReflectRequest): MemoryReflectResult {
         return try {

@@ -1,8 +1,11 @@
 package org.dlucxoket.lucatbot
 
 import org.dlucxoket.lucatbot.adapter.web.TokenUsageController
-import org.dlucxoket.lucatbot.bot.llm.OpenAIAPI
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
+import org.dlucxoket.lucatbot.bot.loop.ConversationController
+import org.dlucxoket.lucatbot.bot.loop.MessageListController
+import org.dlucxoket.lucatbot.bot.loop.NotificationDispatcher
+import org.dlucxoket.lucatbot.bot.loop.ProgramShutdown
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -24,26 +27,48 @@ class LucatBotApplicationTests {
     /**
      * token 账本的**装配守卫**（DIP 回归测试）
      *
-     * `OpenAIAPI` 有一个无参次构造（非 Spring 兜底）——若 Spring 挑了它而不是标了
-     * `@Autowired` 的主构造，账本会静默写进**另一个内存实例**：日志照常打用量、
-     * 面板 `/api/token/summary` 却恒为 0，且不会有任何报错。这里断言三个消费者
-     * 拿到的是**容器里同一个 bean**。
+     * 五个 Agent 各自带默认账本（不落盘的内存实现）——LoopConfig 必须把容器里
+     * 同一个 bean 注进去，否则每个 Agent 各记各的：日志看着有数、面板却只显示
+     * 其中一两份，且**不会有任何报错**。这里断言所有消费者拿到的是同一个实例。
      */
     @Test
     fun `token usage aggregator is wired into every consumer`() {
         val bean = context.getBean(TokenUsageAggregator::class.java)
-        assertSame(bean, injected(context.getBean(OpenAIAPI::class.java), "tokenUsage"),
-            "OpenAIAPI 必须用容器里的聚合器（而不是无参次构造的内存账本）")
-        assertSame(bean, injected(context.getBean(TokenUsageController::class.java), "tokenUsage"),
-            "面板 Controller 与 OpenAIAPI 必须是同一份统计，否则面板恒为 0")
-        assertSame(bean, injected(context.getBean(org.dlucxoket.lucatbot.bot.loop.ProgramShutdown::class.java), "tokenUsage"),
-            "停机终值汇总也要打同一份账")
+
+        val conversation = context.getBean(ConversationController::class.java)
+        assertSame(bean, agentLedger(conversation, "conversationAgent"), "会话决策智能体")
+        assertSame(bean, agentLedger(conversation, "memoryAgent"), "退出整理智能体")
+        assertSame(bean, agentLedger(conversation, "memoryKeywordAgent"), "进场拆词智能体")
+        assertSame(
+            bean,
+            agentLedger(context.getBean(MessageListController::class.java), "sessionPickerAgent"),
+            "选会话智能体"
+        )
+        assertSame(
+            bean,
+            agentLedger(context.getBean(NotificationDispatcher::class.java), "notificationAgent"),
+            "通知智能体"
+        )
+
+        assertSame(bean, injected(context.getBean(ProgramShutdown::class.java), "tokenUsage"), "停机终值汇总")
+        assertSame(bean, injected(context.getBean(TokenUsageController::class.java), "tokenUsage"), "面板 Controller")
     }
 
-    /** 取构造注入进来的私有字段值 */
+    /** 取控制器里的某个 agent，再取它（可能在基类 [org.dlucxoket.lucatbot.bot.agent.Agent]）的账本字段 */
+    private fun agentLedger(controller: Any, agentField: String): Any =
+        injected(injected(controller, agentField), "tokenUsage")
+
+    /** 沿继承链取私有字段值（`tokenUsage` 声明在 Agent 基类） */
     private fun injected(target: Any, field: String): Any {
-        val f = target::class.java.getDeclaredField(field)
-        f.isAccessible = true
-        return f.get(target)
+        var type: Class<*>? = target.javaClass
+        while (type != null) {
+            val f = type.declaredFields.firstOrNull { it.name == field }
+            if (f != null) {
+                f.isAccessible = true
+                return f.get(target)
+            }
+            type = type.superclass
+        }
+        throw AssertionError("字段 $field 在 ${target.javaClass.name} 及其父类里都找不到")
     }
 }
