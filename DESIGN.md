@@ -18,7 +18,7 @@ LucatBotApplication              Spring Boot 入口（@EnableScheduling）
 ├── bot/                         机器人核心
 │   ├── LucatBot                 机器人状态机（Idle/Viewing/InConversation）
 │   ├── persona/                 人格系统
-│   │   ├── BotPersona           性格/兴趣/说话风格
+│   │   ├── BotPersona           persona.md 原文（不解析，直拼进 prompt）
 │   │   ├── BotMood              心情（随时间变化）
 │   │   └── TimeAwareness        时间感知/打字延迟
 │   ├── llm/                     LLM 调用层

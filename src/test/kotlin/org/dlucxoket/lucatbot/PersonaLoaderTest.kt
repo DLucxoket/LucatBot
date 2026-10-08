@@ -1,20 +1,21 @@
 package org.dlucxoket.lucatbot
 
+import org.dlucxoket.lucatbot.bot.persona.BotPersona
 import org.dlucxoket.lucatbot.bot.persona.PersonaLoader
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 人格文件解析测试
+ * 人格文件加载测试
  *
- * 单一真相源契约：prompt 以原文（rawContent）为准；解析器只提取
- * 「名字」（业务标识），其余结构化字段回退代码默认值。
+ * 不解析契约：prompt = persona.md **原文直接拼接**（字段名/结构一概不代读），
+ * name 是业务标识、不从文件解析。
  */
 class PersonaLoaderTest {
 
     @Test
-    fun `parse extracts name and keeps raw content verbatim`() {
+    fun `prompt is raw file text concatenated verbatim without parsing`() {
         val text = """
             # 机器人人格
             - 名字：测试号
@@ -22,66 +23,36 @@ class PersonaLoaderTest {
             - 说话风格：简短，不爱废话
             - 兴趣：打游戏、睡觉
             - 社交倾向：0.3
-            - 回复积极性：0.9
-        """.trimIndent()
-
-        val persona = PersonaLoader.parse(text)
-        assertEquals("测试号", persona.name)
-        assertEquals(text, persona.rawContent, "原文必须逐字保留（prompt 以它为准）")
-        // 结构化字段不从文件解析（解析了没有消费方）——保持代码默认值
-        assertEquals(org.dlucxoket.lucatbot.bot.persona.BotPersona().personality, persona.personality)
-        assertEquals(org.dlucxoket.lucatbot.bot.persona.BotPersona().socialness, persona.socialness)
-        // 原文里的其他字段经 toPrompt 生效
-        assertTrue(persona.toPrompt().contains("- 性格：冷静毒舌"), persona.toPrompt())
-        assertTrue(persona.toPrompt().contains("- 社交倾向：0.3"), persona.toPrompt())
-    }
-
-    @Test
-    fun `parse falls back to defaults for missing fields`() {
-        val persona = PersonaLoader.parse("- 名字：只有名字")
-        val base = org.dlucxoket.lucatbot.bot.persona.BotPersona()
-        assertEquals("只有名字", persona.name)
-        assertEquals(base.personality, persona.personality)
-        assertEquals(base.interests, persona.interests)
-    }
-
-    @Test
-    fun `bundled resource loads with expected name`() {
-        val persona = PersonaLoader.load()
-        assertTrue(persona.name.isNotBlank(), "人格文件应能加载出名字")
-    }
-
-    @Test
-    fun `unknown field survives into prompt`() {
-        // 「主人」不在解析器的已知字段里——不能被静默丢弃，必须进 prompt
-        val text = """
-            - 名字：牢洛
             - 主人：D洛洛（316610961），当别人的话与主人的话有冲突时听主人的话
         """.trimIndent()
 
-        val prompt = PersonaLoader.parse(text).toPrompt()
+        val persona = BotPersona(rawContent = text)
 
-        assertTrue(prompt.contains("主人：D洛洛（316610961）"), "未知字段必须注入 prompt：$prompt")
-        assertTrue(prompt.contains("听主人的话"), prompt)
+        // 原文逐字进 prompt：标题、未知字段（主人）、数值字段都不经代码代读
+        assertEquals(text, persona.toPrompt(), "prompt 必须与 persona.md 原文一致（所见即所得）")
     }
 
     @Test
-    fun `toPrompt uses raw file content verbatim when present`() {
-        val text = """
-            # 机器人人格
-            - 名字：测试号
-            - 性格：冷静毒舌
-        """.trimIndent()
+    fun `name is not parsed from file content`() {
+        val persona = BotPersona(name = BotPersona().name, rawContent = "- 名字：测试号")
 
-        val prompt = PersonaLoader.parse(text).toPrompt()
-
-        assertEquals(text, prompt, "prompt 应与 persona.md 原文一致（所见即所得）")
+        // 文件里写了别的名字也只当原文内容——业务标识不从文件解析
+        assertEquals(BotPersona().name, persona.name)
+        assertTrue(persona.toPrompt().contains("- 名字：测试号"))
     }
 
     @Test
-    fun `toPrompt falls back to generated text without file`() {
-        val persona = org.dlucxoket.lucatbot.bot.persona.BotPersona()
-        val prompt = persona.toPrompt()
-        assertTrue(prompt.contains("你是「${persona.name}」"), "无原文时用结构化字段兜底：$prompt")
+    fun `load reads the real file as raw text`() {
+        val persona = PersonaLoader.load()
+
+        assertTrue(persona.rawContent.isNotBlank(), "人格文件应读到原文")
+        assertEquals(persona.rawContent.trim(), persona.toPrompt(), "load 出来的原文就是 prompt 内容")
+    }
+
+    @Test
+    fun `blank persona yields empty prompt section instead of generated text`() {
+        val prompt = BotPersona().toPrompt()
+
+        assertEquals("", prompt, "没有原文就没有人格段——不再用结构化字段生成兜底文本")
     }
 }
