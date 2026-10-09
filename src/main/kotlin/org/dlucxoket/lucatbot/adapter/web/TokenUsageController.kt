@@ -14,10 +14,11 @@ import java.time.format.DateTimeFormatter
 /**
  * token 用量统计 API——`web/` Vue 面板的数据源
  *
- * 三个端点对应三种看数据的方式：
+ * 四个端点对应四种看数据的方式：
  * - `/summary`：**当前累计**（按 通道/agent/会话/模型 四个维度分组，前端画环图与条形图）
  * - `/timeseries`：**时间轴**（按天/按小时分桶，前端画趋势曲线）
- * - `/calls`：**明细**（最近 N 次调用，前端画表格）
+ * - `/calls`：**明细**（最近 N 次调用，前端轨迹左栏列表——不带请求/响应正文）
+ * - `/call?id=`：**单次详情**（发给 LLM 的真实请求、模型回复、耗时、异常）
  *
  * 聚合器**构造注入**（DIP）：单测传 `TokenUsageAggregator(替身存储)` 即可，
  * 不改任何全局状态；本类只做分组/分桶的读侧加工，不含业务规则（SRP）。
@@ -59,6 +60,49 @@ class TokenUsageController(
         val output: Long,
         val total: Long
     )
+
+    /**
+     * 轨迹明细行（列表接口）——**不带 request/response 正文**（一次调用的请求
+     * 动辄十几 KB，列表带全会撑爆响应）；正文与完整错误走 `/call?id=` 详情。
+     */
+    data class TokenCallRowDto(
+        val id: Long?,
+        val epoch: Long,
+        val agent: String,
+        val conversation: String,
+        val channel: String,
+        val model: String,
+        val input: Long,
+        val output: Long,
+        val reported: Boolean,
+        val action: String,
+        val firstRound: Boolean,
+        val durationMs: Long?,
+        val error: String?
+    ) {
+        val total: Long get() = input + output
+    }
+
+    /** 单次调用**详情**（含真实请求 / 模型回复 / 耗时 / 异常）——轨迹面板点开用 */
+    data class TokenCallDetailDto(
+        val id: Long?,
+        val epoch: Long,
+        val agent: String,
+        val conversation: String,
+        val channel: String,
+        val model: String,
+        val input: Long,
+        val output: Long,
+        val reported: Boolean,
+        val action: String,
+        val firstRound: Boolean,
+        val durationMs: Long?,
+        val request: String?,
+        val response: String?,
+        val error: String?
+    ) {
+        val total: Long get() = input + output
+    }
 
     @GetMapping("/summary")
     fun summary(): TokenSummaryDto {
@@ -112,10 +156,36 @@ class TokenUsageController(
             .let { if (limit > 0) it.takeLast(limit) else it }
     }
 
-    /** 调用明细（时间倒序；前端表格用） */
+    /** 调用明细（时间倒序；轨迹左栏列表用——不含请求/响应正文） */
     @GetMapping("/calls")
-    fun calls(@RequestParam(defaultValue = "200") limit: Int) =
-        tokenUsage.history(limit = limit.coerceIn(1, 2_000))
+    fun calls(@RequestParam(defaultValue = "200") limit: Int): List<TokenCallRowDto> =
+        tokenUsage.history(limit = limit.coerceIn(1, 2_000)).map { row ->
+            TokenCallRowDto(
+                id = row.id, epoch = row.epoch, agent = row.agent, conversation = row.conversation,
+                channel = row.channel, model = row.model, input = row.input, output = row.output,
+                reported = row.reported, action = row.action, firstRound = row.firstRound,
+                durationMs = row.durationMs, error = row.error
+            )
+        }
+
+    /**
+     * 单次调用详情——**发给 LLM 的真实请求**（system/user 正文）与**模型回复**、
+     * 耗时、端点异常都在这里；查不到 → 404
+     */
+    @GetMapping("/call")
+    fun call(@RequestParam id: Long): TokenCallDetailDto {
+        val row = tokenUsage.findCall(id)
+            ?: throw org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND, "调用不存在：id=$id"
+            )
+        return TokenCallDetailDto(
+            id = row.id, epoch = row.epoch, agent = row.agent, conversation = row.conversation,
+            channel = row.channel, model = row.model, input = row.input, output = row.output,
+            reported = row.reported, action = row.action, firstRound = row.firstRound,
+            durationMs = row.durationMs, request = row.request, response = row.response,
+            error = row.error
+        )
+    }
 
     /** 按选择器分组求和，合计降序 */
     private fun grouped(

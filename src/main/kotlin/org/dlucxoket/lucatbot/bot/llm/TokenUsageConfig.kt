@@ -10,13 +10,12 @@ import org.springframework.context.annotation.Configuration
  * 单测直接 `new TokenUsageAggregator(替身存储)`——不再像旧版单例那样靠
  * `configure()/reset()` 改全局状态来隔离。
  *
- * 存储路径是观测数据、不进 `storage.type` 后端（见 [TokenUsageAggregator]）。
+ * **存储实现按 `storage.type` 绑定**（`StorageConfig.tokenUsageStore`：
+ * mysql → `token_usage` 表（带请求/响应正文轨迹）、json → data/token-usage.jsonl；
+ * 见 [TokenUsageAggregator]）——本配置只装配聚合器。
  */
 @Configuration
 class TokenUsageConfig {
-
-    @Bean
-    fun tokenUsageStore(): TokenUsageStore = JsonlTokenUsageStore("data/token-usage.jsonl")
 
     @Bean
     fun tokenUsageAggregator(tokenUsageStore: TokenUsageStore): TokenUsageAggregator =

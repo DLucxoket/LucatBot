@@ -88,6 +88,33 @@ class TokenUsageTest {
     }
 
     @Test
+    fun `trace fields request response duration round trip and detail lookup by id`() {
+        val ledger = aggregator() // InMemory：id = 自增序号
+        ledger.record(
+            "ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", 10, 5,
+            action = "return", durationMs = 880,
+            request = "### system\n你是牢洛\n### user\n聊天记录…",
+            response = """{"action":"return"}"""
+        )
+        ledger.record("SessionPickerAgent", "消息列表", TokenUsageChannel.TEXT, "m", 50, 10)
+
+        // 明细列表：带 id/耗时（正文由存储决定，详情才必带）
+        val rows = ledger.history(10)
+        assertEquals(2, rows.size)
+        val traced = rows.first { it.action == "return" }
+        assertEquals(880L, traced.durationMs, "耗时随行入库")
+        assertEquals("### system\n你是牢洛\n### user\n聊天记录…", traced.request)
+
+        // 详情按 id 取（轨迹面板点开的那一次）
+        val detail = ledger.findCall(traced.id)
+        assertNotNull(detail, "按 id 取详情")
+        assertEquals("""{"action":"return"}""", detail!!.response)
+        assertEquals("### system\n你是牢洛\n### user\n聊天记录…", detail.request)
+        assertEquals(880L, detail.durationMs)
+        assertNull(ledger.findCall(999_999L), "查不到 = null（前端转 404）")
+    }
+
+    @Test
     fun `missing usage counts the call with zero and is called out honestly`() {
         val ledger = aggregator()
         ledger.record("ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", null, null)

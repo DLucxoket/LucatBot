@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import TokenPanel from './components/TokenPanel.vue'
+import TracePanel from './components/TracePanel.vue'
 import StatePanel from './components/StatePanel.vue'
 
 const tab = ref('token')
@@ -20,11 +21,12 @@ function toggleAuto() {
     <header class="topbar">
       <div class="brand">
         LucatBot 控制台
-        <small>token 用量 · 机器人状态（数据只读，不触发任何 LLM 调用）</small>
+        <small>token 用量 · 调用轨迹 · 机器人状态（只读 API，不触发任何 LLM 调用）</small>
       </div>
 
       <div class="tabs">
         <button class="tab" :class="{ active: tab === 'token' }" @click="tab = 'token'">Token 用量</button>
+        <button class="tab" :class="{ active: tab === 'trace' }" @click="tab = 'trace'">调用轨迹</button>
         <button class="tab" :class="{ active: tab === 'state' }" @click="tab = 'state'">机器人状态</button>
       </div>
 
@@ -34,6 +36,7 @@ function toggleAuto() {
     </header>
 
     <TokenPanel v-if="tab === 'token'" :tick="tick" />
+    <TracePanel v-else-if="tab === 'trace'" :tick="tick" />
     <StatePanel v-else :tick="tick" />
   </div>
 </template>

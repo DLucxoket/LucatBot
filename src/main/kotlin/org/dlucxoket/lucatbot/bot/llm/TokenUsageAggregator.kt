@@ -61,6 +61,10 @@ class TokenUsageAggregator(
      * @param output 出参 token
      * @param action 这次调用产出的决策动作（send / idle / read_more…；没打上 = "-"）
      * @param firstRound 是否本会话首轮（进场首轮占比统计）
+     * @param durationMs 调用耗时（毫秒）
+     * @param request 发给 LLM 的真实请求正文（轨迹；列表接口不返回，按 id 详情取）
+     * @param response 模型回复正文
+     * @param error 端点异常（成功 = null）
      */
     fun record(
         agent: String,
@@ -70,7 +74,11 @@ class TokenUsageAggregator(
         input: Long?,
         output: Long?,
         action: String = "-",
-        firstRound: Boolean = false
+        firstRound: Boolean = false,
+        durationMs: Long? = null,
+        request: String? = null,
+        response: String? = null,
+        error: String? = null
     ) {
         val inTok = input ?: 0L
         val outTok = output ?: 0L
@@ -91,7 +99,11 @@ class TokenUsageAggregator(
                     output = outTok,
                     reported = reported,
                     action = action,
-                    firstRound = firstRound
+                    firstRound = firstRound,
+                    durationMs = durationMs,
+                    request = request,
+                    response = response,
+                    error = error
                 )
             )
             sinceSummary++
@@ -143,12 +155,19 @@ class TokenUsageAggregator(
     }
 
     /**
-     * 调用明细（**时间轴/明细表用**）——时间倒序
+     * 调用明细（**时间轴/明细表用**）——时间倒序，**不带大字段**（请求/响应正文）
      *
-     * 聚合在内存、明细在存储：内存不随调用次数膨胀，历史全量可查
+     * 聚合在内存、明细在存储：内存不随调用次数膨胀，历史全量可查；
+     * 正文走 [findCall] 按 id 单取。
      */
     fun history(limit: Int = 500): List<TokenUsageCall> =
-        store.readAll().sortedByDescending { it.epoch }.take(limit)
+        store.readRecent(limit)
+
+    /**
+     * 单次调用**详情**（含发给 LLM 的真实请求、模型回复、耗时与异常）——
+     * 轨迹面板按 id 点开时取；查不到 = null
+     */
+    fun findCall(id: Long?): TokenUsageCall? = store.find(id)
 
     // ------------------------------------------------------------------
     // 内部实现（一律在 [lock] 内调用）

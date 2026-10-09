@@ -3,6 +3,7 @@ package org.dlucxoket.lucatbot.bot.storage.mysql
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord
+import org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
 import org.dlucxoket.lucatbot.bot.todo.TodoItem
 import org.slf4j.LoggerFactory
@@ -63,7 +64,7 @@ data class MySqlConfig(
  *    - memories 还带旧 `tags` 列 → 读出 → DROP → 关键词回填到关联表
  *    （DROP memories 时置 FOREIGN_KEY_CHECKS=0：memory_tags 的 FK 行
  *     在重建后 id 不变、自动恢复有效，无需搬动）
- * 3. 库级连接建五张表（`IF NOT EXISTS`）→ 回填旧结构数据
+ * 3. 库级连接建表（`IF NOT EXISTS`，含用量明细 `token_usage`）→ 回填旧结构数据
  * 4. [MySqlConfig.importFromJson] 开启时，**每次启动**把 json 中缺失的行导入
  *    （`INSERT IGNORE`——已存在的行不覆盖，MySQL 为权威源）
  */
@@ -431,6 +432,39 @@ class MySqlStorage(private val config: MySqlConfig) {
             MySqlTodoRepository.INSERT_IGNORE) { t ->
             arrayOf(t.id, t.content, MySqlTime.of(t.createdAt), t.done, t.conversationId)
         }
+        importTokenUsageJsonl()
+    }
+
+    /**
+     * token 用量 jsonl → `token_usage`（**表空时整份导入，只跑一次**）
+     *
+     * 迁移语义与其他表不同：用量明细没有主键可 `INSERT IGNORE` 去重，且 jsonl
+     * 只在旧版本写过——因此**只在表空时**导一次，此后 MySQL 是唯一写入方、
+     * `data/token-usage.jsonl` 只读留档（避免每次启动重复灌入翻倍）。
+     * 解析复用 [JsonlTokenUsageStore.parseLine]，新旧两处口径不漂移。
+     */
+    private fun importTokenUsageJsonl() {
+        val file = java.io.File("data/token-usage.jsonl")
+        if (!file.exists()) return
+        val existing = queryOne("SELECT COUNT(*) FROM token_usage") { rs -> rs.getLong(1) } ?: 0
+        if (existing > 0) return
+        val rows = file.readLines(Charsets.UTF_8).mapNotNull { line ->
+            if (line.isBlank()) null
+            else runCatching { JsonlTokenUsageStore.parseLine(line) }.getOrNull()
+        }
+        if (rows.isEmpty()) return
+        batchUpdate(
+            MySqlTokenUsageStore.INSERT,
+            rows.map { r ->
+                arrayOf(
+                    MySqlTime.of(if (r.epoch > 0) r.epoch else 0L),
+                    r.agent, r.conversation, r.channel, r.model,
+                    r.input, r.output, r.reported, r.action, r.firstRound,
+                    r.durationMs, r.request, r.response, r.error
+                )
+            }
+        )
+        log.info("从 {} 导入 token 用量存量 {} 行（jsonl 此后只读留档）", file.name, rows.size)
     }
 
     /** 读 json 列表（文件不存在/解析失败 → null 并记日志） */
@@ -463,8 +497,8 @@ class MySqlStorage(private val config: MySqlConfig) {
 
     private companion object {
         /**
-         * 建表 DDL（幂等）：五张表——三个 Repository 各一张 +
-         * 关键词规范化两张（tags 注册表、memory_tags 关联表）
+         * 建表 DDL（幂等）：九张表——各领域表 + 关键词规范化两张（tags、memory_tags）
+         * + 用量明细 `token_usage`（轨迹三件套：request/response 正文 + 耗时）
          *
          * 时间列统一 **DATETIME(3)**（毫秒精度，配合 [MySqlTime] 对称转换）。
          */
@@ -549,6 +583,28 @@ class MySqlStorage(private val config: MySqlConfig) {
                 id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                 changed_at DATETIME(3) NOT NULL,
                 content TEXT NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                epoch DATETIME(3) NOT NULL,
+                agent VARCHAR(64) NOT NULL DEFAULT 'unknown',
+                conversation VARCHAR(128) NOT NULL DEFAULT '-',
+                channel VARCHAR(16) NOT NULL DEFAULT '文字',
+                model VARCHAR(128) NOT NULL DEFAULT 'unknown',
+                input_tokens BIGINT NOT NULL DEFAULT 0,
+                output_tokens BIGINT NOT NULL DEFAULT 0,
+                reported BOOLEAN NOT NULL DEFAULT TRUE,
+                action VARCHAR(64) NOT NULL DEFAULT '-',
+                first_round BOOLEAN NOT NULL DEFAULT FALSE,
+                duration_ms INT NULL,
+                request MEDIUMTEXT NULL,
+                response MEDIUMTEXT NULL,
+                error VARCHAR(512) NULL,
+                KEY idx_epoch (epoch),
+                KEY idx_agent (agent),
+                KEY idx_conv (conversation)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent()
         )

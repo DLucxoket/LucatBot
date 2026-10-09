@@ -145,7 +145,7 @@ cd web && npm run build    # 构建控制台前端 → src/main/resources/static
 cd web && npm run dev      # 前端开发服务器 5173，/api 代理到 8080（改完记得 npm run build）
 ```
 
-Web 控制台：`http://localhost:8080/`（token 用量 + 机器人状态，只读 API 见 `执行流程.md` 的「Web 控制台」一节）。
+Web 控制台：`http://localhost:8080/`（token 用量 + **调用轨迹**（每次 LLM 调用的真实请求/回复/耗时，落 `token_usage` 表）+ 机器人状态，只读 API 见 `执行流程.md` 的「Web 控制台」一节）。
 
 ## 核心依赖
 

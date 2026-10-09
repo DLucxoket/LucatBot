@@ -118,3 +118,46 @@ tbody tr:hover { background: var(--panel-2); }
 
 .mood-bar { height: 10px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 8px; }
 .mood-bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--warn)); }
+
+/* ------------------------------------------------------------------
+ * 调用轨迹（DSH 式两栏：左调用列表，右 概述/请求/响应 详情）
+ * ------------------------------------------------------------------ */
+.trace-split { display: grid; grid-template-columns: minmax(320px, 42%) 1fr; gap: 14px; align-items: start; }
+@media (max-width: 960px) { .trace-split { grid-template-columns: 1fr; } }
+
+.trace-list { max-height: 600px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
+.trace-item {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 10px; cursor: pointer;
+}
+.trace-item:hover { border-color: var(--accent); }
+.trace-item.active { border-color: var(--accent); background: #212b46; }
+.trace-item-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.trace-item-head .pill { margin-right: 0; }
+.trace-item-head .time { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+.trace-item-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.trace-detail { min-height: 260px; }
+
+/* 详情正文：等宽预格式化，长 prompt 可滚、不断词难读 */
+.code-block {
+  background: #0c111b; border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; margin: 0;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, "Microsoft YaHei", monospace;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 560px; overflow: auto;
+}
+.trace-error {
+  margin-top: 10px; color: var(--danger); font-size: 12px;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.search-input {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; width: 190px;
+}
+.search-input:focus { outline: none; border-color: var(--accent); }
+
+/* 概述键值表：值列允许换行（会话键长、异常文本更长） */
+.kv td { white-space: normal; word-break: break-all; }
+.kv td:first-child { color: var(--muted); width: 120px; white-space: nowrap; }

@@ -179,15 +179,20 @@ class OpenAIAPI : LLM {
             .messages(messages)
             .build()
 
+        /** 轨迹：发给 LLM 的真实请求（正文逐字；与实际 messages 同源） */
+        val requestText = renderRequest(systemPrompt, question, emptyList())
+        val startedAt = System.nanoTime()
+
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         val response = try {
             chatWithOneRetry(model, chatRequest)
         } catch (e: Exception) {
             // 端点偶发坏响应（实盘：SSE `data: …` 被当 JSON 解析）→ 分级兜底
-            return degradeOrThrow(e, TokenUsageChannel.TEXT)
+            return degradeOrThrow(e, TokenUsageChannel.TEXT, requestText, sinceMs(startedAt))
         }
-        recordUsage(response, TokenUsageChannel.TEXT)
+        val durationMs = sinceMs(startedAt)
         val text = response.aiMessage().text()
+        recordUsage(response, TokenUsageChannel.TEXT, requestText, text, durationMs)
         if (text.isNullOrBlank()) {
             log.warn("LLM 返回空文本（端点异常/输出被吞/finish_reason 截断），调用方会按解析失败兜底")
         }
@@ -209,13 +214,30 @@ class OpenAIAPI : LLM {
      * 降级时**同样记一笔账**（用量未知 → 0 token + 计入「未返回用量」）：
      * 失败调用是可用性信号，面板上要看得见。
      */
-    private fun degradeOrThrow(e: Exception, channel: TokenUsageChannel): String {
+    private fun degradeOrThrow(
+        e: Exception,
+        channel: TokenUsageChannel,
+        request: String? = null,
+        durationMs: Long? = null
+    ): String {
         if (isConfigFailure(e.message)) throw e
         log.warn(
             "LLM 调用失败（{}），降级为空串让调用方按解析失败兜底（模型 {}，通道 {}）",
             e.message, modelName, channel.label
         )
-        TokenUsageScope.stashUsage(TokenUsagePending(channel, modelName, null, null))
+        TokenUsageScope.stashUsage(
+            TokenUsagePending(
+                channel = channel,
+                model = modelName,
+                input = null,
+                output = null,
+                durationMs = durationMs,
+                request = request,
+                response = "",
+                // 异常信息进轨迹：面板上点开这一行就能看到为什么空
+                error = e.message?.take(500) ?: e.javaClass.simpleName
+            )
+        )
         return ""
     }
 
@@ -232,8 +254,18 @@ class OpenAIAPI : LLM {
      *
      * agent/会话两个维度取自 [TokenUsageScope]（Agent 入口与编排层在调用前挂上），
      * 这里只负责取——[LLM] 接口不因此加参数（ISP）。
+     *
+     * 同时把**轨迹三件套**暂存进 [TokenUsagePending]：真实请求（requestText）、
+     * 模型回复（responseText）、耗时（durationMs）——随用量一起由 Agent 记账，
+     * 面板「调用轨迹」按 id 点开即见。
      */
-    private fun recordUsage(response: ChatResponse, channel: TokenUsageChannel) {
+    private fun recordUsage(
+        response: ChatResponse,
+        channel: TokenUsageChannel,
+        requestText: String? = null,
+        responseText: String? = null,
+        durationMs: Long? = null
+    ) {
         val usage = response.tokenUsage()
         val agent = TokenUsageScope.agent()
         val conversation = TokenUsageScope.conversation()
@@ -256,10 +288,35 @@ class OpenAIAPI : LLM {
                 channel = channel,
                 model = modelName,
                 input = usage?.inputTokenCount()?.toLong(),
-                output = usage?.outputTokenCount()?.toLong()
+                output = usage?.outputTokenCount()?.toLong(),
+                durationMs = durationMs,
+                request = requestText,
+                response = responseText
             )
         )
     }
+
+    /** 调用起点 → 至今的毫秒数（含补一次重试的 300ms 间隔——轨迹要的是体感耗时） */
+    private fun sinceMs(startedAtNanos: Long): Long =
+        (System.nanoTime() - startedAtNanos) / 1_000_000
+
+    /**
+     * 发给 LLM 的**真实请求**渲染（轨迹入库用）
+     *
+     * 正文逐字（system / user 原文，与实际 messages 同源）；图片在 content 数组里
+     * 是「`[图片 <ref>]` 标签文本 + data URI 图片段」——这里同样逐字呈现标签，
+     * data URI 以**占位说明**代替（二进制不入库，只留长度）。
+     */
+    internal fun renderRequest(systemPrompt: String, question: String, images: List<PromptImage>): String =
+        buildString {
+            if (systemPrompt.isNotBlank()) {
+                append("### system\n").append(systemPrompt).append('\n')
+            }
+            append("### user\n").append(question)
+            images.forEach { img ->
+                append("\n[图片 ${img.ref}]（data URI ${img.dataUri.length} 字符，略）")
+            }
+        }
 
     /**
      * 多模态调用——**图片通道的 LLM 边界**（JSON 只在这里拼）
@@ -288,9 +345,13 @@ class OpenAIAPI : LLM {
                 listOf(UserMessage(contents))
             }
             val chatRequest = ChatRequest.builder().messages(messages).build()
+            // 轨迹：正文逐字 + 每张图的 ref（data URI 占位不入库）
+            val requestText = renderRequest(systemPrompt, question, images)
+            val startedAt = System.nanoTime()
             val response = chatWithOneRetry(createModel(), chatRequest) // 同文本路：非配置失败补一次
-            recordUsage(response, TokenUsageChannel.IMAGE)
+            val durationMs = sinceMs(startedAt)
             val result = response.aiMessage().text()
+            recordUsage(response, TokenUsageChannel.IMAGE, requestText, result, durationMs)
             if (result.isNullOrBlank()) {
                 log.warn("LLM 返回空文本（带图请求），调用方会按解析失败兜底")
             }

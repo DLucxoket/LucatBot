@@ -175,7 +175,12 @@ abstract class Agent<I, O>(
                         input = u.input,
                         output = u.output,
                         action = action,
-                        firstRound = firstRound
+                        firstRound = firstRound,
+                        // 轨迹三件套（真实请求 / 模型回复 / 耗时与异常）随用量一并入库
+                        durationMs = u.durationMs,
+                        request = u.request,
+                        response = u.response,
+                        error = u.error
                     )
                 }
             }

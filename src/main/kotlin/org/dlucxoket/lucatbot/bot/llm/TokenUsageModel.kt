@@ -24,12 +24,21 @@ enum class TokenUsageChannel(val label: String) {
  *
  * @param input 入参 token（端点未回 = null）
  * @param output 出参 token（端点未回 = null）
+ * @param durationMs 本次调用耗时（毫秒；含补一次重试的 300ms 间隔）
+ * @param request **发给 LLM 的真实请求**（system/user 原文；图片以 `[图片 ref]`
+ *   标签呈现、data URI 以占位说明代替——正文逐字，二进制不入库）
+ * @param response 模型的回复正文（端点异常/空响应 = 空串）
+ * @param error 端点异常信息（成功 = null；降级行带上，面板可见失败原因）
  */
 data class TokenUsagePending(
     val channel: TokenUsageChannel,
     val model: String,
     val input: Long?,
-    val output: Long?
+    val output: Long?,
+    val durationMs: Long? = null,
+    val request: String? = null,
+    val response: String? = null,
+    val error: String? = null
 )
 
 /**
@@ -54,11 +63,16 @@ data class TokenUsageEntry(
 }
 
 /**
- * 一次调用的明细——**存储与展示共用的一行**（jsonl 的一行 = 这个对象）
+ * 一次调用的明细——**存储与展示共用的一行**（jsonl 的一行 / token_usage 表的一行）
  *
  * @param reported false = 端点没回 usage（token 按 0 计，前端如实标）
  * @param action 决策动作标签（旧格式行没有该字段 → "-"）
  * @param firstRound 进场首轮（旧格式行 → false）
+ * @param id 存储侧主键（MySQL 自增 id / jsonl 行号 / 内存序号）——**轨迹详情
+ *   按 id 取**；null = 旧数据没编号
+ * @param durationMs 调用耗时（毫秒；旧数据 → null）
+ * @param request/response/error 大字段：**明细列表接口不带**（省流量），
+ *   轨迹详情接口按 id 单取（`TokenUsageStore.find`）
  */
 data class TokenUsageCall(
     val epoch: Long,
@@ -70,7 +84,12 @@ data class TokenUsageCall(
     val output: Long,
     val reported: Boolean,
     val action: String = "-",
-    val firstRound: Boolean = false
+    val firstRound: Boolean = false,
+    val id: Long? = null,
+    val durationMs: Long? = null,
+    val request: String? = null,
+    val response: String? = null,
+    val error: String? = null
 ) {
     val total: Long get() = input + output
 }

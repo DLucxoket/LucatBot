@@ -107,6 +107,20 @@ class StorageConfig(
         }
 
     /**
+     * token 用量明细（第九张表 `token_usage` / `data/token-usage.jsonl`）——
+     * **随行带轨迹**：发给 LLM 的真实请求、模型回复、耗时、异常一并落库，
+     * Web「调用轨迹」按 id 取详情。mysql 首启空表时把 jsonl 存量整份导入
+     * （见 MySqlStorage.importTokenUsageJsonl），此后 jsonl 只读留档。
+     */
+    @Bean
+    fun tokenUsageStore(): org.dlucxoket.lucatbot.bot.llm.TokenUsageStore =
+        if (useMySql) {
+            org.dlucxoket.lucatbot.bot.storage.mysql.MySqlTokenUsageStore(mysql)
+        } else {
+            org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore("data/token-usage.jsonl")
+        }
+
+    /**
      * 启动清理：把聊天记录存储层的孪生双份行合并为一条（仅 mysql 模式）
      *
      * 实时/回执行 × 爬楼 `hist:` 行的存量双份一直双倍膨胀——启动时用

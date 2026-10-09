@@ -12,8 +12,11 @@ export const fetchSummary = () => getJson('/api/token/summary')
 export const fetchTimeseries = (bucket = 'day', limit = 30) =>
   getJson(`/api/token/timeseries?bucket=${encodeURIComponent(bucket)}&limit=${limit}`)
 
-/** token 明细：最近 limit 次调用（时间倒序） */
+/** token 明细：最近 limit 次调用（时间倒序；不含请求/响应正文） */
 export const fetchCalls = (limit = 200) => getJson(`/api/token/calls?limit=${limit}`)
+
+/** 单次调用**详情**：发给 LLM 的真实请求、模型回复、耗时、异常（轨迹面板点开用） */
+export const fetchCallDetail = (id) => getJson(`/api/token/call?id=${encodeURIComponent(id)}`)
 
 /** 机器人状态总览：心情/待办/记忆/操作日志/未读 */
 export const fetchState = () => getJson('/api/state/overview')
