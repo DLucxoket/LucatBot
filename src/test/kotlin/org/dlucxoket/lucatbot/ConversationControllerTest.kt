@@ -863,7 +863,12 @@ class ConversationControllerTest {
             decisionLLM,
             memoryKeywordAgent = MemoryKeywordAgent(keywordLLM),
             memoryService = memoryService,
-            historyLines = listOf(HistoryMessageItem("用户A", "他喜欢什么颜色来着", 1000L))
+            historyLines = listOf(
+                HistoryMessageItem(
+                    sender = "用户A", content = "他喜欢什么颜色来着",
+                    timestamp = 1000L, senderId = 777L
+                )
+            )
         )
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
@@ -872,9 +877,14 @@ class ConversationControllerTest {
         assertTrue(first.contains("【记忆搜索结果"), "首轮就带记忆结果：$first")
         assertTrue(first.contains("他最喜欢的颜色是蓝色"), "命中内容进首轮：$first")
         assertEquals(1, keywordLLM.prompts.size, "进场只拆一次词")
+        val keywordPrompt = keywordLLM.prompts.single()
         assertTrue(
-            keywordLLM.prompts.single().contains("他喜欢什么颜色来着"),
-            "拆词 agent 拿到的是聊天窗口：${keywordLLM.prompts.single()}"
+            keywordPrompt.contains("他喜欢什么颜色来着"),
+            "拆词 agent 拿到的是聊天窗口：$keywordPrompt"
+        )
+        assertTrue(
+            keywordPrompt.contains("用户A(777)"),
+            "拆词窗口的聊天记录要带发送者 QQ 号（拆词靠「同一 QQ 号 = 同一人」锚定身份）：$keywordPrompt"
         )
         assertEquals(
             listOf("private:123"), keywordLLM.conversationTags,

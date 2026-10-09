@@ -363,7 +363,21 @@ data class ConversationChatLine(
      * 以「回复 #id：」引用它。null = 老数据没有 id，不渲染。
      */
     val messageId: Long? = null
-)
+) {
+    /**
+     * 行头「发送者」——**行格式单一源**：`我` / `名字` / `名字(QQ号)`
+     *
+     * 决策 prompt 与**进场拆词窗口**共用：拆词要靠 QQ 号锚定身份
+     *（「同一个 QQ 号就是同一个人」），此前窗口侧自己拼 `sender：content`
+     * 把 QQ 号丢了，历史部分根本拆不出号码。
+     * QQ 号缺失（旧数据）只留名字，不渲染空括号。
+     */
+    fun who(): String = when {
+        isMe -> "我"
+        senderId.isBlank() -> sender
+        else -> "$sender($senderId)"
+    }
+}
 
 /**
  * 会话内决策请求

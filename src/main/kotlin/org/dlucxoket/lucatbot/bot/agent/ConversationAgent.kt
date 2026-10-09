@@ -238,12 +238,8 @@ class ConversationAgent(
      */
     private fun buildUserContent(input: ConversationRequest, includeTools: Boolean = true): String {
         val historyText = input.recentMessages.joinToString("\n") { line ->
-            // 行格式「名字(QQ号)」——LLM 靠 QQ 号锚定身份；QQ 号缺失（旧数据）只留名字，不渲染空括号
-            val who = when {
-                line.isMe -> "我"
-                line.senderId.isBlank() -> line.sender
-                else -> "${line.sender}(${line.senderId})"
-            }
+            // 行格式「名字(QQ号)」——LLM 靠 QQ 号锚定身份（渲染收口 ConversationChatLine.who()）
+            val who = line.who()
             // 行带（#message_id）：send 时以「回复 #id：」引用该行（老数据无 id 不渲染）
             val idTag = line.messageId?.let { "（#$it）" } ?: ""
             "- $who [${line.time}]$idTag：${line.content}"

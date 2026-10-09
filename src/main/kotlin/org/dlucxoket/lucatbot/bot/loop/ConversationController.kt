@@ -354,8 +354,10 @@ class ConversationController(
             // 每次进场多烧一整轮；现在首轮即可回话，memory_queries 留给中途补搜。
             if (round == 0) {
                 prefetchEntryMemories(
+                    // 行头走 ConversationChatLine.who()——**带 QQ 号**（同决策 prompt 的
+                    // 「名字(QQ号)」格式）：拆词要靠号码锚定身份，此前这里丢号只留名字
                     newNotes.takeLast(6) + recentLines.takeLast(entryWindowLines)
-                        .map { "${it.sender}：${it.content.take(200)}" },
+                        .map { "${it.who()}：${it.content.take(200)}" },
                     pendingMemoryHits,
                     conversationId
                 )
