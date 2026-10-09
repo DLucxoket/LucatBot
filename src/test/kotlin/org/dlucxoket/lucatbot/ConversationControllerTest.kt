@@ -1467,6 +1467,45 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `crawl window accumulates across read_more but resets after send`() {
+        // 窗口语义（应主人要求）：连续爬楼期间一直展开（3 → 13 → 23）；
+        // **发送成功即收口**回默认 3 条——展开只保留到发消息前，
+        // 直到再次 read_more 才重新展开
+        val llm = FakeLLM(
+            mutableListOf(
+                """{"action":"read_more","params":{"count":10}}""",
+                """{"action":"read_more","params":{"count":10}}""",
+                """{"action":"send","params":{"content":"哈"}}""",
+                """{"action":"return"}"""
+            )
+        )
+        val history = (1..30).map { HistoryMessageItem("用户A", "消息$it", it * 1000L) }
+        val (controller, _, sendTool) = buildController(llm, historyLines = history)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        assertEquals("哈", sendTool.sent.single(), "第三轮确实发出了消息（收口的前提）")
+        val prompts = llm.prompts
+        assertEquals(4, prompts.size, "四轮决策：爬 → 爬 → 发 → 退：${prompts.size}")
+        assertTrue(
+            prompts[0].contains("已爬楼 0 次，累计覆盖最近 3 条消息"),
+            "进场默认窗口 3 条：${prompts[0]}"
+        )
+        assertTrue(
+            prompts[1].contains("已爬楼 1 次，累计覆盖最近 13 条消息"),
+            "第一次爬楼累积到 13：${prompts[1]}"
+        )
+        assertTrue(
+            prompts[2].contains("已爬楼 2 次，累计覆盖最近 23 条消息"),
+            "连续爬楼继续展开到 23（行为不变）：${prompts[2]}"
+        )
+        assertTrue(
+            prompts[3].contains("已爬楼 0 次，累计覆盖最近 3 条消息"),
+            "发送后窗口收口回默认、爬楼次数清零：${prompts[3]}"
+        )
+    }
+
+    @Test
     fun `llm calls carry agent and conversation dimensions for token stats`() {
         // token 统计三维（通道/agent/会话）里的后两维：agent 由 Agent 入口挂、
         // 会话由编排层挂——任一断链，账本就会全记成 unknown/-（统计失去意义）

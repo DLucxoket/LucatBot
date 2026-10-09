@@ -86,13 +86,20 @@ class ConversationController(
      */
     private val replyWait: (conversationId: String, ms: Long) -> Boolean =
         { id, ms -> lucatBot.awaitPendingInsert(id, ms) },
-    /** 初始读史条数 */
+    /**
+     * 初始读史条数——**爬楼窗口的默认大小**（收口基准）
+     *
+     * 窗口语义（应主人要求）：`read_more` 只增不减（连续爬楼期间一直展开，
+     * 90..99 → 80..99 → 70..99）；**发送成功后回退到这里**（发出第 100 条后
+     * 只展示 91..100，再发 92..101），直到再次 `read_more` 才重新展开——
+     * 见 SEND 分支的「收口」注释，`readMoreRounds` 同步清零
+     */
     private val initialHistoryCount: Int = 10,
     /**
      * 聊天记录窗口**硬上限**（token 护栏）——`read_more` 的 `historyCount`
-     * 只增不减、原先没有上界：窗口 100 条 × 单行 800 字 ≈ 80k 字符，而且
-     * **每轮决策都全量重发**。到顶后窗口不再变长，prompt 用
-     * `historyCapped` 如实点名，模型据此按现有上下文决策而非反复 read_more
+     * 连续爬楼期间只增不减（发送即回默认）、原先没有上界：窗口 100 条 ×
+     * 单行 800 字 ≈ 80k 字符，而且**每轮决策都全量重发**。到顶后窗口不再变长，
+     * prompt 用 `historyCapped` 如实点名，模型据此按现有上下文决策而非反复 read_more
      */
     private val maxHistoryWindow: Int = 80,
     /** 退出会话时记忆整理读取的聊天记录条数 */
@@ -640,6 +647,20 @@ class ConversationController(
                         lucatBot.updateMood { it.boost() }
                         mustIcebreak = false
                         readMoreWithInsertStreak = 0
+                        // 爬楼窗口**收口**（应主人要求）：read_more 的扩大只在**连续爬楼
+                        // 期间**有效——发过消息即这段上下文告一段落，窗口滑回默认大小
+                        //（实盘例：90..99 爬到 70..99，发出第 100 条后只展示 91..100，
+                        // 再发 → 92..101，直到再次 read_more 才重新展开）。
+                        // 爬楼次数一并清零：状态行「已爬楼 N 次 / 累计覆盖 X 条」与
+                        // 当前窗口保持一致，模型看到的永远是真实窗口
+                        if (historyCount != initialHistoryCount) {
+                            log.info(
+                                "发送后爬楼窗口收口：{} → {} 条（展开只保留到发消息前）",
+                                historyCount, initialHistoryCount
+                            )
+                            historyCount = initialHistoryCount
+                            readMoreRounds = 0
+                        }
                         // 发完不等待，立即进入下一轮决策；连发由 hint 约束
                         justSent = sentText
                     }
