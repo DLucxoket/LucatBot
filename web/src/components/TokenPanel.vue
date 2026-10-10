@@ -129,9 +129,9 @@ onMounted(load)
       <StatCard label="合计 token" :value="compact(summary.total.total)" sub="跨重启累计（token_usage 表）" />
       <StatCard
         v-if="summary.estimatedCost != null"
-        label="估算费用（≈）"
-        :value="'¥' + Number(summary.estimatedCost).toFixed(2)"
-        sub="按 yaml llm.platforms.*.pricing 单价换算"
+        label="估算消耗（≈）"
+        :value="summary.estimatedCost.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + (summary.costUnit ? ' ' + summary.costUnit : '')"
+        sub="按模型三档计费（命中缓存走缓存档）· 仅计已配价模型"
       />
     </div>
 
@@ -210,7 +210,7 @@ onMounted(load)
           <thead>
             <tr>
               <th>时间</th><th>agent</th><th>会话</th><th>动作</th><th>通道</th><th>模型</th>
-              <th class="num">入参</th><th class="num">出参</th><th class="num">合计</th>
+              <th class="num">入参</th><th class="num">出参</th><th class="num">合计</th><th class="num">消耗</th>
             </tr>
           </thead>
           <tbody>
@@ -228,9 +228,10 @@ onMounted(load)
               <td class="num">{{ c.reported ? fmt(c.input) : '—' }}</td>
               <td class="num">{{ c.reported ? fmt(c.output) : '—' }}</td>
               <td class="num"><b>{{ c.reported ? fmt(c.total) : '—' }}</b></td>
+              <td class="num">{{ c.cost != null ? Number(c.cost).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—' }}</td>
             </tr>
             <tr v-if="!calls.length">
-              <td colspan="9" class="muted">暂无明细</td>
+              <td colspan="10" class="muted">暂无明细</td>
             </tr>
           </tbody>
         </table>

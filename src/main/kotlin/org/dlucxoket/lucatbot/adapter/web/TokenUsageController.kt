@@ -1,6 +1,6 @@
 package org.dlucxoket.lucatbot.adapter.web
 
-import org.dlucxoket.lucatbot.bot.llm.ModelPricing
+import org.dlucxoket.lucatbot.bot.llm.PricingTable
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageCall
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
@@ -29,8 +29,8 @@ import java.time.format.DateTimeFormatter
 @RequestMapping("/api/token")
 class TokenUsageController(
     private val tokenUsage: TokenUsageAggregator,
-    /** 当前平台单价（费用估算；未配置 = 全 null = 不显示、不猜价） */
-    private val pricing: ModelPricing = ModelPricing()
+    /** 当前平台计费表（按模型三档计费；没配 = 空表 = 不显示、不猜价） */
+    private val pricing: PricingTable = PricingTable()
 ) {
 
     /** 汇总行（前端直接喂图表） */
@@ -50,8 +50,10 @@ class TokenUsageController(
         val firstRoundCalls: Long,
         /** prompt 缓存命中的输入 token 累计（入参子集；端点不回 = 0，如实显示） */
         val cachedInput: Long,
-        /** 估算费用（元，读侧按 yaml 单价现算）——单价没配全 = null（不猜价） */
+        /** 估算消耗（读侧按计费表现算：按模型三档，命中缓存走缓存档）——没配价 = null */
         val estimatedCost: Double?,
+        /** 计费单位（"Credits" / "元"…；没配价 = null） */
+        val costUnit: String?,
         val byChannel: List<TokenRowDto>,
         val byAgent: List<TokenRowDto>,
         val byConversation: List<TokenRowDto>,
@@ -88,7 +90,9 @@ class TokenUsageController(
         val durationMs: Long?,
         val error: String?,
         /** prompt 缓存命中（入参子集；端点不回 = null） */
-        val cached: Long?
+        val cached: Long?,
+        /** 本次消耗（按模型三档现算；该模型没配价 = null） */
+        val cost: Double?
     ) {
         val total: Long get() = input + output
     }
@@ -110,7 +114,11 @@ class TokenUsageController(
         val request: String?,
         val response: String?,
         val error: String?,
-        val cached: Long?
+        val cached: Long?,
+        /** 本次消耗（按模型三档现算：未命中输入/命中缓存/输出；没配价 = null） */
+        val cost: Double?,
+        /** 计费单位（没配价 = null） */
+        val costUnit: String?
     ) {
         val total: Long get() = input + output
     }
@@ -132,7 +140,10 @@ class TokenUsageController(
             noUsageCalls = tokenUsage.noUsageCalls(),
             firstRoundCalls = tokenUsage.firstRoundCalls(),
             cachedInput = cached,
-            estimatedCost = pricing.estimate(totalInput, totalOutput, cached),
+            estimatedCost = entries.mapNotNull {
+                pricing.estimate(it.model, it.input, it.output, it.cached)
+            }.takeIf { it.isNotEmpty() }?.sum(),
+            costUnit = pricing.unit.ifBlank { null },
             // 通道按固定顺序（文字 → 图片），零值也展示——一眼看出「图片通道用没用」
             byChannel = TokenUsageChannel.entries.map { ch ->
                 sumRow(ch.label, entries.filter { it.channel == ch.label })
@@ -254,7 +265,8 @@ class TokenUsageController(
                 id = row.id, epoch = row.epoch, agent = row.agent, conversation = row.conversation,
                 channel = row.channel, model = row.model, input = row.input, output = row.output,
                 reported = row.reported, action = row.action, firstRound = row.firstRound,
-                durationMs = row.durationMs, error = row.error, cached = row.cached
+                durationMs = row.durationMs, error = row.error, cached = row.cached,
+                cost = pricing.estimate(row.model, row.input, row.output, row.cached)
             )
         }
 
@@ -273,7 +285,9 @@ class TokenUsageController(
             channel = row.channel, model = row.model, input = row.input, output = row.output,
             reported = row.reported, action = row.action, firstRound = row.firstRound,
             durationMs = row.durationMs, request = row.request, response = row.response,
-            error = row.error, cached = row.cached
+            error = row.error, cached = row.cached,
+            cost = pricing.estimate(row.model, row.input, row.output, row.cached),
+            costUnit = pricing.unit.ifBlank { null }
         )
     }
 

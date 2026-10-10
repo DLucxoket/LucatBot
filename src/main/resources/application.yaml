@@ -25,11 +25,20 @@ llm:
       # 输出上限（token）：推理型模型别把预算全耗在 reasoning 上交白卷
       #（content 为空 → langchain4j `text cannot be null` → 曾被当成端点故障打断对话）
       max-tokens: 4096
-      # 单价（元 / 百万 token，填官网价）——**留空 = 面板不显示估算费用（不猜价）**
+      # 计费表：Token Plan 按 **Credits / 百万 token** 三档扣额度——
+      #   输入（未命中缓存）/ 输入（命中缓存，只扣 1/50~1/120）/ 输出
+      #   （删掉 = 该模型不计价，面板不显示消耗——不猜价）
       pricing:
-        input-per-1m:
-        output-per-1m:
-        cached-per-1m:     # 缓存读取折扣价（配合 cached_tokens；留空 = 那部分不打折）
+        unit: Credits
+        models:
+          mimo-v2.6-flash:        # 当前模型
+            input-per-1m: 100
+            cached-per-1m: 2      # 命中缓存的输入只扣 1/50
+            output-per-1m: 200
+          mimo-v2.6-pro:
+            input-per-1m: 300
+            cached-per-1m: 2.5    # 命中缓存的输入只扣 1/120
+            output-per-1m: 600
 
     # 上海AI实验室 discovery（deepseek 系）
     intern:
@@ -37,10 +46,12 @@ llm:
       api-key: ${INTERN_API_KEY:${LLM_API_KEY:api-key}}
       model-name: "deepseek-v4-flash-vision"
       max-tokens: 4096
-      pricing:
-        input-per-1m:
-        output-per-1m:
-        cached-per-1m:
+      # 计费：**按 token 平铺单价**（作用于上面 model-name 的模型；unit 可填「元」等）
+      # pricing:
+      #   unit: 元
+      #   input-per-1m: 2
+      #   output-per-1m: 8
+      #   cached-per-1m: 0.2    # 命中缓存的输入单价（可省）
 
     # 硅基流动（Qwen/Qwen3-8B 免费模型）
     siliconflow:
@@ -48,10 +59,7 @@ llm:
       api-key: ${SILICONFLOW_API_KEY:${LLM_API_KEY:api-key}}
       model-name: "Qwen/Qwen3-8B"
       max-tokens: 4096
-      pricing:
-        input-per-1m:
-        output-per-1m:
-        cached-per-1m:
+      # pricing: 同上（免费模型可不填）
 
 # 存储后端：json（data 目录下的 json 文件）| mysql（写入即落库，首次启动自动建库建表并迁移 JSON 存量）
 storage:

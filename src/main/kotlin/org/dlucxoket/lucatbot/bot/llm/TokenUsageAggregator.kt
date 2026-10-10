@@ -39,11 +39,16 @@ class TokenUsageAggregator(
         val firstRound: Boolean
     )
 
-    /** 一个键上的累计值（calls / 入参 token / 出参 token；不可变 + plus 累加） */
-    private data class Agg(val calls: Long, val input: Long, val output: Long) {
+    /** 一个键上的累计值（calls / 入参 token / 出参 token / 缓存命中；不可变 + plus 累加） */
+    private data class Agg(
+        val calls: Long,
+        val input: Long,
+        val output: Long,
+        val cached: Long = 0
+    ) {
         val total: Long get() = input + output
         operator fun plus(other: Agg) =
-            Agg(calls + other.calls, input + other.input, output + other.output)
+            Agg(calls + other.calls, input + other.input, output + other.output, cached + other.cached)
     }
 
     private val lock = Any()
@@ -90,7 +95,7 @@ class TokenUsageAggregator(
         val key = Key(agent, conversation, channel, model, action, firstRound)
         synchronized(lock) {
             ensureLoadedLocked()
-            totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, inTok, outTok)
+            totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, inTok, outTok, cached ?: 0L)
             if (!reported) noUsage++
             cachedTotal += cached ?: 0L
             store.append(
@@ -161,7 +166,8 @@ class TokenUsageAggregator(
                 firstRound = k.firstRound,
                 calls = v.calls,
                 input = v.input,
-                output = v.output
+                output = v.output,
+                cached = v.cached
             )
         }.sortedByDescending { it.total }
     }
@@ -199,7 +205,7 @@ class TokenUsageAggregator(
                 firstRound = row.firstRound
             )
             // 明细一行 = 一次调用（calls 恒为 1，模型里不再带该字段）
-            totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, row.input, row.output)
+            totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, row.input, row.output, row.cached ?: 0L)
             if (!row.reported) noUsage++
             cachedTotal += row.cached ?: 0L
         }

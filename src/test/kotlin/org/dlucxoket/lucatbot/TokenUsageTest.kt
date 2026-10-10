@@ -5,7 +5,9 @@ import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.llm.InMemoryTokenUsageStore
 import org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore
 import org.dlucxoket.lucatbot.bot.llm.LLM
-import org.dlucxoket.lucatbot.bot.llm.ModelPricing
+import org.dlucxoket.lucatbot.bot.llm.ModelRates
+import org.dlucxoket.lucatbot.bot.llm.PricingTable
+import org.dlucxoket.lucatbot.bot.llm.TokenUsageConfig
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
 import org.dlucxoket.lucatbot.bot.llm.TokenUsagePending
@@ -143,20 +145,60 @@ class TokenUsageTest {
     }
 
     @Test
-    fun `pricing estimate splits cached input and stays null when unconfigured`() {
-        // 费用估算：读侧现算、没配单价不算不猜；缓存命中段按缓存价折算
-        assertNull(ModelPricing().estimate(1_000_000, 500_000, cached = 400_000), "没配价 = null 不猜")
+    fun `pricing table charges three tiers per model and never guesses unpriced models`() {
+        // Token Plan Credits 三档（每 1M token）：flash 未命中 100 / 命中 2 / 输出 200
+        val table = PricingTable(
+            unit = "Credits",
+            models = mapOf(
+                "mimo-v2.6-flash" to ModelRates(inputPer1M = 100.0, outputPer1M = 200.0, cachedPer1M = 2.0)
+            )
+        )
+        assertTrue(table.configured)
+        assertNull(table.estimate("mimo-v2.6-pro", 1_000_000, 1), "没配价的模型不猜")
 
-        val p = ModelPricing(inputPer1M = 2.0, outputPer1M = 8.0, cachedPer1M = 0.2)
-        // 1M 入参其中 0.4M 命中缓存 + 0.5M 出参：0.6*2 + 0.4*0.2 + 0.5*8 = 5.28
-        assertEquals(5.28, p.estimate(1_000_000, 500_000, cached = 400_000)!!, 1e-9)
+        // 10M 输入其中 4M 命中缓存 + 1M 输出：6*100 + 4*2 + 1*200 = 808
+        assertEquals(808.0, table.estimate("mimo-v2.6-flash", 10_000_000, 1_000_000, cached = 4_000_000)!!, 1e-9)
 
-        // 没配缓存价 → 命中段按入参价（不打折）：1*2 + 0.5*8 = 6
-        val noCachePrice = ModelPricing(inputPer1M = 2.0, outputPer1M = 8.0)
-        assertEquals(6.0, noCachePrice.estimate(1_000_000, 500_000, cached = 400_000)!!, 1e-9)
+        // 没配缓存档 → 命中段按未命中价：10*100 + 1*200 = 1200
+        val flat = PricingTable(models = mapOf("m" to ModelRates(100.0, 200.0)))
+        assertEquals(1200.0, flat.estimate("m", 10_000_000, 1_000_000, cached = 4_000_000)!!, 1e-9)
 
-        // 异常数据（cached > input）按入参截断：命中最多算满 1M
-        assertEquals(4.2, p.estimate(1_000_000, 500_000, cached = 9_999_999)!!, 1e-9)
+        // 异常数据 cached > input：按入参截断（命中最多算满 10M）：10*2 + 1*200 = 220
+        assertEquals(220.0, table.estimate("mimo-v2.6-flash", 10_000_000, 1_000_000, cached = 99_999_999)!!, 1e-9)
+
+        assertFalse(PricingTable().configured, "没配价 = 空表（面板不显示消耗）")
+    }
+
+    @Test
+    fun `flat token pricing attaches to active platform model without leaking others`() {
+        // 按 token 平铺单价（元/百万）保留：只装 active 平台、挂到该平台 model-name 上
+        val env = org.springframework.mock.env.MockEnvironment()
+        env.setProperty("llm.active", "intern")
+        env.setProperty("llm.platforms.intern.model-name", "deepseek-v4-flash-vision")
+        env.setProperty("llm.platforms.intern.pricing.unit", "元")
+        env.setProperty("llm.platforms.intern.pricing.input-per-1m", "2")
+        env.setProperty("llm.platforms.intern.pricing.output-per-1m", "8")
+        // 其他平台的按模型表不该串进来
+        env.setProperty("llm.platforms.mimo.pricing.models.mimo-v2.6-flash.input-per-1m", "100")
+
+        val table = TokenUsageConfig(env).pricingTable()
+        assertEquals("元", table.unit)
+        assertEquals(1, table.models.size, "只装 active 平台（单位不同不能混着加）")
+        assertEquals(2.0, table.models["deepseek-v4-flash-vision"]!!.inputPer1M, 0.0)
+        // 1M 全未命中 + 0.5M 出参：1*2 + 0.5*8 = 6
+        assertEquals(6.0, table.estimate("deepseek-v4-flash-vision", 1_000_000, 500_000)!!, 1e-9)
+
+        // 同平台已单列**完整**模型价时，平铺单价不覆盖（模型表优先）
+        env.setProperty("llm.platforms.intern.pricing.models.deepseek-v4-flash-vision.input-per-1m", "999")
+        env.setProperty("llm.platforms.intern.pricing.models.deepseek-v4-flash-vision.output-per-1m", "888")
+        val table2 = TokenUsageConfig(env).pricingTable()
+        assertEquals(999.0, table2.models["deepseek-v4-flash-vision"]!!.inputPer1M, 0.0)
+
+        // 只写了半截（缺 output）的模型配置整条忽略 → 平铺兜底仍生效（不半价半价地算）
+        env.setProperty("llm.platforms.intern.pricing.models.other-model.input-per-1m", "5")
+        val table3 = TokenUsageConfig(env).pricingTable()
+        assertFalse("other-model" in table3.models, "缺 output-per-1m 的模型配置忽略")
+        assertEquals(999.0, table3.models["deepseek-v4-flash-vision"]!!.inputPer1M, 0.0)
     }
 
     @Test

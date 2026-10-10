@@ -82,22 +82,43 @@ class WebApiTest {
             // 维度四：模型
             .andExpect(jsonPath("$.byModel[0].name").value("m1"))
             .andExpect(jsonPath("$.byModel[1].name").value("m2"))
-            // 单价没配 → 估算费用 = null（不猜价）
+            // 单价没配 → 估算消耗 = null（不猜价）
             .andExpect(jsonPath("$.estimatedCost").isEmpty())
+            .andExpect(jsonPath("$.costUnit").isEmpty())
     }
 
     @Test
-    fun `summary exposes estimated cost when platform pricing configured`() {
-        val body = mvc(TokenUsageController(ledger, org.dlucxoket.lucatbot.bot.llm.ModelPricing(1.0, 1.0)))
+    fun `summary exposes credits estimate for priced models only`() {
+        // 按模型三档计费：m1 配价（Credits）、m2 没配 → 只计 m1（不猜价）
+        val table = org.dlucxoket.lucatbot.bot.llm.PricingTable(
+            unit = "Credits",
+            models = mapOf("m1" to org.dlucxoket.lucatbot.bot.llm.ModelRates(1000.0, 2000.0))
+        )
+        val mapper = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
+        val body = mvc(TokenUsageController(ledger, table))
             .perform(get("/api/token/summary"))
             .andExpect(status().isOk)
             .andReturn().response.getContentAsString(Charsets.UTF_8)
 
-        // 累计入参 1050 + 出参 60，单价 1 元/百万 → 1110 / 1e6 = 0.00111
-        //（json-path 返回 BigDecimal、hamcrest closeTo 不收——自己解析成 Double 再比）
-        val cost = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
-            .readTree(body).path("estimatedCost").asDouble()
-        assertEquals(0.00111, cost, 1e-9, "估算费用按 yaml 单价换算：$body")
+        val root = mapper.readTree(body)
+        // m1 两行：入 1000、出 50、缓存 0 → 1000*1000/1M + 50*2000/1M = 1.0 + 0.1 = 1.1
+        assertEquals(1.1, root.path("estimatedCost").asDouble(), 1e-9, "按模型三档现算：$body")
+        assertEquals("Credits", root.path("costUnit").asText(), "计费单位随表带出")
+
+        // 明细行 cost：配了价的模型行有值、没配价的为 null（不猜）
+        val rowsJson = mvc(TokenUsageController(ledger, table))
+            .perform(get("/api/token/calls").param("limit", "10"))
+            .andExpect(status().isOk)
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+        val rows = mapper.readTree(rowsJson)
+        assertTrue(
+            rows.any { it.path("model").asText() == "m1" && !it.path("cost").isNull },
+            "配价模型的行带消耗：$rowsJson"
+        )
+        assertTrue(
+            rows.any { it.path("model").asText() == "m2" && it.path("cost").isNull },
+            "没配价的模型行不猜：$rowsJson"
+        )
     }
 
     @Test
@@ -238,6 +259,9 @@ class WebApiTest {
             .andExpect(jsonPath("$.response").value("""{"action":"send","params":{"content":"在吗"}}"""))
             .andExpect(jsonPath("$.cached").value(80))
             .andExpect(jsonPath("$.total").value(120))
+            // 没配价（默认空表）→ 本次消耗 = null 不猜
+            .andExpect(jsonPath("$.cost").isEmpty())
+            .andExpect(jsonPath("$.costUnit").isEmpty())
 
         // 汇总带缓存命中累计
         mvc(TokenUsageController(ledger))

@@ -70,10 +70,14 @@ llm:
       api-key: ${MIMO_API_KEY:${LLM_API_KEY:api-key}}   # 平台专属 env，兜底共用 LLM_API_KEY
       model-name: "mimo-v2.6-flash"
       max-tokens: 4096
-      pricing:              # 元/百万 token（官网价）；留空 = 面板不显示估算费用
-        input-per-1m:
-        output-per-1m:
-        cached-per-1m:
+      pricing:              # 计费表（没配 = 面板不显示、不猜价）；两种配法并存
+        unit: Credits       # 计费单位（Credits / 元…）
+        models:             # ① 按模型三档：未命中输入 / 命中缓存 / 输出（每 1M token）
+          mimo-v2.6-flash: { input-per-1m: 100, cached-per-1m: 2, output-per-1m: 200 }
+        # ② 按 token 平铺（作用于本平台 model-name 的模型）：
+        # input-per-1m: 100
+        # output-per-1m: 200
+        # cached-per-1m: 2
 ```
 
 使用自研 `OpenAIAPI`（`bot/llm/`）——任何兼容 OpenAI 协议的端点均可。

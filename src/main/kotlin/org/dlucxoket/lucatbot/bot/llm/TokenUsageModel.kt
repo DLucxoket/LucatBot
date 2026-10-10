@@ -60,7 +60,9 @@ data class TokenUsageEntry(
     val firstRound: Boolean,
     val calls: Long,
     val input: Long,
-    val output: Long
+    val output: Long,
+    /** 入参里命中缓存的 token（**按模型计费**要用——命中档单价差 50~120 倍） */
+    val cached: Long = 0
 ) {
     val total: Long get() = input + output
 }

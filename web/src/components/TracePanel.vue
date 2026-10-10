@@ -171,6 +171,10 @@ onMounted(load)
                     <td>缓存命中</td>
                     <td>{{ fmt(detail.cached) }}（占入参 {{ detail.input > 0 ? Math.round(detail.cached * 100 / detail.input) : 0 }}%）</td>
                   </tr>
+                  <tr v-if="detail.cost != null">
+                    <td>本次消耗</td>
+                    <td>{{ detail.cost.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}{{ detail.costUnit ? ' ' + detail.costUnit : '' }}</td>
+                  </tr>
                   <tr><td>请求 / 回复</td><td>{{ bodyLen(detail.request) }} / {{ bodyLen(detail.response) }} 字符</td></tr>
                 </tbody>
               </table>
