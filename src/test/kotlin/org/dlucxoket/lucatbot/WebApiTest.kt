@@ -119,6 +119,31 @@ class WebApiTest {
             rows.any { it.path("model").asText() == "m2" && it.path("cost").isNull },
             "没配价的模型行不猜：$rowsJson"
         )
+
+        // 维度与合计也带消耗：byAgent 第一组（ConversationAgent，m1 两行）= 1.1；
+        // 第二组（SessionPickerAgent，m2 没配价）= null
+        val byAgent0 = root.path("byAgent").get(0)
+        assertEquals("ConversationAgent", byAgent0.path("name").asText(), byAgent0.toString())
+        assertEquals(1.1, byAgent0.path("cost").asDouble(), 1e-9, "维度行带消耗：$root")
+        assertTrue(root.path("byAgent").get(1).path("cost").isNull(), "没配价的维度不猜")
+        assertEquals(1.1, root.path("total").path("cost").asDouble(), 1e-9, "合计行带消耗")
+    }
+
+    @Test
+    fun `summary reports cache hit rate`() {
+        // setUp 3 行（入 1050、缓存 0）+ 一行入 1000 其中 400 命中 → 400 / 2050
+        ledger.record(
+            "ConversationAgent", "private:123", TokenUsageChannel.TEXT, "m1",
+            1000, 50, cached = 400
+        )
+        val body = mvc(TokenUsageController(ledger))
+            .perform(get("/api/token/summary"))
+            .andExpect(status().isOk)
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+        val root = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper().readTree(body)
+
+        assertEquals(400L, root.path("cachedInput").asLong(), "命中累计：$body")
+        assertEquals(400.0 / 2050.0, root.path("cachedRate").asDouble(), 1e-9, "命中率 = 命中/入参")
     }
 
     @Test

@@ -14,12 +14,11 @@ shiro:
 # 每个平台各自配 地址/密钥/模型/输出上限/价格；密钥优先平台专属环境变量、
 # 兜底共用 LLM_API_KEY（与旧部署兼容）
 llm:
-  active: mimo            # ← 用哪个平台：mimo | intern | siliconflow
+  active: mimo            # ← 用哪个平台：mimo(Token Plan额度制) | mimo-paygo(按量) | intern | siliconflow
   platforms:
-    # 小米 MiMo（OpenAI 兼容；两个入口二选一）
+    # 小米 MiMo · **Token Plan**（额度制：按 Credits 扣账户额度，命中缓存极便宜）
     mimo:
       base-url: "https://token-plan-cn.xiaomimimo.com/v1"
-#     base-url: "https://api.xiaomimimo.com/v1"      # 备选入口
       api-key: ${MIMO_API_KEY:${LLM_API_KEY:api-key}}
       model-name: "mimo-v2.6-flash"
       # 输出上限（token）：推理型模型别把预算全耗在 reasoning 上交白卷
@@ -39,6 +38,19 @@ llm:
             input-per-1m: 300
             cached-per-1m: 2.5    # 命中缓存的输入只扣 1/120
             output-per-1m: 600
+
+    # 小米 MiMo · **按量计费**（普通 API：用多少付多少，按 token 计价）
+    mimo-paygo:
+      base-url: "https://api.xiaomimimo.com/v1"
+      api-key: ${MIMO_PAYGO_API_KEY:${LLM_API_KEY:api-key}}
+      model-name: "mimo-v2.6-flash"
+      max-tokens: 4096
+      # 按量价填这里（元 / 百万 token，平铺三键即可）；留空 = 不计价
+      # pricing:
+      #   unit: 元
+      #   input-per-1m:
+      #   output-per-1m:
+      #   cached-per-1m:
 
     # 上海AI实验室 discovery（deepseek 系）
     intern:

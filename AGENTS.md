@@ -63,9 +63,9 @@ Session：会话上下文（预留）
 
 ```yaml
 llm:
-  active: mimo            # ← 平台选择：mimo | intern | siliconflow
+  active: mimo            # ← 平台选择：mimo(Token Plan额度制) | mimo-paygo(按量) | intern | siliconflow
   platforms:
-    mimo:
+    mimo:                 # 小米 MiMo · Token Plan（Credits 扣额度）
       base-url: "https://token-plan-cn.xiaomimimo.com/v1"
       api-key: ${MIMO_API_KEY:${LLM_API_KEY:api-key}}   # 平台专属 env，兜底共用 LLM_API_KEY
       model-name: "mimo-v2.6-flash"
@@ -78,6 +78,9 @@ llm:
         # input-per-1m: 100
         # output-per-1m: 200
         # cached-per-1m: 2
+    mimo-paygo:            # 小米 MiMo · 按量计费入口（api.xiaomimimo.com，用多少付多少）
+      base-url: "https://api.xiaomimimo.com/v1"
+      ...
 ```
 
 使用自研 `OpenAIAPI`（`bot/llm/`）——任何兼容 OpenAI 协议的端点均可。

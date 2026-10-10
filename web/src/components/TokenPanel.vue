@@ -41,7 +41,8 @@ const dims = [
 const metrics = [
   { key: 'total', label: '合计' },
   { key: 'input', label: '入参' },
-  { key: 'output', label: '出参' }
+  { key: 'output', label: '出参' },
+  { key: 'cost', label: '消耗' }
 ]
 
 // 「按动作」维度汉化展示（记账仍存 wire 名，见 api.js 的 actionLabel）
@@ -123,10 +124,18 @@ onMounted(load)
         :value="fmt(summary.total.calls)"
         :sub="`进场首轮 ${fmt(summary.firstRoundCalls)} 次 · 端点未返回用量 ${summary.noUsageCalls} 次`"
       />
-      <StatCard label="入参 token（含图片）" :value="compact(summary.total.input)"
-        :sub="`${fmt(summary.total.input)} · 缓存命中 ${fmt(summary.cachedInput)}`" />
+      <StatCard
+        label="入参 token（含图片）"
+        :value="compact(summary.total.input)"
+        :sub="`${fmt(summary.total.input)} · 缓存命中 ${fmt(summary.cachedInput)}` +
+          (summary.cachedRate != null ? `（命中率 ${(summary.cachedRate * 100).toFixed(2)}%）` : '')"
+      />
       <StatCard label="出参 token" :value="compact(summary.total.output)" :sub="fmt(summary.total.output)" />
-      <StatCard label="合计 token" :value="compact(summary.total.total)" sub="跨重启累计（token_usage 表）" />
+      <StatCard
+        label="合计 token"
+        :value="compact(summary.total.total)"
+        :sub="`平均单次 ${fmt(Math.round(summary.total.total / Math.max(1, summary.total.calls)))} token · 跨重启累计（token_usage 表）`"
+      />
       <StatCard
         v-if="summary.estimatedCost != null"
         label="估算消耗（≈）"

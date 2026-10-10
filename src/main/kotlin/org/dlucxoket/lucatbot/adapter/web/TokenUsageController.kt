@@ -39,7 +39,9 @@ class TokenUsageController(
         val calls: Long,
         val input: Long,
         val output: Long,
-        val total: Long
+        val total: Long,
+        /** 该组的估算消耗（按行的 model 现算；组内全都没配价 = null） */
+        val cost: Double? = null
     )
 
     data class TokenSummaryDto(
@@ -50,6 +52,8 @@ class TokenUsageController(
         val firstRoundCalls: Long,
         /** prompt 缓存命中的输入 token 累计（入参子集；端点不回 = 0，如实显示） */
         val cachedInput: Long,
+        /** 缓存命中率 = cachedInput / 入参（0~1；入参为 0 = null）——端点不回就是 0 */
+        val cachedRate: Double?,
         /** 估算消耗（读侧按计费表现算：按模型三档，命中缓存走缓存档）——没配价 = null */
         val estimatedCost: Double?,
         /** 计费单位（"Credits" / "元"…；没配价 = null） */
@@ -129,20 +133,23 @@ class TokenUsageController(
         val totalInput = entries.sumOf { it.input }
         val totalOutput = entries.sumOf { it.output }
         val cached = tokenUsage.cachedTokens()
+        val estimated = entries.mapNotNull {
+            pricing.estimate(it.model, it.input, it.output, it.cached)
+        }.takeIf { it.isNotEmpty() }?.sum()
         return TokenSummaryDto(
             total = TokenRowDto(
                 name = "合计",
                 calls = entries.sumOf { it.calls },
                 input = totalInput,
                 output = totalOutput,
-                total = totalInput + totalOutput
+                total = totalInput + totalOutput,
+                cost = round4(estimated)
             ),
             noUsageCalls = tokenUsage.noUsageCalls(),
             firstRoundCalls = tokenUsage.firstRoundCalls(),
             cachedInput = cached,
-            estimatedCost = entries.mapNotNull {
-                pricing.estimate(it.model, it.input, it.output, it.cached)
-            }.takeIf { it.isNotEmpty() }?.sum(),
+            cachedRate = if (totalInput > 0) cached.toDouble() / totalInput else null,
+            estimatedCost = round4(estimated),
             costUnit = pricing.unit.ifBlank { null },
             // 通道按固定顺序（文字 → 图片），零值也展示——一眼看出「图片通道用没用」
             byChannel = TokenUsageChannel.entries.map { ch ->
@@ -266,7 +273,7 @@ class TokenUsageController(
                 channel = row.channel, model = row.model, input = row.input, output = row.output,
                 reported = row.reported, action = row.action, firstRound = row.firstRound,
                 durationMs = row.durationMs, error = row.error, cached = row.cached,
-                cost = pricing.estimate(row.model, row.input, row.output, row.cached)
+                cost = round4(pricing.estimate(row.model, row.input, row.output, row.cached))
             )
         }
 
@@ -286,7 +293,7 @@ class TokenUsageController(
             reported = row.reported, action = row.action, firstRound = row.firstRound,
             durationMs = row.durationMs, request = row.request, response = row.response,
             error = row.error, cached = row.cached,
-            cost = pricing.estimate(row.model, row.input, row.output, row.cached),
+            cost = round4(pricing.estimate(row.model, row.input, row.output, row.cached)),
             costUnit = pricing.unit.ifBlank { null }
         )
     }
@@ -299,12 +306,19 @@ class TokenUsageController(
         .map { (name, list) -> sumRow(name, list) }
         .sortedByDescending { it.total }
 
-    /** 一组求和成一行 */
+    /** 一组求和成一行（消耗：组内按行的 model 现算，全都没配价 = null） */
     private fun sumRow(name: String, list: List<TokenUsageEntry>) = TokenRowDto(
         name = name,
         calls = list.sumOf { it.calls },
         input = list.sumOf { it.input },
         output = list.sumOf { it.output },
-        total = list.sumOf { it.total }
+        total = list.sumOf { it.total },
+        cost = round4(
+            list.mapNotNull { pricing.estimate(it.model, it.input, it.output, it.cached) }
+                .takeIf { it.isNotEmpty() }?.sum()
+        )
     )
+
+    /** 消耗四舍五入到 4 位小数（别让 191.23999999999997 一路带进 JSON/面板） */
+    private fun round4(v: Double?): Double? = v?.let { Math.round(it * 10_000.0) / 10_000.0 }
 }
