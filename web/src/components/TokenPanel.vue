@@ -128,7 +128,11 @@ onMounted(load)
         label="入参 token（含图片）"
         :value="compact(summary.total.input)"
         :sub="`${fmt(summary.total.input)} · 缓存命中 ${fmt(summary.cachedInput)}` +
-          (summary.cachedRate != null ? `（命中率 ${(summary.cachedRate * 100).toFixed(2)}%）` : '')"
+          (summary.cachedRate != null
+            ? `（命中率 ${(summary.cachedRate * 100).toFixed(2)}%` +
+              (summary.cachedCoveredInput < summary.total.input
+                ? ` · 仅计已回传的 ${compact(summary.cachedCoveredInput)}` : '') + '）'
+            : '（端点未回传命中标记，不算命中率）')"
       />
       <StatCard label="出参 token" :value="compact(summary.total.output)" :sub="fmt(summary.total.output)" />
       <StatCard

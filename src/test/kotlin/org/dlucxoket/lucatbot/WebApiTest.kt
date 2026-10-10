@@ -131,7 +131,8 @@ class WebApiTest {
 
     @Test
     fun `summary reports cache hit rate`() {
-        // setUp 3 行（入 1050、缓存 0）+ 一行入 1000 其中 400 命中 → 400 / 2050
+        // setUp 3 行都没回传 cached（旧数据 = 未知，**不进命中率分母**）；
+        // 新增行回传 400/1000 → 命中率 = 400 / 1000 = 40%，不是 400/2050
         ledger.record(
             "ConversationAgent", "private:123", TokenUsageChannel.TEXT, "m1",
             1000, 50, cached = 400
@@ -143,7 +144,8 @@ class WebApiTest {
         val root = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper().readTree(body)
 
         assertEquals(400L, root.path("cachedInput").asLong(), "命中累计：$body")
-        assertEquals(400.0 / 2050.0, root.path("cachedRate").asDouble(), 1e-9, "命中率 = 命中/入参")
+        assertEquals(1000L, root.path("cachedCoveredInput").asLong(), "分母只算回传行的入参")
+        assertEquals(0.4, root.path("cachedRate").asDouble(), 1e-9, "命中率 = 命中/已回传入参")
     }
 
     @Test

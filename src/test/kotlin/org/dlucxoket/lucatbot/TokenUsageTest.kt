@@ -131,12 +131,15 @@ class TokenUsageTest {
             first.record("ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", 1000, 50)
 
             assertEquals(640L, first.cachedTokens())
+            // 命中率分母只算「端点回传了 cached」的行（第2行没回 = 未知，不算未命中）
+            assertEquals(1000L, first.cachedCoveredInput(), "只有回传行的入参进分母")
             val s = first.summary()
-            assertTrue(s.contains("缓存命中：640 token（占入参 32%）"), "汇总行：$s")
+            assertTrue(s.contains("缓存命中：640 token（占已回传入参 64%，覆盖 1000 入参）"), "汇总行：$s")
 
             // 模拟重启：明细行带 cached、读回继续累计
             val restarted = aggregator(JsonlTokenUsageStore(file.absolutePath))
             assertEquals(640L, restarted.cachedTokens(), "缓存命中跨重启累计")
+            assertEquals(1000L, restarted.cachedCoveredInput(), "命中率分母跨重启累计")
             assertEquals(640L, restarted.findCall(1L)?.cached, "明细行保留 cached")
             assertNull(restarted.findCall(2L)?.cached, "端点不回 = null（如实不猜）")
         } finally {

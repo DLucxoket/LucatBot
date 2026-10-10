@@ -58,6 +58,13 @@ class TokenUsageAggregator(
     private var noUsage = 0L
     /** prompt 缓存命中的输入 token 累计（入参子集；端点不回 = 一直 0，如实显示） */
     private var cachedTotal = 0L
+    /**
+     * **端点回传了 `cached_tokens` 的那些行**的入参合计——命中率的分母。
+     *
+     * 关键区分：`cached = null`（旧数据 / 端点不回该字段）= **未知**，不是「未命中」——
+     * 把它们算进分母会把命中率稀释到接近 0（实盘：25.2M 全量入参算出 1.09% 的假象）
+     */
+    private var cachedCoveredInput = 0L
     private var loaded = false
     private var sinceSummary = 0
 
@@ -97,7 +104,10 @@ class TokenUsageAggregator(
             ensureLoadedLocked()
             totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, inTok, outTok, cached ?: 0L)
             if (!reported) noUsage++
-            cachedTotal += cached ?: 0L
+            if (cached != null) {
+                cachedTotal += cached
+                cachedCoveredInput += inTok
+            }
             store.append(
                 TokenUsageCall(
                     epoch = System.currentTimeMillis(),
@@ -147,6 +157,12 @@ class TokenUsageAggregator(
     fun cachedTokens(): Long = synchronized(lock) {
         ensureLoadedLocked()
         cachedTotal
+    }
+
+    /** 端点**回传了** `cached_tokens` 的行的入参合计——命中率的分母（旧数据不计） */
+    fun cachedCoveredInput(): Long = synchronized(lock) {
+        ensureLoadedLocked()
+        cachedCoveredInput
     }
 
     /**
@@ -207,7 +223,10 @@ class TokenUsageAggregator(
             // 明细一行 = 一次调用（calls 恒为 1，模型里不再带该字段）
             totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, row.input, row.output, row.cached ?: 0L)
             if (!row.reported) noUsage++
-            cachedTotal += row.cached ?: 0L
+            if (row.cached != null) {
+                cachedTotal += row.cached
+                cachedCoveredInput += row.input
+            }
         }
     }
 
@@ -260,8 +279,9 @@ class TokenUsageAggregator(
             sb.append("\n- 进场首轮：${firstRounds.calls} 次（入 ${firstRounds.input} / 出 ${firstRounds.output}）")
         }
         if (cachedTotal > 0) {
-            val pct = if (grand.input > 0) cachedTotal * 100 / grand.input else 0
-            sb.append("\n- 缓存命中：$cachedTotal token（占入参 ${pct}%）")
+            // 分母只算「端点回传了 cached_tokens」的入参——旧数据是未知，不是未命中
+            val pct = if (cachedCoveredInput > 0) cachedTotal * 100 / cachedCoveredInput else 0
+            sb.append("\n- 缓存命中：$cachedTotal token（占已回传入参 ${pct}%，覆盖 ${cachedCoveredInput} 入参）")
         }
         return sb.toString()
     }

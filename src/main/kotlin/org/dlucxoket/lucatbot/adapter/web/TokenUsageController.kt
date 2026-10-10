@@ -52,7 +52,12 @@ class TokenUsageController(
         val firstRoundCalls: Long,
         /** prompt 缓存命中的输入 token 累计（入参子集；端点不回 = 0，如实显示） */
         val cachedInput: Long,
-        /** 缓存命中率 = cachedInput / 入参（0~1；入参为 0 = null）——端点不回就是 0 */
+        /**
+         * 命中率的分母：端点**回传了** `cached_tokens` 的行的入参合计。
+         * 旧数据/不回该字段的行是**未知、不是未命中**——不计入，否则命中率被稀释到假 0
+         */
+        val cachedCoveredInput: Long,
+        /** 缓存命中率 = cachedInput / cachedCoveredInput（0~1；没人回传 = null） */
         val cachedRate: Double?,
         /** 估算消耗（读侧按计费表现算：按模型三档，命中缓存走缓存档）——没配价 = null */
         val estimatedCost: Double?,
@@ -133,6 +138,7 @@ class TokenUsageController(
         val totalInput = entries.sumOf { it.input }
         val totalOutput = entries.sumOf { it.output }
         val cached = tokenUsage.cachedTokens()
+        val covered = tokenUsage.cachedCoveredInput()
         val estimated = entries.mapNotNull {
             pricing.estimate(it.model, it.input, it.output, it.cached)
         }.takeIf { it.isNotEmpty() }?.sum()
@@ -148,7 +154,8 @@ class TokenUsageController(
             noUsageCalls = tokenUsage.noUsageCalls(),
             firstRoundCalls = tokenUsage.firstRoundCalls(),
             cachedInput = cached,
-            cachedRate = if (totalInput > 0) cached.toDouble() / totalInput else null,
+            cachedCoveredInput = covered,
+            cachedRate = if (covered > 0) cached.toDouble() / covered else null,
             estimatedCost = round4(estimated),
             costUnit = pricing.unit.ifBlank { null },
             // 通道按固定顺序（文字 → 图片），零值也展示——一眼看出「图片通道用没用」
