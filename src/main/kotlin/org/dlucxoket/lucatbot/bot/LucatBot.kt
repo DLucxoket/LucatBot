@@ -448,20 +448,25 @@ class LucatBot {
     }
 
     /**
-     * 等待当前会话的新消息或超时（供会话内 STAY 计时使用）
+     * 等待当前会话的新消息或超时（供会话内 STAY / wait_message / 分段打字间隔计时）
      *
      * 计时未到但当前会话来了新消息 → 立即返回 true（取消剩余计时，唤醒机器人）；
-     * 等满 [timeoutMs] 仍无新消息 → 返回 false。
+     * 等满 [timeoutMs] 仍无新消息 → 返回 false。**让位请求（[requestSessionYield]）
+     * 任何情况下都算唤醒**（通知要切走，等待中的计时一律让路）。
      *
-     * @return true = 被新消息提前唤醒；false = 等满超时
+     * @param wakeOnNewMessage `true`（默认，wait_message / stay 用）= 来新消息立刻醒；
+     *   `false`（**分段打字间隔**用）= 忽略新消息、只等满或被让位打断——实盘：
+     *   热闹群里 3 秒 delay 里必有人接话，按「新消息唤醒」语义第二条会被秒发，
+     *   两句话零间隔；打字节奏就该按模型要的秒数等满
+     * @return true = 被提前唤醒（新消息或让位）；false = 等满超时
      */
-    fun awaitPendingInsert(conversationId: String, timeoutMs: Long): Boolean {
+    fun awaitPendingInsert(conversationId: String, timeoutMs: Long, wakeOnNewMessage: Boolean = true): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         synchronized(pendingInsertLock) {
             while (true) {
-                if (pendingInsertQueue.any { it.conversationId == conversationId }) return true
                 // 让位请求也算唤醒（requestSessionYield 复用本等待；置位在 wait 前后都能醒）
                 if (yieldRequested) return true
+                if (wakeOnNewMessage && pendingInsertQueue.any { it.conversationId == conversationId }) return true
                 val remaining = deadline - System.currentTimeMillis()
                 if (remaining <= 0) return false
                 pendingInsertLock.wait(remaining)

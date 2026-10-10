@@ -73,12 +73,19 @@ class ConversationController(
      */
     private val imageSource: (String) -> String? = { NapCatImageAction.localSource(lucatBot, it) },
     /**
-     * 分段发送的条间等待（默认走 [LucatBot.awaitPendingInsert]：等满 delay 或被
-     * 新消息提前唤醒；InterruptedException 向上传播 → 退出会话）。**依赖注入**：
-     * 测试传记录型替身即可断言「只在条间计时、第一条不等」而无需真睡。
+     * 分段发送的条间等待（默认走 [LucatBot.awaitPendingInsert]：**只等满或被让位
+     * 请求打断，新消息不打断**——实盘：热闹群里 3 秒 delay 里必有人接话，按
+     * 「新消息唤醒」语义第二条会被秒发，两句话零间隔；打字节奏按模型要的秒数
+     * 等满。InterruptedException 向上传播 → 退出会话）。**依赖注入**：
+     * 测试传记录型替身即可断言「每条各计时一次」而无需真睡。
      */
     private val segmentDelayWait: (conversationId: String, ms: Long) -> Boolean =
-        { id, ms -> lucatBot.awaitPendingInsert(id, ms) },
+        { id, ms -> lucatBot.awaitPendingInsert(id, ms, wakeOnNewMessage = false) },
+    /**
+     * 分段 delay **兜底间隔**（毫秒）——第二条起模型漏写/写 0 时补上：
+     * 模型手误不该变成零间隔连发（prompt 已要求每条必填 1~10s，这里兜底执行）
+     */
+    private val segmentFallbackDelayMs: Long = 3_000L,
     /**
      * send 的 `wait_message` 计时——发送后原地等新消息：来了即唤醒、等满即超时。
      * 默认走 [LucatBot.awaitPendingInsert]；**依赖注入**：测试传记录型替身即可断言
@@ -560,7 +567,8 @@ class ConversationController(
                 }
 
                 ConversationAction.SEND -> {
-                    // 分段发送：content 数组逐条发（delay 模拟打字、可被新消息唤醒）；
+                    // 分段发送：content 数组逐条发（delay 模拟打字：按秒数等满——
+                    // 新消息不打断打字节奏，让位请求可打断）；
                     // 中途失败即停剩余（已发的照常记账——对方看得见），提示带第 k/N 条
                     val outgoing = decision.resolveOutgoing()
                     val sentContents = mutableListOf<String>()
@@ -570,13 +578,26 @@ class ConversationController(
                     for ((idx, msg) in outgoing.withIndex()) {
                         // 发送前延迟：**每条先等自己的 delay 再发**——第一条从决策起
                         // 直接计时、到点就发；后续条因同步顺序执行，天然从「上一条
-                        // 发送完成」那一刻开始计，以此类推。等满或被新消息提前唤醒后
-                        // 发本条；delay=0（或省略）不等
-                        val delayMs = (msg.delaySeconds * 1000).toLong().coerceIn(0L, 30_000L)
+                        // 发送完成」那一刻开始计，以此类推
+                        // delay 兜底（B）：第二条起漏写/写 0 → 补默认打字间隔——
+                        // 模型手误不该变成零间隔连发；第一条 0 不兜底（LLM 思考本身已隔一拍）
+                        val requestedMs = (msg.delaySeconds * 1000).toLong()
+                        val delayMs = when {
+                            requestedMs > 0 -> requestedMs.coerceIn(0L, 30_000L)
+                            idx == 0 -> 0L
+                            else -> {
+                                log.info(
+                                    "第 {} 条 delay={}s，兜底 {}ms 打字间隔",
+                                    idx + 1, msg.delaySeconds, segmentFallbackDelayMs
+                                )
+                                segmentFallbackDelayMs
+                            }
+                        }
                         if (delayMs > 0) {
                             try {
+                                // 等待期间**新消息不打断**（打字节奏按秒数走），只有让位请求能打断
                                 if (segmentDelayWait(conversationId, delayMs)) {
-                                    log.info("第 {} 条发送前等待被新消息提前唤醒（{}ms）", idx + 1, delayMs)
+                                    log.info("第 {} 条发送前等待被让位请求提前打断（{}ms）", idx + 1, delayMs)
                                 }
                             } catch (e: InterruptedException) {
                                 Thread.currentThread().interrupt()

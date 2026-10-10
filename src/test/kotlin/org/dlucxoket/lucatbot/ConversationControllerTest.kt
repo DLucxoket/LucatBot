@@ -582,7 +582,8 @@ class ConversationControllerTest {
     @Test
     fun `segment delay waits before each message and send window messages inject next round`() {
         // delay 语义：**每条先等自己的 delay 再发**——第一条从决策起直接计时、到点就发；
-        // 第二条起因顺序执行天然从「上一条发完」开始计，以此类推；delay=0 不等。
+        // 第二条起因顺序执行天然从「上一条发完」开始计，以此类推；
+        // 第二条起漏写/写 0 → **兜底 3s 打字间隔**（模型手误不许零间隔连发）。
         // 整个序列在同一轮决策内发完才进下一轮；发送窗口内到达的别人消息
         // 进待插入队列、下一轮 drain 进 prompt（机器人自己发的由 Tool 逐条
         // 写聊天记录，生产链路下一轮历史可读）
@@ -600,7 +601,7 @@ class ConversationControllerTest {
             llm,
             segmentDelayWait = { _, ms ->
                 waits += ms
-                // 模拟等待期间对方发来消息
+                // 模拟等待期间对方发来消息（打字间隔不因它缩短——照样等满）
                 bot?.enqueuePendingInsert(
                     "private:123", 9L, "用户B", "等你的时候插一句",
                     messageId = 99L
@@ -612,8 +613,8 @@ class ConversationControllerTest {
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        assertEquals(listOf(3_000L, 5_000L), waits,
-            "每条发送前各计时一次：第一条(3s) 也要等、第二条(5s) 上一条发完后等、第三条无 delay 不等：$waits")
+        assertEquals(listOf(3_000L, 5_000L, 3_000L), waits,
+            "每条发送前各计时一次：3s/5s 是显式 delay，第三条没给 → 兜底 3s：$waits")
         assertEquals(3, sendTool.requests.size, "序列在同一轮内发完（否则会多轮决策）")
         assertEquals(2, llm.prompts.size, "发完才进入下一轮决策")
 
@@ -623,6 +624,40 @@ class ConversationControllerTest {
         assertTrue(nextPrompt.contains("等你的时候插一句"),
             "发送窗口内到达的别人消息注入下一轮 prompt：$nextPrompt")
         assertTrue(nextPrompt.contains("（新消息）"), "以新消息注释形式呈现：$nextPrompt")
+    }
+
+    @Test
+    fun `segment delay is not cut short by new messages but yield still interrupts`() {
+        // 打字间隔的等待语义（A）：**新消息不打断**——实盘热闹群里 3 秒 delay 里
+        // 必有人接话，按旧「新消息唤醒」语义第二条被秒发、两句话零间隔；
+        // 让位请求（通知要切走）任何语义下都让路；wait_message/stay 默认语义不变
+        val bot = LucatBot()
+        var woken: Boolean? = null
+
+        val t1 = Thread {
+            woken = bot.awaitPendingInsert("private:1", 200L, wakeOnNewMessage = false)
+        }.apply { start() }
+        Thread.sleep(60)
+        bot.enqueuePendingInsert("private:1", 9L, "用户B", "插话", messageId = 1L)
+        t1.join(3_000)
+        assertFalse(t1.isAlive, "等待应自行结束（等满）")
+        assertEquals(false, woken, "打字间隔不因新消息缩短——等满才结束")
+
+        bot.drainPendingInserts("private:1")
+        val t2 = Thread { woken = bot.awaitPendingInsert("private:1", 5_000L) }.apply { start() }
+        Thread.sleep(60)
+        bot.enqueuePendingInsert("private:1", 9L, "用户B", "接茬", messageId = 2L)
+        t2.join(3_000)
+        assertEquals(true, woken, "wait_message / stay 照常被新消息提前唤醒（默认语义不变）")
+
+        bot.drainPendingInserts("private:1")
+        val t3 = Thread {
+            woken = bot.awaitPendingInsert("private:1", 5_000L, wakeOnNewMessage = false)
+        }.apply { start() }
+        Thread.sleep(60)
+        bot.requestSessionYield()
+        t3.join(3_000)
+        assertEquals(true, woken, "让位请求可打断打字间隔（通知切走时打字也停）")
     }
 
     @Test
