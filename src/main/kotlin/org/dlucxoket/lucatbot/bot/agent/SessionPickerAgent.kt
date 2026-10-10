@@ -52,7 +52,8 @@ class SessionPickerAgent(
      * 指令与稳定状态（输出格式/约束/人格/状态）→ system 消息
      *
      * **按「稳定在前、易变在后」排布**（提高端点前缀缓存命中、省 token）：
-     * 与 ConversationAgent 同款——时间与操作日志等每轮变的内容压轴，
+     * 与 ConversationAgent 同款——时间、**心情**与操作日志等每轮变的内容压轴
+     *（心情强度每条消息都 decay/boost，放前面会在人格后立刻断前缀），
      * 不变的输出格式/约束段在前，前缀每轮稳定。
      */
     private fun buildSystemPrompt(input: SessionPickerRequest): String {
@@ -98,14 +99,13 @@ class SessionPickerAgent(
             ## 上下文
             ### 你的信息
             ${input.persona.toPrompt()}
-            ### 当前状态
-            - 心情：${input.mood.toPrompt()}
             ### 短期记忆
             ${input.shortTermMemory.ifBlank { "（暂无）" }}
             ### 待办
             ${input.todos.ifBlank { "（无待办）" }}
             ### 你最近的操作
             ${input.actionLog}
+            - 心情：${input.mood.toPrompt()}
             当前时间（北京时间）：${input.timeHint}
         """.trimIndent().fixIndent()
     }

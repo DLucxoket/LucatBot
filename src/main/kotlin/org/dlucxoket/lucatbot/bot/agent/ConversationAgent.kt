@@ -93,7 +93,9 @@ class ConversationAgent(
      *
      * **按「稳定在前、易变在后」排布**（提高端点前缀缓存命中、省 token）：
      * 开场白与输出格式/约束等每轮不变的指令段在前，人格/状态居中，
-     * 每轮都变的内容（操作日志、爬楼状态、当前时间、hint）压轴——
+     * 每轮都变的内容（操作日志、爬楼状态、**心情**、当前时间、hint）压轴——
+     * **心情必须压轴**：强度每条消息 decay/boost 都变，放「当前状态」里等于
+     * 在 persona 后面立刻把前缀打断（实盘命中率被钉在 ~43%）。
      * 上一版时间在第 2 行，前缀从第 2 行起每轮全断，长指令段全部 miss。
      */
     private fun buildSystemPrompt(input: ConversationRequest): String {
@@ -211,7 +213,6 @@ class ConversationAgent(
             ### 你的信息
             ${input.persona.toPrompt()}
             ### 当前状态
-            - 心情：${input.mood.toPrompt()}
             - 会话类型：${input.conversationType}
             - 当前会话：${input.conversationIdentity.ifBlank { "${input.conversationName}(${input.conversationId})" }}
             - 你的 QQ 号：${if (input.selfQq > 0) input.selfQq else "未知"}（判断「是不是在对我说」的依据）
@@ -224,6 +225,7 @@ class ConversationAgent(
             ### 你最近的操作
             ${input.actionLog}
             $crawlStatus
+            - 心情：${input.mood.toPrompt()}
             当前时间（北京时间）：${input.timeHint}$proactiveHint$extraHint
         """.trimIndent().fixIndent()
     }
