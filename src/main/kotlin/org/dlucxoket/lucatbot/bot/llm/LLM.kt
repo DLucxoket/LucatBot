@@ -43,9 +43,9 @@ interface LLM {
          *
          * 设计要点（两条路径）：
          * - Spring 环境：`springInstance` 已由 LlmConfig 注册，`ask()` 转发到容器
-         *   管理的 `OpenAIAPI` Bean（`@Value` 读取 application.yaml 的 llm.mimo.* 配置）。
+         *   管理的 `OpenAIAPI` Bean（平台配置读 application.yaml 的 `llm.active` + `llm.platforms.<active>.*`）。
          * - 非 Spring 环境（单元测试直接 new Agent）：`springInstance` 为 null，
-         *   `ask()` 转发到 [OpenAIAPI.DEFAULT]（手 new 实例，读环境变量/系统属性）。
+         *   `ask()` 转发到 [OpenAIAPI.DEFAULT]（手 new 实例，读环境变量 fallback）。
          *
          * 为什么是委托对象而非「每次 getter 返回当前实例」：Agent（如 LoopConfig 中的
          * ConversationAgent、MessageListController 的 SessionPickerAgent）在 Spring 启动期构造时

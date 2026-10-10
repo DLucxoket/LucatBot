@@ -10,23 +10,48 @@ shiro:
   plugin-list:
     - org.dlucxoket.lucatbot.adapter.onebot.MainPlugin
 
-# LLM 配置（密钥通过 LLM_API_KEY 环境变量注入）
+# LLM 平台配置——`active` 选平台（platforms 下的 key），**改完重启生效**。
+# 每个平台各自配 地址/密钥/模型/输出上限/价格；密钥优先平台专属环境变量、
+# 兜底共用 LLM_API_KEY（与旧部署兼容）
 llm:
-  mimo:
-    api-key: ${LLM_API_KEY:api-key}
-    
-#    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
-#    base-url: "https://api.xiaomimimo.com/v1"
-#    model-name: "mimo-v2.6-flash"
-    
-    base-url: "https://discovery-api.intern-ai.org.cn/v1"
-    model-name: "deepseek-v4-flash-vision"
-    # 输出上限（token）：推理型模型别把预算全耗在 reasoning 上交白卷
-    #（content 为空 → langchain4j `text cannot be null` → 曾被当成端点故障打断对话）
-    max-tokens: 4096
-    
-#    base-url: "https://api.siliconflow.cn/v1"   #硅基流动
-#    model-name: "Qwen/Qwen3-8B"                 #硅基流动免费模型
+  active: mimo            # ← 用哪个平台：mimo | intern | siliconflow
+  platforms:
+    # 小米 MiMo（OpenAI 兼容；两个入口二选一）
+    mimo:
+      base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+#     base-url: "https://api.xiaomimimo.com/v1"      # 备选入口
+      api-key: ${MIMO_API_KEY:${LLM_API_KEY:api-key}}
+      model-name: "mimo-v2.6-flash"
+      # 输出上限（token）：推理型模型别把预算全耗在 reasoning 上交白卷
+      #（content 为空 → langchain4j `text cannot be null` → 曾被当成端点故障打断对话）
+      max-tokens: 4096
+      # 单价（元 / 百万 token，填官网价）——**留空 = 面板不显示估算费用（不猜价）**
+      pricing:
+        input-per-1m:
+        output-per-1m:
+        cached-per-1m:     # 缓存读取折扣价（配合 cached_tokens；留空 = 那部分不打折）
+
+    # 上海AI实验室 discovery（deepseek 系）
+    intern:
+      base-url: "https://discovery-api.intern-ai.org.cn/v1"
+      api-key: ${INTERN_API_KEY:${LLM_API_KEY:api-key}}
+      model-name: "deepseek-v4-flash-vision"
+      max-tokens: 4096
+      pricing:
+        input-per-1m:
+        output-per-1m:
+        cached-per-1m:
+
+    # 硅基流动（Qwen/Qwen3-8B 免费模型）
+    siliconflow:
+      base-url: "https://api.siliconflow.cn/v1"
+      api-key: ${SILICONFLOW_API_KEY:${LLM_API_KEY:api-key}}
+      model-name: "Qwen/Qwen3-8B"
+      max-tokens: 4096
+      pricing:
+        input-per-1m:
+        output-per-1m:
+        cached-per-1m:
 
 # 存储后端：json（data 目录下的 json 文件）| mysql（写入即落库，首次启动自动建库建表并迁移 JSON 存量）
 storage:

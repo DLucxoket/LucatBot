@@ -1,5 +1,6 @@
 package org.dlucxoket.lucatbot.adapter.web
 
+import org.dlucxoket.lucatbot.bot.llm.ModelPricing
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageCall
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
@@ -27,7 +28,9 @@ import java.time.format.DateTimeFormatter
 @RestController
 @RequestMapping("/api/token")
 class TokenUsageController(
-    private val tokenUsage: TokenUsageAggregator
+    private val tokenUsage: TokenUsageAggregator,
+    /** 当前平台单价（费用估算；未配置 = 全 null = 不显示、不猜价） */
+    private val pricing: ModelPricing = ModelPricing()
 ) {
 
     /** 汇总行（前端直接喂图表） */
@@ -47,6 +50,8 @@ class TokenUsageController(
         val firstRoundCalls: Long,
         /** prompt 缓存命中的输入 token 累计（入参子集；端点不回 = 0，如实显示） */
         val cachedInput: Long,
+        /** 估算费用（元，读侧按 yaml 单价现算）——单价没配全 = null（不猜价） */
+        val estimatedCost: Double?,
         val byChannel: List<TokenRowDto>,
         val byAgent: List<TokenRowDto>,
         val byConversation: List<TokenRowDto>,
@@ -113,17 +118,21 @@ class TokenUsageController(
     @GetMapping("/summary")
     fun summary(): TokenSummaryDto {
         val entries = tokenUsage.snapshot()
+        val totalInput = entries.sumOf { it.input }
+        val totalOutput = entries.sumOf { it.output }
+        val cached = tokenUsage.cachedTokens()
         return TokenSummaryDto(
             total = TokenRowDto(
                 name = "合计",
                 calls = entries.sumOf { it.calls },
-                input = entries.sumOf { it.input },
-                output = entries.sumOf { it.output },
-                total = entries.sumOf { it.total }
+                input = totalInput,
+                output = totalOutput,
+                total = totalInput + totalOutput
             ),
             noUsageCalls = tokenUsage.noUsageCalls(),
             firstRoundCalls = tokenUsage.firstRoundCalls(),
-            cachedInput = tokenUsage.cachedTokens(),
+            cachedInput = cached,
+            estimatedCost = pricing.estimate(totalInput, totalOutput, cached),
             // 通道按固定顺序（文字 → 图片），零值也展示——一眼看出「图片通道用没用」
             byChannel = TokenUsageChannel.entries.map { ch ->
                 sumRow(ch.label, entries.filter { it.channel == ch.label })

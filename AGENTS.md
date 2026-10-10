@@ -59,14 +59,21 @@ Session：会话上下文（预留）
 
 ### LLM 配置
 
-默认：MiMo 端点（OpenAI 兼容）。通过 `application.yaml` 的 `llm.mimo.*` 配置：
+**多平台**：`application.yaml` 的 `llm.active` 选平台（`platforms` 下的 key），平台下各自配 地址/密钥/模型/输出上限/单价——**换平台改一行重启生效**：
 
 ```yaml
 llm:
-  mimo:
-    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
-    api-key: ${LLM_API_KEY:mimo}   # 走 LLM_API_KEY 环境变量
-    model-name: "mimo-v2.6-flash"
+  active: mimo            # ← 平台选择：mimo | intern | siliconflow
+  platforms:
+    mimo:
+      base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+      api-key: ${MIMO_API_KEY:${LLM_API_KEY:api-key}}   # 平台专属 env，兜底共用 LLM_API_KEY
+      model-name: "mimo-v2.6-flash"
+      max-tokens: 4096
+      pricing:              # 元/百万 token（官网价）；留空 = 面板不显示估算费用
+        input-per-1m:
+        output-per-1m:
+        cached-per-1m:
 ```
 
 使用自研 `OpenAIAPI`（`bot/llm/`）——任何兼容 OpenAI 协议的端点均可。

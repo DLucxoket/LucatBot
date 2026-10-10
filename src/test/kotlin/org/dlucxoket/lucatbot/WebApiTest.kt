@@ -82,6 +82,22 @@ class WebApiTest {
             // 维度四：模型
             .andExpect(jsonPath("$.byModel[0].name").value("m1"))
             .andExpect(jsonPath("$.byModel[1].name").value("m2"))
+            // 单价没配 → 估算费用 = null（不猜价）
+            .andExpect(jsonPath("$.estimatedCost").isEmpty())
+    }
+
+    @Test
+    fun `summary exposes estimated cost when platform pricing configured`() {
+        val body = mvc(TokenUsageController(ledger, org.dlucxoket.lucatbot.bot.llm.ModelPricing(1.0, 1.0)))
+            .perform(get("/api/token/summary"))
+            .andExpect(status().isOk)
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        // 累计入参 1050 + 出参 60，单价 1 元/百万 → 1110 / 1e6 = 0.00111
+        //（json-path 返回 BigDecimal、hamcrest closeTo 不收——自己解析成 Double 再比）
+        val cost = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
+            .readTree(body).path("estimatedCost").asDouble()
+        assertEquals(0.00111, cost, 1e-9, "估算费用按 yaml 单价换算：$body")
     }
 
     @Test

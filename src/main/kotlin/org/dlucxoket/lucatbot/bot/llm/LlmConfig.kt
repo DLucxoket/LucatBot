@@ -6,8 +6,8 @@ import org.springframework.stereotype.Component
  * 将 Spring 容器管理的 [OpenAIAPI] Bean 注册为 [LLM.DEFAULT] 的实际实现。
  *
  * 行为：
- * - 构造时调用 [LLM.install]——此时 `OpenAIAPI` 已完成 `@Value` 配置注入
- *   （application.yaml 的 llm.mimo.*），之后所有走 [LLM.DEFAULT] 的调用
+ * - 构造时调用 [LLM.install]——此时 `OpenAIAPI` 已就绪（平台配置读
+ *   application.yaml 的 `llm.active` + `llm.platforms.<active>.*`），之后所有走 [LLM.DEFAULT] 的调用
  *   都会转发到这个容器 Bean。
  * - 非 Spring 环境不会加载本类，[LLM.DEFAULT] 保持 null 的 springInstance，
  *   转发到 [OpenAIAPI.DEFAULT] 兜底实例。

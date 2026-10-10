@@ -127,6 +127,12 @@ onMounted(load)
         :sub="`${fmt(summary.total.input)} · 缓存命中 ${fmt(summary.cachedInput)}`" />
       <StatCard label="出参 token" :value="compact(summary.total.output)" :sub="fmt(summary.total.output)" />
       <StatCard label="合计 token" :value="compact(summary.total.total)" sub="跨重启累计（token_usage 表）" />
+      <StatCard
+        v-if="summary.estimatedCost != null"
+        label="估算费用（≈）"
+        :value="'¥' + Number(summary.estimatedCost).toFixed(2)"
+        sub="按 yaml llm.platforms.*.pricing 单价换算"
+      />
     </div>
 
     <div class="grid two" v-if="summary">

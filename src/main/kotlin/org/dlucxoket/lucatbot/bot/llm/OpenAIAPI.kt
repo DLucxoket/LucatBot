@@ -9,7 +9,7 @@ import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.chat.response.ChatResponse
 import dev.langchain4j.model.openai.OpenAiChatModel
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
+import org.springframework.core.env.Environment
 import org.springframework.stereotype.Component
 
 /**
@@ -23,18 +23,25 @@ import org.springframework.stereotype.Component
  *
  * 双路径语义（本类有两个实例来源，务必分清）：
  *
- * 1. **Spring Bean**（本类标注 `@Component`）：`@Value` 注入 `application.yaml`
- *    中的 `llm.mimo.*` 配置。该实例由 `LlmConfig` 注册到 [LLM.install]，
+ * 1. **Spring Bean**（本类标注 `@Component`）：**平台配置**来自 `application.yaml`
+ *    的 `llm.active`（选平台）+ `llm.platforms.<平台>.*`（地址/密钥/模型/输出上限/单价）
+ *    ——换平台改 `llm.active` 一行、重启生效。该实例由 [LlmConfig] 注册到 [LLM.install]，
  *    Spring 环境下 [LLM.DEFAULT] 的实际调用目标。
  * 2. **手 new 兜底实例**（[DEFAULT] companion，非 Bean）：供非 Spring 环境
- *    （单元测试直接 new Agent）使用。不经 Spring 处理，`@Value` 不生效，
- *    配置完全来自下方字段初始化器的环境变量/系统属性 fallback。
+ *    （单元测试直接 new Agent）使用。没有 Spring 环境 → 平台配置读不到，
+ *    走下方字段 getter 的环境变量 fallback。
  *
  * 注意：每次 `ask()` 调用都会重新构建 `OpenAiChatModel` 实例。
  * 这在低频场景下没问题，但在高频调用时可能有性能开销。
  */
 @Component
-class OpenAIAPI : LLM {
+class OpenAIAPI(
+    /**
+     * Spring 环境——**平台选择**用（读 `llm.active` 与 `llm.platforms.<active>.*`）；
+     * 非 Spring 兜底实例（[DEFAULT] 手 new）= null → 走环境变量 fallback
+     */
+    private val environment: Environment? = null
+) : LLM {
 
     private val log = LoggerFactory.getLogger(OpenAIAPI::class.java)
 
@@ -67,42 +74,48 @@ class OpenAIAPI : LLM {
     }
 
     /*
-     * 配置字段说明：
-     * - Spring 路径：@Value 在构造后注入。application.yaml 的 llm.mimo.* 三项齐全时
-     *   覆盖字段初始化器的值（正常生效路径）。若某项从 yaml 缺失，@Value 默认空串
-     *   也会覆盖初始化器——因此 yaml 三项必须保持齐全。
-     * - 非 Spring 路径：@Value 不被处理，字段初始化器的 env/系统属性 fallback 生效。
+     * 平台配置读取（`llm.active` → `llm.platforms.<active>.*`）：
+     * - Spring 路径：经 [environment] 每次现读（getter）——换平台改 `llm.active`
+     *   重启生效；也顺带消掉旧 @Value 的坑（yaml 缺项时空串会覆盖初始化器）。
+     * - 非 Spring 路径：environment = null → 下方 getter 走环境变量 fallback。
      */
 
-    /** API 端点地址（Spring：yaml llm.mimo.base-url；兜底实例：LLM_BASE_URL 环境变量/系统属性） */
-    @Value($$"${llm.mimo.base-url:}")
-    private var baseUrl: String = System.getenv("LLM_BASE_URL")
-        ?: System.getProperty("llm.mimo.base-url")
-        ?: "https://token-plan-cn.xiaomimimo.com/v1"
+    /** 当前平台 key（yaml `llm.active`，缺省 mimo） */
+    private val activePlatform: String
+        get() = environment?.getProperty("llm.active")?.takeIf { it.isNotBlank() } ?: "mimo"
 
-    /** API 密钥（Spring：yaml llm.mimo.api-key；兜底实例：LLM_API_KEY 环境变量/系统属性） */
-    @Value($$"${llm.mimo.api-key:}")
-    private var apiKey: String = System.getenv("LLM_API_KEY")
-        ?: System.getProperty("llm.mimo.api-key")
-        ?: "ollama"
+    /** 当前平台的单项配置（`llm.platforms.<active>.<key>`；未配/空 → null 交给 fallback） */
+    private fun platformProp(key: String): String? =
+        environment?.getProperty("llm.platforms.$activePlatform.$key")?.takeIf { it.isNotBlank() }
 
-    /** 模型名称（Spring：yaml llm.mimo.model-name；兜底实例：LLM_MODEL_NAME 环境变量/系统属性） */
-    @Value($$"${llm.mimo.model-name:}")
-    private var modelName: String = System.getenv("LLM_MODEL_NAME")
-        ?: System.getProperty("llm.mimo.model-name")
-        ?: "mimo-v2.5"
+    /** API 端点地址（yaml `llm.platforms.<active>.base-url`；兜底：LLM_BASE_URL 环境变量） */
+    private val baseUrl: String
+        get() = platformProp("base-url")
+            ?: System.getenv("LLM_BASE_URL")
+            ?: "https://token-plan-cn.xiaomimimo.com/v1"
+
+    /** API 密钥（yaml `...api-key`；兜底：LLM_API_KEY 环境变量） */
+    private val apiKey: String
+        get() = platformProp("api-key")
+            ?: System.getenv("LLM_API_KEY")
+            ?: "ollama"
+
+    /** 模型名称（yaml `...model-name`；兜底：LLM_MODEL_NAME 环境变量） */
+    private val modelName: String
+        get() = platformProp("model-name")
+            ?: System.getenv("LLM_MODEL_NAME")
+            ?: "mimo-v2.5"
 
     /**
-     * 单次**输出**上限（token），yaml `llm.mimo.max-tokens` 可调（缺省 4096）
+     * 单次**输出**上限（token），yaml `llm.platforms.<active>.max-tokens` 可调（缺省 4096）
      *
      * 为什么显式给：deepseek-v4 这类推理型模型会先吐 reasoning——输出预算太小时
      * reasoning 耗完就交白卷（`content` 为空 → langchain4j 抛
      * `text cannot be null` → 实盘把这轮判成端点故障、对话被无谓打断）。
-     * 给个明确上限让它有预算把答案写完；我们要的是短 JSON，**上限只是天花板不是成本**
-     *（Int 带 @Value 默认值，yaml 缺项也回退 4096，不会像 String 那样被空串覆盖）。
+     * 给个明确上限让它有预算把答案写完；我们要的是短 JSON，**上限只是天花板不是成本**。
      */
-    @Value($$"${llm.mimo.max-tokens:4096}")
-    private var maxTokens: Int = 4096
+    private val maxTokens: Int
+        get() = platformProp("max-tokens")?.trim()?.toIntOrNull() ?: 4096
 
 
     /**

@@ -5,6 +5,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.ConversationRequest
 import org.dlucxoket.lucatbot.bot.llm.InMemoryTokenUsageStore
 import org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore
 import org.dlucxoket.lucatbot.bot.llm.LLM
+import org.dlucxoket.lucatbot.bot.llm.ModelPricing
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageChannel
 import org.dlucxoket.lucatbot.bot.llm.TokenUsagePending
@@ -139,6 +140,23 @@ class TokenUsageTest {
         } finally {
             file.delete()
         }
+    }
+
+    @Test
+    fun `pricing estimate splits cached input and stays null when unconfigured`() {
+        // 费用估算：读侧现算、没配单价不算不猜；缓存命中段按缓存价折算
+        assertNull(ModelPricing().estimate(1_000_000, 500_000, cached = 400_000), "没配价 = null 不猜")
+
+        val p = ModelPricing(inputPer1M = 2.0, outputPer1M = 8.0, cachedPer1M = 0.2)
+        // 1M 入参其中 0.4M 命中缓存 + 0.5M 出参：0.6*2 + 0.4*0.2 + 0.5*8 = 5.28
+        assertEquals(5.28, p.estimate(1_000_000, 500_000, cached = 400_000)!!, 1e-9)
+
+        // 没配缓存价 → 命中段按入参价（不打折）：1*2 + 0.5*8 = 6
+        val noCachePrice = ModelPricing(inputPer1M = 2.0, outputPer1M = 8.0)
+        assertEquals(6.0, noCachePrice.estimate(1_000_000, 500_000, cached = 400_000)!!, 1e-9)
+
+        // 异常数据（cached > input）按入参截断：命中最多算满 1M
+        assertEquals(4.2, p.estimate(1_000_000, 500_000, cached = 9_999_999)!!, 1e-9)
     }
 
     @Test
