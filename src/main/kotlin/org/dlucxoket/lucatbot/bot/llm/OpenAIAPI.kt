@@ -269,6 +269,12 @@ class OpenAIAPI : LLM {
         val usage = response.tokenUsage()
         val agent = TokenUsageScope.agent()
         val conversation = TokenUsageScope.conversation()
+        // prompt 缓存命中（**1.x 起 OpenAiTokenUsage 才解析 cached_tokens**——0.35 这层
+        // 就把 prompt_tokens_details 丢了）；非 OpenAI 实现的 usage / 端点不回 → null
+        val cached: Long? = runCatching {
+            (usage as? dev.langchain4j.model.openai.OpenAiTokenUsage)
+                ?.inputTokensDetails()?.cachedTokens()?.toLong()  // 1.22 返回 Int
+        }.getOrNull()
         if (usage == null) {
             log.info(
                 "LLM用量[{}][{}][{}]：端点未返回 tokenUsage（模型 {}）",
@@ -278,9 +284,10 @@ class OpenAIAPI : LLM {
             // 显式调 getter：TokenUsage 的同名字段是 private，
             // Kotlin 属性语法会解析到字段上（编译期「不可访问」）
             log.info(
-                "LLM用量[{}][{}][{}]：输入 {} / 输出 {} / 合计 {} token（模型 {}）",
+                "LLM用量[{}][{}][{}]：输入 {}（缓存命中 {}）/ 输出 {} / 合计 {} token（模型 {}）",
                 channel.label, agent, conversation,
-                usage.inputTokenCount(), usage.outputTokenCount(), usage.totalTokenCount(), modelName
+                usage.inputTokenCount(), cached ?: -1, usage.outputTokenCount(),
+                usage.totalTokenCount(), modelName
             )
         }
         TokenUsageScope.stashUsage(
@@ -291,7 +298,8 @@ class OpenAIAPI : LLM {
                 output = usage?.outputTokenCount()?.toLong(),
                 durationMs = durationMs,
                 request = requestText,
-                response = responseText
+                response = responseText,
+                cached = cached
             )
         )
     }

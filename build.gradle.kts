@@ -30,9 +30,11 @@ dependencies {
     /** Jackson Kotlin 模块（支持 data class 默认值反序列化） */
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.0")
     
-    /** LangChain4j OpenAI Starter：支持 OpenAI 协议的 AI 客户端 */
-    implementation("dev.langchain4j:langchain4j-open-ai-spring-boot-starter:0.35.0")
-    implementation("dev.langchain4j:langchain4j:0.35.0")
+    /** LangChain4j：OpenAI 协议客户端（**1.x 起才解析 `cached_tokens`**——prompt 缓存
+     * 命中观测；旧 starter 是 Boot3 一代、且其自动配置本项目从未使用（OpenAIAPI 自建
+     * builder、LlmConfig 自己注册）→ 换裸依赖，顺手消掉跨代兼容隐患） */
+    implementation("dev.langchain4j:langchain4j:1.22.0")
+    implementation("dev.langchain4j:langchain4j-open-ai:1.22.0")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
 
     /** MySQL 驱动（storage.type=mysql 时使用；版本由 Spring Boot BOM 管理）——

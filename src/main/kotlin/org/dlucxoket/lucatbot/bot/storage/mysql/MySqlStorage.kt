@@ -103,6 +103,8 @@ class MySqlStorage(private val config: MySqlConfig) {
             ensureColumn(conn, "chat_history", "memorized", "memorized BOOLEAN NOT NULL DEFAULT FALSE")
             ensureColumn(conn, "todos", "completed_at", "completed_at DATETIME(3) NULL")
             ensureColumn(conn, "todos", "planned_at", "planned_at DATETIME(3) NULL")
+            // 用量表：langchain4j 升 1.x 后新增的 prompt 缓存命中列（老库已建表则补列）
+            ensureColumn(conn, "token_usage", "cached_tokens", "cached_tokens BIGINT NULL")
             if (legacy != null) restoreLegacy(conn, legacy)
         }
         if (config.importFromJson) {
@@ -460,7 +462,7 @@ class MySqlStorage(private val config: MySqlConfig) {
                     MySqlTime.of(if (r.epoch > 0) r.epoch else 0L),
                     r.agent, r.conversation, r.channel, r.model,
                     r.input, r.output, r.reported, r.action, r.firstRound,
-                    r.durationMs, r.request, r.response, r.error
+                    r.durationMs, r.request, r.response, r.error, r.cached
                 )
             }
         )
@@ -602,6 +604,7 @@ class MySqlStorage(private val config: MySqlConfig) {
                 request MEDIUMTEXT NULL,
                 response MEDIUMTEXT NULL,
                 error VARCHAR(512) NULL,
+                cached_tokens BIGINT NULL,
                 KEY idx_epoch (epoch),
                 KEY idx_agent (agent),
                 KEY idx_conv (conversation)

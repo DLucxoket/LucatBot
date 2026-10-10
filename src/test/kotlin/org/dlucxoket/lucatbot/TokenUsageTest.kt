@@ -115,6 +115,33 @@ class TokenUsageTest {
     }
 
     @Test
+    fun `cached tokens accumulate in summary and survive reload`() {
+        // prompt 缓存命中（langchain4j 1.x 的 cached_tokens）：入参子集，
+        // 汇总单列一行、跨重启读回仍累计；端点不回的行不计
+        val file = File.createTempFile("token-cached", ".jsonl").apply { delete() }
+        try {
+            val first = aggregator(JsonlTokenUsageStore(file.absolutePath))
+            first.record(
+                "ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", 1000, 50,
+                cached = 640
+            )
+            first.record("ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", 1000, 50)
+
+            assertEquals(640L, first.cachedTokens())
+            val s = first.summary()
+            assertTrue(s.contains("缓存命中：640 token（占入参 32%）"), "汇总行：$s")
+
+            // 模拟重启：明细行带 cached、读回继续累计
+            val restarted = aggregator(JsonlTokenUsageStore(file.absolutePath))
+            assertEquals(640L, restarted.cachedTokens(), "缓存命中跨重启累计")
+            assertEquals(640L, restarted.findCall(1L)?.cached, "明细行保留 cached")
+            assertNull(restarted.findCall(2L)?.cached, "端点不回 = null（如实不猜）")
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun `missing usage counts the call with zero and is called out honestly`() {
         val ledger = aggregator()
         ledger.record("ConversationAgent", "private:1", TokenUsageChannel.TEXT, "m", null, null)

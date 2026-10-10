@@ -25,7 +25,7 @@ class MySqlTokenUsageStore(
     /** 轻量列（列表/聚合用，不含 request/response 正文） */
     private val LIGHT_COLUMNS =
         "id, epoch, agent, conversation, channel, model, input_tokens, output_tokens, " +
-            "reported, action, first_round, duration_ms, error"
+            "reported, action, first_round, duration_ms, error, cached_tokens"
 
     override fun append(record: TokenUsageCall) {
         runCatching {
@@ -34,7 +34,7 @@ class MySqlTokenUsageStore(
                 MySqlTime.of(if (record.epoch > 0) record.epoch else System.currentTimeMillis()),
                 record.agent, record.conversation, record.channel, record.model,
                 record.input, record.output, record.reported, record.action, record.firstRound,
-                record.durationMs, record.request, record.response, record.error
+                record.durationMs, record.request, record.response, record.error, record.cached
             )
         }.onFailure {
             // 观测数据绝不冒泡到 LLM 调用链路
@@ -81,7 +81,8 @@ class MySqlTokenUsageStore(
         reported = rs.getBoolean("reported"),
         action = rs.getString("action")?.ifBlank { "-" } ?: "-",
         firstRound = rs.getBoolean("first_round"),
-        durationMs = rs.getLong("duration_ms").let { if (rs.wasNull()) null else it }
+        durationMs = rs.getLong("duration_ms").let { if (rs.wasNull()) null else it },
+        cached = rs.getLong("cached_tokens").let { if (rs.wasNull()) null else it }
     )
 
     /** StorageConfig 的 destroyMethod 兜底；短连接无池可关 */
@@ -93,6 +94,7 @@ class MySqlTokenUsageStore(
         internal const val INSERT =
             "INSERT INTO token_usage (epoch, agent, conversation, channel, model, " +
                 "input_tokens, output_tokens, reported, action, first_round, " +
-                "duration_ms, request, response, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                "duration_ms, request, response, error, cached_tokens) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     }
 }

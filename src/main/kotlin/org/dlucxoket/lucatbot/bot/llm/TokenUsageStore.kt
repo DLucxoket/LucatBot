@@ -80,6 +80,8 @@ class JsonlTokenUsageStore(private val path: String?) : TokenUsageStore {
                     put("request", record.request)
                     put("response", record.response)
                     put("error", record.error)
+                    // prompt 缓存命中（langchain4j 1.x 起才有；旧格式行 → null）
+                    put("cached", record.cached)
                 }
             )
             val file = File(target)
@@ -148,7 +150,8 @@ class JsonlTokenUsageStore(private val path: String?) : TokenUsageStore {
                 durationMs = node.path("durationMs").takeIf { it.isNumber }?.asLong(),
                 request = node.path("request").takeIf { it.isTextual }?.asText(),
                 response = node.path("response").takeIf { it.isTextual }?.asText(),
-                error = node.path("error").takeIf { it.isTextual }?.asText()
+                error = node.path("error").takeIf { it.isTextual }?.asText(),
+                cached = node.path("cached").takeIf { it.isNumber }?.asLong()
             )
         }
     }

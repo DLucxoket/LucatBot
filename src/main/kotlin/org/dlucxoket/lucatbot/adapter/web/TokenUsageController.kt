@@ -45,6 +45,8 @@ class TokenUsageController(
         val noUsageCalls: Long,
         /** 进场首轮的调用次数（P5：验证「进场预搜 + 首轮可直接回话」省了几轮） */
         val firstRoundCalls: Long,
+        /** prompt 缓存命中的输入 token 累计（入参子集；端点不回 = 0，如实显示） */
+        val cachedInput: Long,
         val byChannel: List<TokenRowDto>,
         val byAgent: List<TokenRowDto>,
         val byConversation: List<TokenRowDto>,
@@ -79,7 +81,9 @@ class TokenUsageController(
         val action: String,
         val firstRound: Boolean,
         val durationMs: Long?,
-        val error: String?
+        val error: String?,
+        /** prompt 缓存命中（入参子集；端点不回 = null） */
+        val cached: Long?
     ) {
         val total: Long get() = input + output
     }
@@ -100,7 +104,8 @@ class TokenUsageController(
         val durationMs: Long?,
         val request: String?,
         val response: String?,
-        val error: String?
+        val error: String?,
+        val cached: Long?
     ) {
         val total: Long get() = input + output
     }
@@ -118,6 +123,7 @@ class TokenUsageController(
             ),
             noUsageCalls = tokenUsage.noUsageCalls(),
             firstRoundCalls = tokenUsage.firstRoundCalls(),
+            cachedInput = tokenUsage.cachedTokens(),
             // 通道按固定顺序（文字 → 图片），零值也展示——一眼看出「图片通道用没用」
             byChannel = TokenUsageChannel.entries.map { ch ->
                 sumRow(ch.label, entries.filter { it.channel == ch.label })
@@ -239,7 +245,7 @@ class TokenUsageController(
                 id = row.id, epoch = row.epoch, agent = row.agent, conversation = row.conversation,
                 channel = row.channel, model = row.model, input = row.input, output = row.output,
                 reported = row.reported, action = row.action, firstRound = row.firstRound,
-                durationMs = row.durationMs, error = row.error
+                durationMs = row.durationMs, error = row.error, cached = row.cached
             )
         }
 
@@ -258,7 +264,7 @@ class TokenUsageController(
             channel = row.channel, model = row.model, input = row.input, output = row.output,
             reported = row.reported, action = row.action, firstRound = row.firstRound,
             durationMs = row.durationMs, request = row.request, response = row.response,
-            error = row.error
+            error = row.error, cached = row.cached
         )
     }
 

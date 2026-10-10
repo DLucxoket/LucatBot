@@ -152,7 +152,7 @@ Web 控制台：`http://localhost:8080/`（token 用量 + **调用轨迹**（每
 | 库 | 用途 |
 |----|------|
 | `com.mikuac:shiro:2.5.3` | OneBot 协议（QQ 机器人框架） |
-| `dev.langchain4j:langchain4j-open-ai-spring-boot-starter` | OpenAI 兼容 LLM 客户端 |
+| `dev.langchain4j:langchain4j` + `langchain4j-open-ai`（1.22.0 裸依赖，不用 starter） | OpenAI 兼容 LLM 客户端（1.x 才解析 prompt 缓存 `cached_tokens`；starter 是 Boot3 一代且其自动配置本项目从未使用） |
 | `io.github.classgraph:classgraph` | 运行时 Agent/Tool 类自动发现 |
 | `com.fasterxml.jackson` | JSON↔OOP 边界序列化（`jackson-module-kotlin:2.20.0` 显式依赖；Shiro 自身走 Jackson 3/`tools.jackson`，见「容易搞错的地方」） |
 | `com.mysql:mysql-connector-j` | MySQL 驱动（`storage.type=mysql` 默认后端；代码只用 java.sql 标准接口） |

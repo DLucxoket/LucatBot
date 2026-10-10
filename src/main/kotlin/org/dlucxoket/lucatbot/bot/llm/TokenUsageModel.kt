@@ -29,6 +29,8 @@ enum class TokenUsageChannel(val label: String) {
  *   标签呈现、data URI 以占位说明代替——正文逐字，二进制不入库）
  * @param response 模型的回复正文（端点异常/空响应 = 空串）
  * @param error 端点异常信息（成功 = null；降级行带上，面板可见失败原因）
+ * @param cached prompt **缓存命中**的输入 token（langchain4j 1.x 起才解析得到；
+ *   端点不回/非 OpenAI 实现 = null）——入参的子集，不是额外计费
  */
 data class TokenUsagePending(
     val channel: TokenUsageChannel,
@@ -38,7 +40,8 @@ data class TokenUsagePending(
     val durationMs: Long? = null,
     val request: String? = null,
     val response: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val cached: Long? = null
 )
 
 /**
@@ -73,6 +76,7 @@ data class TokenUsageEntry(
  * @param durationMs 调用耗时（毫秒；旧数据 → null）
  * @param request/response/error 大字段：**明细列表接口不带**（省流量），
  *   轨迹详情接口按 id 单取（`TokenUsageStore.find`）
+ * @param cached prompt 缓存命中的输入 token（入参子集；端点不回/旧数据 = null）
  */
 data class TokenUsageCall(
     val epoch: Long,
@@ -89,7 +93,8 @@ data class TokenUsageCall(
     val durationMs: Long? = null,
     val request: String? = null,
     val response: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val cached: Long? = null
 ) {
     val total: Long get() = input + output
 }

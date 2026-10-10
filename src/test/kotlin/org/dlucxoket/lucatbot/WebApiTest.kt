@@ -196,7 +196,8 @@ class WebApiTest {
             "ConversationAgent", "private:123", TokenUsageChannel.TEXT, "m1", 100, 20,
             action = "send", firstRound = true, durationMs = 1234,
             request = "### system\n你是牢洛\n### user\n聊天记录…",
-            response = """{"action":"send","params":{"content":"在吗"}}"""
+            response = """{"action":"send","params":{"content":"在吗"}}""",
+            cached = 80
         )
 
         // 列表：带 id/耗时，**不带请求响应正文**（正文一次十几 KB，列表带全会撑爆）
@@ -211,7 +212,7 @@ class WebApiTest {
         assertTrue(id > 0, "列表行带存储 id：$traceRow")
         assertEquals(1234, traceRow.path("durationMs").asLong(), "列表行带耗时")
 
-        // 详情：真实请求 + 模型回复 + 耗时全在
+        // 详情：真实请求 + 模型回复 + 耗时 + 缓存命中全在
         mvc(TokenUsageController(ledger))
             .perform(get("/api/token/call").param("id", id.toString()))
             .andExpect(status().isOk)
@@ -219,7 +220,14 @@ class WebApiTest {
             .andExpect(jsonPath("$.durationMs").value(1234))
             .andExpect(jsonPath("$.request").value("### system\n你是牢洛\n### user\n聊天记录…"))
             .andExpect(jsonPath("$.response").value("""{"action":"send","params":{"content":"在吗"}}"""))
+            .andExpect(jsonPath("$.cached").value(80))
             .andExpect(jsonPath("$.total").value(120))
+
+        // 汇总带缓存命中累计
+        mvc(TokenUsageController(ledger))
+            .perform(get("/api/token/summary"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.cachedInput").value(80))
 
         // 查不到 → 404
         mvc(TokenUsageController(ledger))

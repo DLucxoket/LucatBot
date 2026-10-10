@@ -51,6 +51,8 @@ class TokenUsageAggregator(
 
     /** 端点没回 usage 的调用次数（token 数按 0 计，如实单列，不混进正常值） */
     private var noUsage = 0L
+    /** prompt 缓存命中的输入 token 累计（入参子集；端点不回 = 一直 0，如实显示） */
+    private var cachedTotal = 0L
     private var loaded = false
     private var sinceSummary = 0
 
@@ -65,6 +67,7 @@ class TokenUsageAggregator(
      * @param request 发给 LLM 的真实请求正文（轨迹；列表接口不返回，按 id 详情取）
      * @param response 模型回复正文
      * @param error 端点异常（成功 = null）
+     * @param cached prompt 缓存命中的输入 token（入参子集；端点不回 = null）
      */
     fun record(
         agent: String,
@@ -78,7 +81,8 @@ class TokenUsageAggregator(
         durationMs: Long? = null,
         request: String? = null,
         response: String? = null,
-        error: String? = null
+        error: String? = null,
+        cached: Long? = null
     ) {
         val inTok = input ?: 0L
         val outTok = output ?: 0L
@@ -88,6 +92,7 @@ class TokenUsageAggregator(
             ensureLoadedLocked()
             totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, inTok, outTok)
             if (!reported) noUsage++
+            cachedTotal += cached ?: 0L
             store.append(
                 TokenUsageCall(
                     epoch = System.currentTimeMillis(),
@@ -103,7 +108,8 @@ class TokenUsageAggregator(
                     durationMs = durationMs,
                     request = request,
                     response = response,
-                    error = error
+                    error = error,
+                    cached = cached
                 )
             )
             sinceSummary++
@@ -130,6 +136,12 @@ class TokenUsageAggregator(
     fun firstRoundCalls(): Long = synchronized(lock) {
         ensureLoadedLocked()
         aggregate { it.firstRound }.calls
+    }
+
+    /** prompt 缓存命中的输入 token 累计（跨重启累计；端点不回 = 0，如实单列） */
+    fun cachedTokens(): Long = synchronized(lock) {
+        ensureLoadedLocked()
+        cachedTotal
     }
 
     /**
@@ -189,6 +201,7 @@ class TokenUsageAggregator(
             // 明细一行 = 一次调用（calls 恒为 1，模型里不再带该字段）
             totals[key] = (totals[key] ?: Agg(0, 0, 0)) + Agg(1, row.input, row.output)
             if (!row.reported) noUsage++
+            cachedTotal += row.cached ?: 0L
         }
     }
 
@@ -239,6 +252,10 @@ class TokenUsageAggregator(
         val firstRounds = aggregate { k -> k.firstRound }
         if (firstRounds.calls > 0) {
             sb.append("\n- 进场首轮：${firstRounds.calls} 次（入 ${firstRounds.input} / 出 ${firstRounds.output}）")
+        }
+        if (cachedTotal > 0) {
+            val pct = if (grand.input > 0) cachedTotal * 100 / grand.input else 0
+            sb.append("\n- 缓存命中：$cachedTotal token（占入参 ${pct}%）")
         }
         return sb.toString()
     }

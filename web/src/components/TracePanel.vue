@@ -167,6 +167,10 @@ onMounted(load)
                     </td>
                   </tr>
                   <tr><td>耗时</td><td>{{ detail.durationMs != null ? detail.durationMs + ' ms' : '（旧数据未记录）' }}</td></tr>
+                  <tr v-if="detail.cached != null">
+                    <td>缓存命中</td>
+                    <td>{{ fmt(detail.cached) }}（占入参 {{ detail.input > 0 ? Math.round(detail.cached * 100 / detail.input) : 0 }}%）</td>
+                  </tr>
                   <tr><td>请求 / 回复</td><td>{{ bodyLen(detail.request) }} / {{ bodyLen(detail.response) }} 字符</td></tr>
                 </tbody>
               </table>
