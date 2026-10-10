@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue'
-import { fetchSummary, fetchTimeseries, fetchCalls, fmt, compact, timeText, actionLabel } from '../api.js'
+import { fetchSummary, fetchTimeseries, fetchTimeseriesGrouped, fetchCalls, fmt, compact, timeText, actionLabel } from '../api.js'
 import StatCard from './StatCard.vue'
 import BarList from './BarList.vue'
 import DonutChart from './DonutChart.vue'
@@ -18,6 +18,19 @@ const bucket = ref('day')
 const metric = ref('total')
 const dim = ref('byAgent')
 const limit = ref(100)
+
+/** 趋势图分类（分线）：none = 单线总量；其余按维度拆成多条线 */
+const group = ref('none')
+const grouped = ref([])
+const MAX_TREND_LINES = 6
+const groups = [
+  { key: 'none', label: '整体' },
+  { key: 'action', label: '动作' },
+  { key: 'conversation', label: '会话' },
+  { key: 'agent', label: 'agent' },
+  { key: 'model', label: '模型' },
+  { key: 'channel', label: '通道' }
+]
 
 const dims = [
   { key: 'byAgent', label: '按 agent' },
@@ -42,14 +55,18 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [s, t, c] = await Promise.all([
+    const [s, t, c, g] = await Promise.all([
       fetchSummary(),
       fetchTimeseries(bucket.value, 30),
-      fetchCalls(limit.value)
+      fetchCalls(limit.value),
+      group.value === 'none'
+        ? Promise.resolve([])
+        : fetchTimeseriesGrouped(group.value, bucket.value, 30)
     ])
     summary.value = s
     series.value = t
     calls.value = c
+    grouped.value = g
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
@@ -57,9 +74,40 @@ async function load() {
   }
 }
 
+/**
+ * 分类趋势 → TrendChart 的分线数据：按 key 拆线、按 bucket 对齐（缺桶补 0）
+ *
+ * 只画**区间合计前 6** 的线（会话/动作天然多类，画全读不了），被截断的
+ * 类数经 extraKeys 在图例尾部点名。动作分类的线名走 actionLabel 汉化。
+ */
+const trendSeries = computed(() => {
+  if (group.value === 'none' || !grouped.value.length) return []
+  const buckets = [...new Set(grouped.value.map((r) => r.bucket))].sort()
+  const byKey = new Map()
+  for (const r of grouped.value) {
+    if (!byKey.has(r.key)) byKey.set(r.key, new Map())
+    byKey.get(r.key).set(r.bucket, r)
+  }
+  const ranked = [...byKey.entries()]
+    .map(([key, m]) => ({ key, m, sum: [...m.values()].reduce((a, r) => a + r.total, 0) }))
+    .sort((a, b) => b.sum - a.sum)
+  const zero = (b) => ({ bucket: b, calls: 0, input: 0, output: 0, total: 0 })
+  return ranked.slice(0, MAX_TREND_LINES).map(({ key, m }) => ({
+    name: group.value === 'action' ? actionLabel(key) : key,
+    points: buckets.map((b) => m.get(b) || zero(b))
+  }))
+})
+
+/** 没画出来的分类数（图例尾部提示） */
+const extraKeys = computed(() => {
+  if (group.value === 'none' || !grouped.value.length) return 0
+  return Math.max(0, new Set(grouped.value.map((r) => r.key)).size - MAX_TREND_LINES)
+})
+
 watch(() => props.tick, load)
 watch(bucket, load)
 watch(limit, load)
+watch(group, load) // 换分类要重新拉 timeseries-grouped
 onMounted(load)
 </script>
 
@@ -119,6 +167,12 @@ onMounted(load)
             <button :class="{ active: bucket === 'day' }" @click="bucket = 'day'">按天</button>
             <button :class="{ active: bucket === 'hour' }" @click="bucket = 'hour'">按小时</button>
           </span>
+          <span class="seg" title="分线：按维度把趋势拆成多条线（画合计前 6 类）">
+            <button
+              v-for="g in groups" :key="g.key"
+              :class="{ active: group === g.key }" @click="group = g.key"
+            >{{ g.label }}</button>
+          </span>
           <span class="seg">
             <button
               v-for="m in metrics" :key="m.key"
@@ -127,7 +181,7 @@ onMounted(load)
           </span>
         </span>
       </h3>
-      <TrendChart :points="series" :metric="metric" />
+      <TrendChart :points="series" :series="trendSeries" :extra-keys="extraKeys" :metric="metric" />
     </div>
 
     <!-- 明细 -->

@@ -141,6 +141,56 @@ class WebApiTest {
     }
 
     @Test
+    fun `timeseries grouped splits buckets by requested dimension`() {
+        // 趋势图分线：两天 × 两类动作 → 按 (bucket, key) 聚合，桶升序、桶内合计降序
+        val zone = org.dlucxoket.lucatbot.bot.persona.TimeFormat.ZONE
+        val today = LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
+        val yesterday = today - 86_400_000L
+        file.writeText(
+            listOf(
+                """{"epoch":${yesterday + 3_600_000},"ts":"2026-01-01 01:00:00","agent":"ConversationAgent","conversation":"private:1","channel":"文字","model":"m1","calls":1,"in":100,"out":10,"reported":true,"action":"send"}""",
+                """{"epoch":${yesterday + 7_200_000},"ts":"2026-01-01 02:00:00","agent":"ConversationAgent","conversation":"private:1","channel":"文字","model":"m1","calls":1,"in":50,"out":5,"reported":true,"action":"send"}""",
+                """{"epoch":${yesterday + 10_800_000},"ts":"2026-01-01 03:00:00","agent":"ConversationAgent","conversation":"private:1","channel":"文字","model":"m1","calls":1,"in":20,"out":2,"reported":true,"action":"return"}""",
+                """{"epoch":${today + 3_600_000},"ts":"2026-01-02 01:00:00","agent":"ConversationAgent","conversation":"private:2","channel":"文字","model":"m1","calls":1,"in":30,"out":3,"reported":true,"action":"return"}"""
+            ).joinToString("\n") + "\n",
+            Charsets.UTF_8
+        )
+        val fresh = TokenUsageAggregator(JsonlTokenUsageStore(file.absolutePath), summaryEvery = 0)
+
+        // 桶日期按 [TimeFormat.ZONE] 换算（epochDay 除法是 UTC 口径，差一天）
+        val day1 = java.time.Instant.ofEpochMilli(yesterday + 3_600_000).atZone(zone).toLocalDate()
+        val day2 = java.time.Instant.ofEpochMilli(today + 3_600_000).atZone(zone).toLocalDate()
+        mvc(TokenUsageController(fresh))
+            .perform(get("/api/token/timeseries-grouped").param("groupBy", "action").param("bucket", "day"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.length()").value(3))
+            // 桶升序、桶内合计降序：昨天 send(165) → 昨天 return(22) → 今天 return(33)
+            .andExpect(jsonPath("$[0].bucket").value(day1.toString()))
+            .andExpect(jsonPath("$[0].key").value("send"))
+            .andExpect(jsonPath("$[0].calls").value(2))
+            .andExpect(jsonPath("$[0].total").value(165))
+            .andExpect(jsonPath("$[1].key").value("return"))
+            .andExpect(jsonPath("$[1].total").value(22))
+            .andExpect(jsonPath("$[2].bucket").value(day2.toString()))
+            .andExpect(jsonPath("$[2].key").value("return"))
+            .andExpect(jsonPath("$[2].total").value(33))
+
+        // 同一接口换维度即可（会话线）：(昨天, private:1) 与 (今天, private:2) 两桶
+        mvc(TokenUsageController(fresh))
+            .perform(get("/api/token/timeseries-grouped").param("groupBy", "conversation"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.length()").value(2))
+            .andExpect(jsonPath("$[0].key").value("private:1"))
+            .andExpect(jsonPath("$[0].calls").value(3))
+            .andExpect(jsonPath("$[1].key").value("private:2"))
+
+        // 白名单外的维度 → 400（前端只发 action/conversation/agent/model/channel）
+        mvc(TokenUsageController(fresh))
+            .perform(get("/api/token/timeseries-grouped").param("groupBy", "emoji"))
+            .andExpect(status().isBadRequest)
+    }
+
+    @Test
     fun `call detail exposes real request and response while list omits them`() {
         ledger.record(
             "ConversationAgent", "private:123", TokenUsageChannel.TEXT, "m1", 100, 20,

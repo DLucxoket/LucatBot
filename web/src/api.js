@@ -12,6 +12,16 @@ export const fetchSummary = () => getJson('/api/token/summary')
 export const fetchTimeseries = (bucket = 'day', limit = 30) =>
   getJson(`/api/token/timeseries?bucket=${encodeURIComponent(bucket)}&limit=${limit}`)
 
+/**
+ * token 时间轴 × 分类（趋势图分线）：groupBy=action|conversation|agent|model|channel
+ * 返回 [{bucket, key, calls, input, output, total}]——前端按 key 拆线、按 bucket 对齐
+ */
+export const fetchTimeseriesGrouped = (groupBy, bucket = 'day', limit = 30) =>
+  getJson(
+    `/api/token/timeseries-grouped?groupBy=${encodeURIComponent(groupBy)}` +
+      `&bucket=${encodeURIComponent(bucket)}&limit=${limit}`
+  )
+
 /** token 明细：最近 limit 次调用（时间倒序；不含请求/响应正文） */
 export const fetchCalls = (limit = 200) => getJson(`/api/token/calls?limit=${limit}`)
 
