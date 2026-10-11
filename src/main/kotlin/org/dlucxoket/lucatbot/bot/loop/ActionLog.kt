@@ -37,7 +37,8 @@ data class ActionLogEntry(
  *   测试默认 null（纯内存，不污染 data/）
  */
 class ActionLog(
-    private val maxLines: Int = 20,
+    /** prompt 窗口行数——原 20，应主人要求缩到 1/4（每行都随 prompt 重发） */
+    private val maxLines: Int = 5,
     /** 持久化仓库（null = 纯内存）；生产由 LoopConfig 注入 storage.type 对应实现 */
     private val repository: ActionLogRepository? = null
 ) {

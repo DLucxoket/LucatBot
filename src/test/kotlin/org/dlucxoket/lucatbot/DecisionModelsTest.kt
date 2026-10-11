@@ -723,12 +723,15 @@ class ActionLogTest {
     }
 
     @Test
-    fun `keeps only recent 20 lines`() {
+    fun `keeps only recent 5 lines`() {
+        // 窗口 = 原 20 的 1/4（每行都随 prompt 重发，应主人要求瘦身）
         val log = ActionLog()
         repeat(30) { log.append("动作$it") }
-        assertEquals(20, log.size())
+        assertEquals(5, log.size())
         val dump = log.dump()
         assertFalse(dump.contains("动作0"))
+        assertFalse(dump.contains("动作24"), "第 6 新之前的都被滚出窗口")
+        assertTrue(dump.contains("动作25"), "只保留最近 5 条")
         assertTrue(dump.contains("动作29"))
     }
 

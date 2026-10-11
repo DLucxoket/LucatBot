@@ -1016,18 +1016,19 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `prompt lists all tool names permanently`() {
-        // 工具名固定在 prompt 上（不用先 list_tools 才知道有啥）
+    fun `prompt does not embed tool name list permanently`() {
+        // 应主人要求：工具名不再常驻 prompt（目录也不再整个会话常驻）——
+        // 要用工具先 list_tools，目录只在连续工具串期间注入
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val (controller, _, _) = buildController(llm)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
         val prompt = llm.prompts.first()
-        assertTrue(prompt.contains("可用工具（固定名单）"), "固定名单段存在：$prompt")
-        assertTrue(prompt.contains("SwitchConversationTool") && prompt.contains("FetchUrlTool"),
-            "两个新工具在常驻名单里：$prompt")
+        assertFalse(prompt.contains("可用工具（固定名单）"), "固定名单段已移除：$prompt")
+        assertFalse(prompt.contains("SwitchConversationTool"), "工具名不再常驻 prompt：$prompt")
         assertTrue(prompt.contains("目录里没有的工具不存在"), "仍以目录为准的护栏")
+        assertTrue(prompt.contains("先 list_tools"), "引导按需获取目录：$prompt")
     }
 
     @Test

@@ -321,7 +321,7 @@ class MessageListController(
      * 改成跨主体概览；具体某个人的细节由 LLM 经 MemoryQueryTool 关键词搜。
      */
     private fun buildShortTermMemory(): String =
-        memoryService.getMemoryOverview(primary = null, otherLimit = 12)
+        memoryService.getMemoryOverview(primary = null, otherLimit = 3)
 
     /**
      * 列表行时间——今日 `HH:mm`、跨天 `MM-dd HH:mm`（紧凑）。

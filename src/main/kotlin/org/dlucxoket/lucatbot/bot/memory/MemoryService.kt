@@ -183,11 +183,13 @@ class MemoryService(
      */
     fun getMemoryOverview(
         primary: MemorySubject? = null,
-        factLimit: Int = 8,
-        opinionLimit: Int = 5,
-        eventLimit: Int = 8,
-        relationLimit: Int = 5,
-        otherLimit: Int = 10
+        // 各桶上限 = 原值的 1/4（8/5/8/5/10 → 2/1/2/1/2，应主人要求瘦身）——
+        // 概览只当「有什么」的索引，细节靠 MemoryQueryTool 关键词搜
+        factLimit: Int = 2,
+        opinionLimit: Int = 1,
+        eventLimit: Int = 2,
+        relationLimit: Int = 1,
+        otherLimit: Int = 2
     ): String {
         val primaryBlock = primary
             ?.let { getMemoriesOf(it) }

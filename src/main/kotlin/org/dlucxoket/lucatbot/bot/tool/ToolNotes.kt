@@ -25,11 +25,10 @@ class ToolNotes(
     /**
      * 目录 + 执行结果的总字符预算（超出淘汰最旧结果）
      *
-     * 16_000 → **10_000**（P1 token 精简）：目录常驻约 3k 字符（18 个工具的
-     * 描述+参数实测 2970），余量留 1~2 条结果——单条结果本身也从 4_000 收到
-     * 3_000（见 `ToolCatalog.maxResultChars`）。这段每轮都注入 user 消息，
-     * 少 6k 字符 ≈ 每轮省 ~4k token；代价是第 3 条以后的结果更早淘汰、
-     * 需要时再查一次（重查一轮的成本也不高于常驻 6k）
+     * 16_000 → **10_000**（P1 token 精简）：单条结果从 4_000 收到 3_000
+     * （见 `ToolCatalog.maxResultChars`）。目录只在**连续工具串期间**注入
+     * （[resetStreak] 即丢，不再常驻整个会话），余量基本都是执行结果——
+     * 这段每轮都注入 user 消息，需要时再查一次的成本不高于常驻
      */
     private val maxTotalChars: Int = 10_000,
     /** 连续**调用错误**硬上限（正常工具轮不限；成功一次即清零） */
@@ -58,6 +57,9 @@ class ToolNotes(
     fun resetStreak() {
         consecutiveSteps = 0
         errorStreak = 0
+        // 目录**只在连续工具串期间存在**（拿到后的下一轮要用），非工具决策即丢——
+        // 不再常驻整个会话（实盘：一次 list_tools 后 ~3k 字符目录每轮都重发）
+        entries.removeAll { it.startsWith(CATALOG_PREFIX) }
     }
 
     /** 记录一次目录获取：同时只保留一份目录（重复获取覆盖旧条目） */
@@ -102,9 +104,9 @@ class ToolNotes(
 
     private fun trimToBudget() {
         while (entries.sumOf { it.length } > maxTotalChars) {
-            // 目录常驻（至多一份），优先淘汰最旧的执行结果
+            // 优先淘汰最旧的执行结果；只剩目录时豁免（单份目录有界、且只在工具串期间）
             val oldestResult = entries.indexOfFirst { !it.startsWith(CATALOG_PREFIX) }
-            if (oldestResult < 0) break  // 只剩目录也超预算：豁免保留（单份目录有界）
+            if (oldestResult < 0) break
             entries.removeAt(oldestResult)
         }
     }

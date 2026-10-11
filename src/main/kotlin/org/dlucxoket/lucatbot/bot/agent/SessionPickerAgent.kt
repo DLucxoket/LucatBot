@@ -57,12 +57,6 @@ class SessionPickerAgent(
      * 不变的输出格式/约束段在前，前缀每轮稳定。
      */
     private fun buildSystemPrompt(input: SessionPickerRequest): String {
-        val fixedToolNames = if (input.toolNames.isEmpty()) {
-            ""
-        } else {
-            "。**可用工具（固定名单）**：${input.toolNames.joinToString("、")}" +
-                "——名单常驻可见，目录里没有的工具不存在；要参数说明再 list_tools"
-        }
         return """
             你是一个正在使用即时聊天工具的用户，现在你需要选择其中一个会话进行查看
             ## 你的输出格式（严格遵循）
@@ -76,7 +70,7 @@ class SessionPickerAgent(
 
             - open_conversation：打开一个会话。params：{"type": "private/group/proactive", "target": "ID"}
             - idle：不看任何会话，去空闲。params：{"seconds": 空闲秒数}——**睡多久由你决定**（按心情、时间、有没有事判断；600~7200 秒 = 10 分钟~2 小时，超范围钳到边界）：心情差/犯困、短期没人找 → 3600~7200；心情好、可能很快有人回话 → 600~1800。省略 params = 按心情随机兜底（能判断就自己给）
-            - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）${fixedToolNames}
+            - list_tools：查看工具目录（每个工具含 名字/功能/何时使用/参数）。params：{"query": "关键词"}（query 可省略 = 全部工具）——**工具名不常驻 prompt，要用工具有多陌生都先 list_tools**
             - tool：调用一个工具。params：{"name": "工具名", "input": { ...参数，格式见目录里的「参数」... }}
             - reason 是内心动机（不会发给用户）
             - "todo_add"（之后要做的事）/ "todo_done"（清单里的事做完了）是可选的 JSON 顶层字段，普通扫列表不要往里写，可与其他 action 同时出现；要标什么时候做就同给 `"todo_add_time": "yyyy-MM-dd HH:mm"`（预计执行，可省）
