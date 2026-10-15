@@ -2,6 +2,7 @@ package org.dlucxoket.lucatbot.bot.storage.mysql
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import org.dlucxoket.lucatbot.bot.chathistory.ChatHistoryFold
 import org.dlucxoket.lucatbot.bot.chathistory.ChatMessageRecord
 import org.dlucxoket.lucatbot.bot.llm.JsonlTokenUsageStore
 import org.dlucxoket.lucatbot.bot.memory.MemoryItem
@@ -20,6 +21,8 @@ import java.sql.ResultSet
  * @param importFromJson 是否在**每次启动**时把 data 目录的 json 行导入本库——
  *        只插缺失的行（`INSERT IGNORE`，已存在不覆盖）：json 是迁移来源，
  *        MySQL 是权威源，旧 json 不会把库里已更新的行改回去；
+ *        聊天记录额外**孪生感知**（库里已有同一物理消息的行就不再补，
+ *        防与启动清理的删除互为逆操作地拉锯，见 [planChatImport]）；
  *        生产开启；测试按需关闭
  */
 data class MySqlConfig(
@@ -66,7 +69,8 @@ data class MySqlConfig(
  *     在重建后 id 不变、自动恢复有效，无需搬动）
  * 3. 库级连接建表（`IF NOT EXISTS`，含用量明细 `token_usage`）→ 回填旧结构数据
  * 4. [MySqlConfig.importFromJson] 开启时，**每次启动**把 json 中缺失的行导入
- *    （`INSERT IGNORE`——已存在的行不覆盖，MySQL 为权威源）
+ *    （`INSERT IGNORE`——已存在的行不覆盖，MySQL 为权威源；聊天记录另按
+ *    [planChatImport] 孪生感知，已入库的物理消息不再回灌）
  */
 class MySqlStorage(private val config: MySqlConfig) {
 
@@ -400,27 +404,18 @@ class MySqlStorage(private val config: MySqlConfig) {
     }
 
     // ------------------------------------------------------------------
-    // json → 本库同步（每次启动；只补缺失行，已存在不覆盖）
+    // json → 本库同步（每次启动；聊天记录孪生感知，其余只补缺失行）
     // ------------------------------------------------------------------
 
     /**
      * 把 data 目录 json 里的行导入本库
      *
-     * 语义：**只插缺失**（`INSERT IGNORE` 主键冲突即跳过）——json 是来源、
-     * 本库是权威：库里已更新的行（如待办已勾完成）不会被旧 json 改回去；
-     * json 里有而库里没有的行（历史存量/别处产出）每次启动都会补进来。
+     * 聊天记录走**孪生感知**的 [importChatHistory]；其余表语义为**只插缺失**
+     * （`INSERT IGNORE` 主键冲突即跳过）——json 是来源、本库是权威：
+     * 库里已更新的行（如待办已勾完成）不会被旧 json 改回去。
      */
     private fun importFromJson() {
-        importFile<ChatMessageRecord>("聊天记录", "data/chat-history.json",
-            MySqlChatHistoryRepository.INSERT_IGNORE) { r ->
-            arrayOf(
-                r.id, r.conversationId, r.senderId, r.senderName, r.senderNickname,
-                r.imageUrls?.let { mapper.writeValueAsString(it) },
-                r.memorized,
-                r.content,
-                r.messageType.name, MySqlTime.of(r.timestamp), r.messageId, r.isFromBot
-            )
-        }
+        importChatHistory()
         // 记忆走仓库（行 + 关键词关联同事务）
         readJson<MemoryItem>("data/memories.json", "记忆")
             ?.let { rows ->
@@ -436,6 +431,45 @@ class MySqlStorage(private val config: MySqlConfig) {
         }
         importTokenUsageJsonl()
     }
+
+    /**
+     * 聊天记录 json → 本库（**孪生感知**：库里已有同一物理消息的行就不再补）
+     *
+     * 两层判定（[planChatImport]，纯函数可单测）：
+     * - 按 id 已存在 → 跳过（`INSERT IGNORE` 兜底，库里已更新的行不被旧 json 覆盖）
+     * - id 缺失、但库里已有**孪生行**（同发送者 + 10s + 同内容，[ChatHistoryFold.isTwin]）
+     *   → 也跳过。这条是防拉锯的关键：启动清理（`collapseStoredTwins`）删的正是
+     *   这些「与库内运行时行孪生」的 json 行——若 import 无脑回灌，就形成
+     *   「import 补 → 清理删」互为逆操作，每次启动固定 31 行地拉锯并重复打日志。
+     *   迁移源 json 自身的折叠（`collapseSourceJsonTwins`）救不了这种行：孪生
+     *   幸存方是库内运行时行（json 里没有），单看 json 永远是孤行、折叠数为 0。
+     *
+     * 跳过不丢数据：孪生存行即同一条消息已在库（prompt 读到的内容不变）；
+     * json 原样保留作重建源——全新空库无孪生，全量照进。
+     */
+    private fun importChatHistory() {
+        val rows = readJson<ChatMessageRecord>("data/chat-history.json", "聊天记录") ?: return
+        val plan = planChatImport(rows, MySqlChatHistoryRepository(this).findAll())
+        if (plan.toInsert.isNotEmpty()) {
+            batchUpdate(
+                MySqlChatHistoryRepository.INSERT_IGNORE,
+                plan.toInsert.map { chatHistoryParams(it) }
+            )
+        }
+        log.info(
+            "从 data/chat-history.json 同步聊天记录：新插入 {} 条、已存在 {} 条、孪生跳过 {} 条（共 {}）",
+            plan.toInsert.size, plan.existing, plan.twinSkipped, rows.size
+        )
+    }
+
+    /** chat_history 插入参数（json 同步与 importIgnore 复用，防列序漂移） */
+    private fun chatHistoryParams(r: ChatMessageRecord): Array<Any?> = arrayOf(
+        r.id, r.conversationId, r.senderId, r.senderName, r.senderNickname,
+        r.imageUrls?.let { mapper.writeValueAsString(it) },
+        r.memorized,
+        r.content,
+        r.messageType.name, MySqlTime.of(r.timestamp), r.messageId, r.isFromBot
+    )
 
     /**
      * token 用量 jsonl → `token_usage`（**表空时整份导入，只跑一次**）
@@ -612,4 +646,48 @@ class MySqlStorage(private val config: MySqlConfig) {
             """.trimIndent()
         )
     }
+}
+
+/** 聊天记录 json 导入计划（见 [planChatImport]） */
+internal data class ChatImportPlan(
+    /** 真正要插入的行：id 不在库、且库里没有同一物理消息的孪生行 */
+    val toInsert: List<ChatMessageRecord>,
+    /** 按 id 已存在于库中而跳过的行数 */
+    val existing: Int,
+    /** id 缺失但库里已有孪生行而跳过的行数（防「import 补 → 启动清理删」拉锯） */
+    val twinSkipped: Int
+)
+
+/**
+ * 孪生感知的 json 导入筛选（纯函数——规则与启动清理同一套，可脱离 MySQL 单测）
+ *
+ * 判定顺序对每条 json 行：
+ * 1. id 已在库 → [ChatImportPlan.existing]（不覆盖语义，`INSERT IGNORE` 仍兜底）
+ * 2. id 不在库但库里有 [ChatHistoryFold.isTwin] 的行（同会话 + 10s + 同内容 +
+ *    id 形态互补）→ [ChatImportPlan.twinSkipped]——该物理消息已入库，
+ *    而它正是启动清理会删的行，回灌会造成每次启动的删/插拉锯
+ * 3. 其余 → [ChatImportPlan.toInsert]（真实新行才补）
+ *
+ * 时间比较先行短路（同会话绝大多数行相距远超 10s，不进 isTwin 的正则归一化）。
+ */
+internal fun planChatImport(
+    jsonRows: List<ChatMessageRecord>,
+    dbRows: List<ChatMessageRecord>
+): ChatImportPlan {
+    val dbIds = dbRows.mapTo(HashSet()) { it.id }
+    val byConv = dbRows.groupBy { it.conversationId }
+    var existing = 0
+    var twinSkipped = 0
+    val toInsert = ArrayList<ChatMessageRecord>(jsonRows.size)
+    for (r in jsonRows) {
+        when {
+            r.id in dbIds -> existing++
+            byConv[r.conversationId].orEmpty().any { db ->
+                kotlin.math.abs(db.timestamp - r.timestamp) <= ChatHistoryFold.DEFAULT_WINDOW_MS &&
+                    ChatHistoryFold.isTwin(db, r)
+            } -> twinSkipped++
+            else -> toInsert += r
+        }
+    }
+    return ChatImportPlan(toInsert, existing, twinSkipped)
 }

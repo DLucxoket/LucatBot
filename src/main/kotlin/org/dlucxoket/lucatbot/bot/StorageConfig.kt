@@ -124,9 +124,15 @@ class StorageConfig(
      * 启动清理：把聊天记录存储层的孪生双份行合并为一条（仅 mysql 模式）
      *
      * 实时/回执行 × 爬楼 `hist:` 行的存量双份一直双倍膨胀——启动时用
-     * [ChatHistoryFold] 规则收敛（id 以 `msg:` 为准）；随后折叠迁移源
-     * `data/chat-history.json`，否则下次启动 import（INSERT IGNORE 按 id）
-     * 会把本次从库里清掉的行再插回来（ping-pong）。
+     * [ChatHistoryFold] 规则收敛（id 以 `msg:` 为准）。
+     *
+     * **与 json 同步的配合**（曾出过每次启动固定 31 行的删/插拉锯）：
+     * 被清理删掉的行若还躺在迁移源 `data/chat-history.json` 里，下次启动
+     * 的「补缺失」导入会原样灌回来、清理再删——互为逆操作永远收敛不了；
+     * 且 json 自身折叠救不了：孪生幸存方是库内运行时行、json 里只有孤行，
+     * 折叠数恒为 0。回灌已由 **json 导入侧孪生感知**阻断（`planChatImport`：
+     * 库里已有同一物理消息的行就不再补）。这里随后折叠迁移源 json 只剩一个
+     * 兜底用途——清掉 json **内部**的孪生对（重建空库时少灌双份）。
      *
      * json 模式（含 @SpringBootTest 上下文）不跑：避免触碰正在活跃写入的
      * 真实 json 文件。清理失败只 warn，绝不阻塞启动。
@@ -140,7 +146,7 @@ class StorageConfig(
         }.onFailure { log.warn("聊天记录双份行清理失败（跳过，不影响启动）: {}", it.message) }
     }
 
-    /** 折叠迁移源 data/chat-history.json 里的孪生双份（防下次 import 回灌已清理的行） */
+    /** 折叠迁移源 data/chat-history.json 里的孪生双份（重建空库少灌双份；回灌拉锯已由导入侧孪生感知阻断） */
     private fun collapseSourceJsonTwins() {
         val file = java.io.File("data/chat-history.json")
         if (!file.exists()) return
