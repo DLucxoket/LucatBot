@@ -107,16 +107,17 @@ class MessageListControllerTest {
     }
 
     @Test
-    fun `boot round views the message list even when there is nothing to decide`() {
-        // 刚启动默认先真实看一遍消息列表：空转短路不吞掉这第一轮
-        // （主循环首轮传 forceView=true；首轮空闲时长由 LLM 定，之后恢复短路）
+    fun `default view request bypasses short circuit once then rearms`() {
+        // NapCat 连上 → requestDefaultView()：下一轮必须真实看一遍消息列表
+        // （空转短路不吞掉这「连上先扫一眼」），看完恢复短路
         val llm = FakeLLM(mutableListOf("""{"action":"idle"}"""))
         val (controller, _) = buildController(llm, shortCircuitWhenIdle = true)
 
-        assertNull(controller.pickSession(fromIdleWake = false, forceView = true), "启动首轮看完仍可去空闲")
-        assertEquals(1, llm.prompts.size, "启动首轮必须真实查看消息列表（短路不生效）")
+        controller.requestDefaultView()
+        assertNull(controller.pickSession(fromIdleWake = false), "看完仍可去空闲")
+        assertEquals(1, llm.prompts.size, "连上后必须真实查看消息列表（短路不生效）")
 
-        assertNull(controller.pickSession(fromIdleWake = false), "首轮之后恢复空转短路")
+        assertNull(controller.pickSession(fromIdleWake = false), "查看完恢复空转短路")
         assertEquals(1, llm.prompts.size, "后续空转仍不调 LLM")
     }
 

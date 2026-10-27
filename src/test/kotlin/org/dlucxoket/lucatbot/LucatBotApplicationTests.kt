@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot
 
+import com.mikuac.shiro.core.CoreEvent
+import org.dlucxoket.lucatbot.adapter.onebot.NapCatOnlineHook
 import org.dlucxoket.lucatbot.adapter.web.TokenUsageController
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.loop.ConversationController
@@ -7,6 +9,7 @@ import org.dlucxoket.lucatbot.bot.loop.MessageListController
 import org.dlucxoket.lucatbot.bot.loop.NotificationDispatcher
 import org.dlucxoket.lucatbot.bot.loop.ProgramShutdown
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -22,6 +25,21 @@ class LucatBotApplicationTests {
 
     @Test
     fun contextLoads() {
+    }
+
+    /**
+     * NapCat 连接钩子的装配守卫——`@Primary` 必须接管 Shiro 的 [CoreEvent]
+     *
+     * Shiro 连接链路（`handleFirstConnect → coreEvent.online`）按类型注入 CoreEvent，
+     * 而它自带的是**空实现**：若 @Primary 接管失败，「连上默认看一眼消息列表 +
+     * 重建未读」会静默不生效（容器照样启动、连接照常成功，没有任何报错）。
+     */
+    @Test
+    fun `napcat online hook takes over shiro core event`() {
+        val coreEvent = context.getBean(CoreEvent::class.java)
+
+        assertTrue(coreEvent is NapCatOnlineHook, "CoreEvent 必须是 NapCatOnlineHook（@Primary 接管）")
+        assertSame(context.getBean(NapCatOnlineHook::class.java), coreEvent, "按类型取到的应是同一个钩子实例")
     }
 
     /**

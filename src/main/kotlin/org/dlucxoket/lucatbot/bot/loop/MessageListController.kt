@@ -78,23 +78,44 @@ class MessageListController(
     fun consumeIdleSeconds(): Int = lastIdleSeconds.also { lastIdleSeconds = 0 }
 
     /**
+     * 「NapCat 连上 → 默认先看一眼消息列表」的待执行置位
+     *
+     * 在线钩子（[org.dlucxoket.lucatbot.adapter.onebot.NapCatOnlineHook] 经
+     * `MainLoopController.requestViewOnBotOnline`）写、下一轮 [pickSession] 消费——
+     * **跨线程**（Shiro 连接线程 → 主循环线程），故 @Volatile。
+     */
+    @Volatile
+    private var defaultViewPending = false
+
+    /**
+     * 请求下一轮 pick **默认先真实查看一遍消息列表**（不走空转短路）
+     *
+     * NapCat（WS）连上时调用：连上先扫一眼列表是默认行为；调用方顺带
+     * 唤醒空闲中的主循环，下一轮 pick 即看。
+     */
+    fun requestDefaultView() {
+        defaultViewPending = true
+    }
+
+    /**
      * 走一轮「看消息列表」决策（可含多步工具调用）
      *
      * @param fromIdleWake 是否是空闲唤醒（拼入可主动找的人）
-     * @param forceView **刚启动首轮**（主循环传入）：默认先真实看一遍消息列表，
-     *   不走空转短路——冷启动多半是空列表（未读要等首条消息才按水位重建），
-     *   但「上线先扫一眼列表」是默认行为，首轮空闲时长也交 LLM 定
      * @return 选中的会话；null = 去空闲
      */
-    fun pickSession(fromIdleWake: Boolean, forceView: Boolean = false): SessionPick? {
+    fun pickSession(fromIdleWake: Boolean): SessionPick? {
         lastIdleSeconds = 0 // 本轮重新记录（选中会话/工具超限兜底 → 保持 0 = 随机兜底）
+        // 「连上默认看一眼」置位消费——**先消费再决策**：查看失败不重试，
+        // 避免 LLM 故障时每轮都被强制真实查看、困在报错循环里
+        val forceView = defaultViewPending
+        defaultViewPending = false
         val sessions = collectSessions()
         val unreadCount = sessions.sumOf { it.unreadCount }
         val candidates = if (fromIdleWake) collectProactiveCandidates() else emptyList()
 
         // P1 空转短路：没未读、没待办、主动候选也没到评估间隔 → 直接去空闲。
         // 这种情况下问 LLM 的结论必然也是 idle——省掉一整轮（≈5.5k token）。
-        // forceView（刚启动首轮）例外：默认先真实看一遍消息列表再决定
+        // forceView（NapCat 连上请求的默认查看）例外：先真实看一遍消息列表再决定
         val proactiveDue = candidates.isNotEmpty() &&
             System.currentTimeMillis() - lastProactiveEvaluatedAt >= proactiveEvaluateEveryMs
         if (shortCircuitWhenIdle && !forceView && unreadCount == 0 && todoService.pending().isEmpty() && !proactiveDue) {

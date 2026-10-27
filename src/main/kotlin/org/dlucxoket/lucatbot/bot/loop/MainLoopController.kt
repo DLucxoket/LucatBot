@@ -18,9 +18,10 @@ import org.springframework.stereotype.Component
  * 原设计由 MainPlugin.onAnyMessage 首次触发，WS 连接后若一直无消息主循环
  * 永不启动，ProactiveScheduler（依赖 isIdleSleeping）也叫不醒它，主动找人
  * 在安静时段完全失效（实盘：connected 与主循环启动隔 86 秒）。
- * **刚启动默认先真实查看一轮消息列表**（`forceView`：冷启动多半是空列表也照看、
- * 不走空转短路，首轮空闲时长由 LLM 定），首轮之后恢复短路；shiroBot 未绑定时
- * 发送有「Bot 未绑定」护栏。`mainloop.auto-start=false` 可关闭（Spring 冒烟测试用，
+ * **NapCat 连上默认先真实查看一轮消息列表**（在线钩子 `NapCatOnlineHook` 经
+ * [requestViewOnBotOnline] 置位强制查看 + 唤醒空闲，看完恢复短路）；连接前的
+ * 首轮照常空转短路去空闲。shiroBot 未绑定时发送有「Bot 未绑定」护栏。
+ * `mainloop.auto-start=false` 可关闭（Spring 冒烟测试用，
  * 避免测试上下文里真起循环打 LLM）。
  */
 @Component
@@ -76,13 +77,27 @@ class MainLoopController(
 
     /**
      * 空闲唤醒信号：**私聊 / @我 / @全体 / 回复我** 等冲我来的消息缩短休眠
-     * （最少再等 5s）；普通群聊消息不发此信号——只攒未读等自然醒来
+     * （最少再等 5s）；普通群聊消息不发此信号——只攒未读等自然醒来。
+     * [requestViewOnBotOnline] 的「连上默认看一眼」也复用此信号
      */
     fun notifyUrgent() {
         synchronized(lock) {
             wakeRequested = true
             lock.notifyAll()
         }
+    }
+
+    /**
+     * NapCat（WS）连上——请求主循环**默认先真实查看一遍消息列表**：
+     * 置位消息列表的强制查看（[MessageListController.requestDefaultView]）
+     * + 复用空闲唤醒信号叫醒主循环。
+     *
+     * 在线钩子（`NapCatOnlineHook`，Shiro 连接线程）调用：主循环若在空闲
+     * 会被唤醒、下一轮 pick 即看；正在会话中/还没启动则等下一次进消息列表时生效。
+     */
+    fun requestViewOnBotOnline() {
+        messageListController.requestDefaultView()
+        notifyUrgent()
     }
 
     fun stop() {
@@ -151,23 +166,14 @@ class MainLoopController(
 
     private fun runLoop() {
         var fromIdle = false
-        // 刚启动首轮：默认先真实查看一遍消息列表（forceView，不走空转短路）——
-        // 「上线先扫一眼列表」是默认行为，首轮空闲时长也交 LLM 定
-        var firstRound = true
         while (running) {
             try {
                 when (val state = lucatBot.state) {
                     is LucatBot.State.ViewingConversations -> {
                         // pick + 会话段持锁（与通知跳转互斥）；idle 休眠与会话间歇在锁外
+                        // 「连上默认看一眼」的强制查看由 MessageListController 内部置位/消费
                         val pick = withSessionGate {
-                            // 首轮标记先消费再调用：启动查看失败不重试，
-                            // 避免 LLM 故障时每轮都被强制进真实查看、困在报错循环里
-                            val forceView = firstRound
-                            firstRound = false
-                            val p = messageListController.pickSession(
-                                fromIdleWake = fromIdle,
-                                forceView = forceView
-                            )
+                            val p = messageListController.pickSession(fromIdleWake = fromIdle)
                             if (p != null) {
                                 if (p.conversationType ==
                                     org.dlucxoket.lucatbot.bot.agent.data.SessionPickType.PROACTIVE

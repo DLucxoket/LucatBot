@@ -72,7 +72,8 @@ internal class MainPlugin: BotPlugin() {
             lucatBot.shiroBot = bot
             bindTools(bot)
             mainLoopController.startIfNeeded()
-            // 重启后首次拿到 selfId：按已读水位把重启前没看的消息灌回未读（幂等）
+            // 兜底：正常在 NapCatOnlineHook.online 连接时已按水位重建未读
+            // （selfId 已知处，幂等一次；此处重复调用无害）
             readStateService.rebuildUnread(lucatBot, bot.selfId)
 
             // 戳一戳检测（模拟真人被戳了会戳回去）

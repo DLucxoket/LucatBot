@@ -19,7 +19,8 @@ import org.springframework.stereotype.Component
  *   [maxPerConversation] 条（防爆）
  *
  * isAtMe 解析按 describe 文本形态（`@昵称(QQ)` / `@QQ`），故重建必须在
- * bot 连接、selfId 已知之后触发（MainPlugin 首条消息处，幂等一次）。
+ * bot 连接、selfId 已知之后触发（[org.dlucxoket.lucatbot.adapter.onebot.NapCatOnlineHook]
+ * 连接即重建为主、MainPlugin 首条消息处兜底，幂等一次）。
  */
 @Component
 class ReadStateService(
@@ -48,7 +49,7 @@ class ReadStateService(
     }
 
     /**
-     * 重启后按水位重建未读（幂等；[MainPlugin] 首条消息 selfId 已知后调用）
+     * 重启后按水位重建未读（幂等；NapCatOnlineHook.online 连接即调，MainPlugin 首条消息兜底）
      *
      * 水位之后的消息 = 重启前没看的 → 灌回 LucatBot 未读队列（仅当队列为空，
      * 不覆盖运行中实时积累的未读）。
