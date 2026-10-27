@@ -18,8 +18,9 @@ import org.springframework.stereotype.Component
  * 原设计由 MainPlugin.onAnyMessage 首次触发，WS 连接后若一直无消息主循环
  * 永不启动，ProactiveScheduler（依赖 isIdleSleeping）也叫不醒它，主动找人
  * 在安静时段完全失效（实盘：connected 与主循环启动隔 86 秒）。
- * 冷启动通常无未读 → 首轮 pick 后直接 idle；shiroBot 未绑定时发送有
- * 「Bot 未绑定」护栏。`mainloop.auto-start=false` 可关闭（Spring 冒烟测试用，
+ * **刚启动默认先真实查看一轮消息列表**（`forceView`：冷启动多半是空列表也照看、
+ * 不走空转短路，首轮空闲时长由 LLM 定），首轮之后恢复短路；shiroBot 未绑定时
+ * 发送有「Bot 未绑定」护栏。`mainloop.auto-start=false` 可关闭（Spring 冒烟测试用，
  * 避免测试上下文里真起循环打 LLM）。
  */
 @Component
@@ -150,13 +151,23 @@ class MainLoopController(
 
     private fun runLoop() {
         var fromIdle = false
+        // 刚启动首轮：默认先真实查看一遍消息列表（forceView，不走空转短路）——
+        // 「上线先扫一眼列表」是默认行为，首轮空闲时长也交 LLM 定
+        var firstRound = true
         while (running) {
             try {
                 when (val state = lucatBot.state) {
                     is LucatBot.State.ViewingConversations -> {
                         // pick + 会话段持锁（与通知跳转互斥）；idle 休眠与会话间歇在锁外
                         val pick = withSessionGate {
-                            val p = messageListController.pickSession(fromIdleWake = fromIdle)
+                            // 首轮标记先消费再调用：启动查看失败不重试，
+                            // 避免 LLM 故障时每轮都被强制进真实查看、困在报错循环里
+                            val forceView = firstRound
+                            firstRound = false
+                            val p = messageListController.pickSession(
+                                fromIdleWake = fromIdle,
+                                forceView = forceView
+                            )
                             if (p != null) {
                                 if (p.conversationType ==
                                     org.dlucxoket.lucatbot.bot.agent.data.SessionPickType.PROACTIVE

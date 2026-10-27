@@ -81,19 +81,23 @@ class MessageListController(
      * 走一轮「看消息列表」决策（可含多步工具调用）
      *
      * @param fromIdleWake 是否是空闲唤醒（拼入可主动找的人）
+     * @param forceView **刚启动首轮**（主循环传入）：默认先真实看一遍消息列表，
+     *   不走空转短路——冷启动多半是空列表（未读要等首条消息才按水位重建），
+     *   但「上线先扫一眼列表」是默认行为，首轮空闲时长也交 LLM 定
      * @return 选中的会话；null = 去空闲
      */
-    fun pickSession(fromIdleWake: Boolean): SessionPick? {
+    fun pickSession(fromIdleWake: Boolean, forceView: Boolean = false): SessionPick? {
         lastIdleSeconds = 0 // 本轮重新记录（选中会话/工具超限兜底 → 保持 0 = 随机兜底）
         val sessions = collectSessions()
         val unreadCount = sessions.sumOf { it.unreadCount }
         val candidates = if (fromIdleWake) collectProactiveCandidates() else emptyList()
 
         // P1 空转短路：没未读、没待办、主动候选也没到评估间隔 → 直接去空闲。
-        // 这种情况下问 LLM 的结论必然也是 idle——省掉一整轮（≈5.5k token）
+        // 这种情况下问 LLM 的结论必然也是 idle——省掉一整轮（≈5.5k token）。
+        // forceView（刚启动首轮）例外：默认先真实看一遍消息列表再决定
         val proactiveDue = candidates.isNotEmpty() &&
             System.currentTimeMillis() - lastProactiveEvaluatedAt >= proactiveEvaluateEveryMs
-        if (shortCircuitWhenIdle && unreadCount == 0 && todoService.pending().isEmpty() && !proactiveDue) {
+        if (shortCircuitWhenIdle && !forceView && unreadCount == 0 && todoService.pending().isEmpty() && !proactiveDue) {
             log.info(
                 "消息列表空转（未读 0、待办 0、主动候选{}）→ 短路去空闲，不调 LLM",
                 if (candidates.isEmpty()) "无" else "未到评估间隔"
