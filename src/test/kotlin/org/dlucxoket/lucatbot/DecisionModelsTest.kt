@@ -667,6 +667,55 @@ class LlmJsonTest {
     }
 
     @Test
+    fun `stray quote plus zero width space in text no longer kills the round`() {
+        // 实盘 01:06：模型想在正文里带 `"` 没转义、还夹了零宽空格 → 字符串提前闭合，
+        // 整轮解析作废兜底退出（这条「自嘲收场」的消息根本没发出去）
+        val raw = "{\n" +
+            "\"action\": \"send\",\n" +
+            "\"params\": {\n" +
+            "  \"content\": [\n" +
+            "    {\"delay\": 3, \"members\": [{\"type\": \"text\", \"text\": \"行行行，我自作多情了，本来也没有\"\u200B\"}]}\n" +
+            "  ]\n" +
+            "},\n" +
+            "\"reason\": \"自嘲收场\"\n" +
+            "}"
+        val node = LlmJson.parseLenient(raw)!!
+        val text = node.get("params").get("content").get(0).get("members").get(0).get("text").asText()
+        assertEquals("行行行，我自作多情了，本来也没有\"", text, "裸引号转义进正文、零宽空格剔除")
+    }
+
+    @Test
+    fun `invisible chars in structural positions are stripped`() {
+        val node = LlmJson.parseLenient("{\u200B\"action\": \"return\",\u202E\"reason\": \"正常\"}")!!
+        assertEquals("return", node.get("action").asText())
+        assertEquals("正常", node.get("reason").asText(), "结构位的零宽/双向控制符剔除后照常解析")
+    }
+
+    @Test
+    fun `value text containing quoted colon is escaped not treated as key close`() {
+        val node = LlmJson.parseLenient(
+            """{"action": "send", "params": {"content": [{"members": [{"type": "text", "text": "他说:"别"，行"}]}]}}"""
+        )!!
+        val text = node.get("params").get("content").get(0).get("members").get(0).get("text").asText()
+        assertEquals("""他说:"别"，行""", text, "值串里的引号+冒号按正文转义，不误判成键闭合")
+    }
+
+    @Test
+    fun `escapeStrayQuotes is identity on valid json`() {
+        val ok = """{"a": "x", "b": ["y", {"c": "他说:\"这样\"，行"}], "他说": "别"}"""
+        assertEquals(ok, LlmJson.escapeStrayQuotes(ok), "合法 JSON 必须原样（含转义引号与中文键）")
+    }
+
+    @Test
+    fun `ConversationDecision survives stray quote payload instead of falling back`() {
+        val raw = "{\"action\": \"send\", \"params\": {\"content\": [{\"delay\": 3, " +
+            "\"members\": [{\"type\": \"text\", \"text\": \"行行行，本来也没有\"\u200B\"}]}]}}"
+        val d = ConversationDecision.parse(raw)
+        assertEquals(ConversationAction.SEND, d.action, "修复后照常取到动作")
+        assertFalse(d.isFallback, "裸引号修复后不再兜底退出")
+    }
+
+    @Test
     fun `toolCallEnvelope returns null for plain output`() {
         // knownActions 词表参数化（词表单一源自枚举伴生，LlmJson 不再自带副本）
         assertNull(

@@ -38,13 +38,75 @@ object LlmJson {
     private val STRAY_EQ = Regex(""":\s*=""")
 
     /**
-     * 逐级容错解析：原文 → 清洗手误（[STRAY_EQ]）→ 补缺尾闭合（[repairJson]）→ 仍失败 null
+     * LLM 偶发夹带的不可见格式字符：零宽空格/空隙连接符、双向标记、分词连接符、
+     * BOM——落在 JSON 结构位会让 Jackson 直接拒收（实盘 01:06 的零宽空格就夹在
+     * 两个引号中间），落在正文里也是发出去的隐形垃圾。保留 U+200D（emoji ZWJ 序列有意义）。
+     */
+    private val INVISIBLE = Regex("[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\uFEFF]")
+
+    /**
+     * 逐级容错解析：原文 → 去不可见字符 + 清洗手误（[STRAY_EQ]）→ 补缺尾闭合
+     * （[repairJson]）→ 裸引号修复（[escapeStrayQuotes]）→ 仍失败 null
      *
-     * 模型偶发的手误（多一个 =、尾巴写丢）不值得让整轮决策作废兜底退出。
+     * 模型偶发的手误（多一个 =、尾巴写丢、正文引号没转义）不值得让整轮决策作废
+     * 兜底退出——每级都先试原文，改写只在解析失败后才发生。
      */
     fun parseLenient(text: String): JsonNode? {
-        val cleaned = STRAY_EQ.replace(text, ":")
-        return tryRead(text) ?: tryRead(cleaned) ?: tryRead(repairJson(cleaned))
+        val cleaned = STRAY_EQ.replace(INVISIBLE.replace(text, ""), ":")
+        return tryRead(cleaned)
+            ?: tryRead(repairJson(cleaned))
+            ?: escapeStrayQuotes(cleaned).let { tryRead(it) ?: tryRead(repairJson(it)) }
+    }
+
+    /**
+     * 字符串里的裸引号修复（实盘 01:06：`"text": "行行行…本来也没有""}`——模型
+     * 想在正文里带个 `"` 没转义，字符串提前闭合，整轮解析作废兜底退出、这条消息
+     * 没发出去）。
+     *
+     * 在字符串里遇到 `"` 时看**后面第一个非空白字符**定身份：
+     * - 当前串是**键**（`{` 或 `,` 之后开的串）→ 后面是 `:` 才是正常闭合；
+     * - 当前串是**值** → 后面是 `,`/`}`/`]` 或已到结尾才是正常闭合（值后面不会
+     *   跟 `:`，所以正文里 `他说:"别"` 的引号会被正确转义而不是误判成键闭合）。
+     *
+     * 对合法 JSON **恒等**（合法结构里每个引号的后继都满足上述条件），所以只在
+     * 原文、补尾都失败之后才走这条路。
+     */
+    fun escapeStrayQuotes(text: String): String {
+        val out = StringBuilder(text.length + 8)
+        val containers = ArrayDeque<Char>()
+        var inString = false
+        var isKey = false
+        var expectKey = false
+        var escaped = false
+        fun nextNonWs(from: Int): Char? {
+            var i = from
+            while (i < text.length && text[i].isWhitespace()) i++
+            return text.getOrNull(i)
+        }
+        for (i in text.indices) {
+            val ch = text[i]
+            when {
+                inString && escaped -> { out.append(ch); escaped = false }
+                inString && ch == '\\' -> { out.append(ch); escaped = true }
+                inString && ch == '"' -> {
+                    val nxt = nextNonWs(i + 1)
+                    val closes = if (isKey) nxt == ':' else (nxt == null || nxt == ',' || nxt == '}' || nxt == ']')
+                    if (closes) {
+                        out.append(ch); inString = false
+                    } else {
+                        out.append("\\\"")
+                    }
+                }
+                inString -> out.append(ch)
+                ch == '"' -> { out.append(ch); inString = true; isKey = expectKey }
+                ch == '{' || ch == '[' -> { out.append(ch); containers.addLast(ch); expectKey = ch == '{' }
+                ch == ',' -> { out.append(ch); expectKey = containers.lastOrNull() == '{' }
+                ch == ':' -> { out.append(ch); expectKey = false }
+                ch == '}' || ch == ']' -> { out.append(ch); if (containers.isNotEmpty()) containers.removeLast() }
+                else -> out.append(ch)
+            }
+        }
+        return out.toString()
     }
 
     /**
