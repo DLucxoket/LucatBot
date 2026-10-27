@@ -184,6 +184,7 @@ Web 控制台：`http://localhost:8080/`（token 用量 + **调用轨迹**（每
 - **JSON 只在边界**——Agent `handle()` 方法里禁止拼 JSON，用 OOP 对象。
 - **`LLM.DEFAULT` 是懒加载单例**（不是 Spring bean）——绕过了 DI。
 - **Gradle 使用国内镜像**——`gradle-wrapper.properties` 指向 `mirrors.aliyun.com`。
+- **persona.md 原文直拼进 prompt**：启动时优先读工作目录下的 `persona.md`，读不到用 jar 内置副本（`src/main/resources/persona.md`）——整份原文直接拼、不解析任何字段，`名字` 一栏不被代码读取（聊天记录署名走代码默认）；改文件后重启生效。文件就是人格文档本身，**别把使用说明写进文件**（每轮都随 prompt 发、白烧 token——头部说明已因此移除）。
 - **Spring Boot 4.0.3 + Kotlin 2.2.21**——版本很新，不要假设 Spring Boot 3.x 写法。
 - **Shiro API**：`ArrayMsg.type` 是 `MsgTypeEnum` 枚举；`sendMsg(event, msg, autoEscape)` 签名。
 - **发送回执的 `data` 是 `MsgId` 对象**（`ActionData<MsgId>`，字段 `messageId: Integer`）——`resp.data as? Number` 恒为 null；写入档前必须 `(resp.data as? MsgId)?.messageId?.toLong()`。

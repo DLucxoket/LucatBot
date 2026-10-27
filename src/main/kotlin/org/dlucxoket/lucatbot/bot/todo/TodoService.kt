@@ -175,9 +175,13 @@ class TodoService(
      * 「办完的事也看得见」——此前只注入未完成项，`todo_done` 一漏标（实盘：
      * 在群里看完就解析失败兜底退出，根本没机会输出），机器人被问「你不是去
      * 看过了吗」时仍一脸没办过的样子。完成项按 [TodoItem.completedAt] 倒序取
-     * 最近 [doneLimit] 条（历史完成不删，保留痕迹）。
+     * 最近 [doneLimit] 条（历史完成不删，面板仍见全量）。
+     *
+     * [doneLimit] 默认 2（原 5）：每行都随 prompt 重发，实盘样例 5 条里 4 条
+     * 是同款换皮的「继续刚才的对话（被新通知打断）」——最近两条足够撑住
+     * 「办过的事看得见」，更早的完成痕迹另有记忆留痕与操作日志兜底。
      */
-    fun summaryForPrompt(doneLimit: Int = 5): String {
+    fun summaryForPrompt(doneLimit: Int = 2): String {
         val pending = pendingSummary()
         val done = recentDone(doneLimit)
         if (done.isEmpty()) return pending
