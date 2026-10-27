@@ -221,14 +221,17 @@ class ConversationController(
         log.info("进入会话 {}（{}{}）", conversationId,
             if (isGroup) "群聊" else "私聊", if (proactive) "，主动发起" else "")
 
-        // 进入会话即消费未读并标已读（水位推进 → 重启后未读=水位之后的消息）
-        lucatBot.consumeUnread(conversationId)
+        // 进入会话即消费未读并标已读（水位推进 → 重启后未读=水位之后的消息）；
+        // 消费结果喂给首轮 inserts——实盘 02:10：此前返回被丢弃，进场的新消息既无
+        //（新）标记也无新消息注释，与「早看过的旧消息」无法区分，休眠重进时凭
+        //「最后一条是对方的」把上一轮已决定不回的表情包又回了一遍
+        val entryUnread = lucatBot.consumeUnread(conversationId)
         readStateService.markRead(conversationId)
         // 丢弃陈旧的让位请求（通知等锁超时后可能残留——不属于本会话，开跑前清掉）
         lucatBot.consumeSessionYield()
 
         try {
-            loop(conversationId, isGroup, proactive)
+            loop(conversationId, isGroup, proactive, entryUnread)
             // loop() 正常返回（含内部 return）→ 异步整理一次记忆：任务丢进执行器
             // 立即返回，返回消息列表与主循环下一步不等 LLM（停机时由
             // ProgramShutdown 先 awaitPendingReflects 排干、再同步补做）
@@ -252,7 +255,13 @@ class ConversationController(
         return target
     }
 
-    private fun loop(conversationId: String, isGroup: Boolean, proactive: Boolean) {
+    private fun loop(
+        conversationId: String,
+        isGroup: Boolean,
+        proactive: Boolean,
+        /** 进场时消费的未读——首轮并入 inserts（（新）标记 / 新消息注释 / 供图一并生效） */
+        entryUnread: List<LucatBot.UnreadMessage> = emptyList()
+    ) {
         var historyCount = initialHistoryCount
         var readMoreRounds = 0
         var readMoreWithInsertStreak = 0
@@ -294,6 +303,9 @@ class ConversationController(
         fun logAct(action: String, reason: String? = null) =
             actionLog.append(action, reason, conversationId)
 
+        // 进场未读：首轮消费后清空（此后新消息走 pendingInsert）
+        var entryInserts = entryUnread
+
         while (true) {
             // 让位检查点：通知通道要当场跳转、当前会话占着执行锁 → 让出。
             // 让位 = 退出本会话循环（释放锁给通知），并记「回到会话继续」的待办——
@@ -308,8 +320,9 @@ class ConversationController(
                 log.info("会话 {} 让位给通知跳转", conversationId)
                 return
             }
-            // 1) 把待插入的新消息以系统注释形式合并
-            val inserts = lucatBot.drainPendingInserts(conversationId)
+            // 1) 把待插入的新消息以系统注释形式合并——进场消费的未读也算（首轮）
+            val inserts = entryInserts + lucatBot.drainPendingInserts(conversationId)
+            entryInserts = emptyList()
             if (inserts.isNotEmpty()) {
                 justSent = null // 有新回应就不再提示旧发送
                 noReplyRounds = 0
@@ -401,8 +414,13 @@ class ConversationController(
             pendingViewImages = null
 
             // 3) 组请求并决策（带爬楼状态，由 LLM 自行决定继续/回复/离开）
-            // 没有接话对象：本轮无新消息、窗口最后一条还是自己发的（没人等回应）
-            val noRoomToTalk = newNotes.isEmpty() && recentLines.lastOrNull()?.isMe == true
+            // 没有接话对象：本轮无**任何**新消息——最后一条是自己发的、或对方
+            // **早看过**的旧消息都算（实盘 02:10：01:58 的表情包上一轮已看过并
+            // 决定「不必再接话」，退出休眠后重进，凭「最后一条是对方的」又回了
+            // 一条，像从没见过那张图）。进场未读已并入 inserts（newNotes 非空），
+            // 真·新回复不受此限；proactive 豁免（破冰首条由 mustIcebreak 强制 send）
+            val noRoomToTalk = newNotes.isEmpty() &&
+                (recentLines.lastOrNull()?.isMe == true || !proactive)
             val reachedHistoryStart = historyResult.messages.size < historyCount
             // 窗口到顶且还没翻到最早 → 如实进 prompt（防反复 read_more 原地空转）
             val historyCapped = !reachedHistoryStart && historyCount >= maxHistoryWindow
@@ -1206,7 +1224,8 @@ class ConversationController(
      * @param stayStreak 连续「没人接话」的普通停留次数（有新消息即清零；
      *   **不含搜索型停留**——那是等自己的搜索结果，走 [searchPauseStreak]）
      * @param searchPauseStreak 连续搜索型停留次数（非搜索型决策/新消息即清零）
-     * @param noRoomToTalk 没有接话对象（无新消息且最后一条是自己发的）
+     * @param noRoomToTalk 没有接话对象（本轮无任何新消息——最后一条是自己发的
+     *   或对方**早看过**的旧消息都算；proactive 不传 true）
      */
     private data class HintInput(
         val readMoreWithInsertStreak: Int = 0,
@@ -1239,11 +1258,12 @@ class ConversationController(
         with(state) {
             val parts = mutableListOf<String>()
             sendFailureNote?.let { parts += it }
-            // 没有接话对象（无新消息且最后一条是自己发的）——实盘 18:18 出过凭历史/记忆
-            // 旧话题硬接一嘴（「不玩，手残党…」），这里点名禁止 send
+            // 没有接话对象（无新消息）——实盘 18:18 出过凭历史/记忆旧话题硬接一嘴
+            //（「不玩，手残党…」）；02:10 又出过把对方**早看过**的旧表情包当新消息
+            // 回一遍（休眠重进场景）——两条都点名禁止 send
             if (noRoomToTalk && justSent == null) {
-                parts += "本轮没有任何新消息，聊天记录最后一条还是你自己发的——**没有接话对象，禁止 send**" +
-                    "（只有确有待办要推进才例外）；别去接历史里的旧话题、别凭记忆编话，没别的事就 return。"
+                parts += "本轮没有任何新消息——聊天记录末尾无论谁发的，没有**本轮新消息**就没有接话对象，" +
+                    "**禁止 send**（只有确有待办要推进才例外）；别去接历史里的旧话题、别凭记忆编话，没别的事就 return。"
             }
             // 普通停留（没人接话的干等）——搜索型停留不进这条，不套「没人接话」文案
             if (stayStreak >= maxIdleStays - 1) {

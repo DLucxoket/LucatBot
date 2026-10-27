@@ -1101,24 +1101,79 @@ class ConversationControllerTest {
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        assertTrue(llm.prompts[0].contains("本轮没有任何新消息，聊天记录最后一条还是你自己发的"),
-            "无新消息且最后是我发的 → 禁发提示：${llm.prompts[0]}")
+        assertTrue(llm.prompts[0].contains("本轮没有任何新消息"),
+            "无新消息 → 禁发提示：${llm.prompts[0]}")
         assertTrue(llm.prompts[0].contains("禁止 send"), "点名禁止 send：${llm.prompts[0]}")
     }
 
     @Test
-    fun `guard hint absent when conversation ends with others message`() {
-        // 对方的话结尾 → 有接话对象，可以正常回复，不加禁发提示
+    fun `guard hint also fires when conversation ends with other's already-seen message`() {
+        // 实盘 02:10：01:58 的表情包上一轮已看过并决定「不必再接话」（return），
+        // 退出休眠后重进——无任何新消息、最后一条是对方的旧消息，旧逻辑不加禁令，
+        // 模型凭「最后一条是对方的」把同一张图又回了一遍（像从没见过）
         val lines = listOf(
-            HistoryMessageItem(sender = "用户A", content = "还在吗", timestamp = 1_000L, senderId = 7L)
+            HistoryMessageItem(sender = "用户A", content = "[表情包 file=68E7DE66F241BB536B11DEA29D73D222.jpg]",
+                timestamp = 1_000L, senderId = 7L)
         )
         val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
         val (controller, _, _) = buildController(llm, historyLines = lines)
 
         controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
 
-        assertFalse(llm.prompts[0].contains("本轮没有任何新消息，聊天记录最后一条还是你自己发的"),
-            "对方的话结尾不加禁发提示：${llm.prompts[0]}")
+        assertTrue(llm.prompts[0].contains("本轮没有任何新消息"),
+            "无新消息且对方旧消息结尾 → 同样禁发：${llm.prompts[0]}")
+        assertTrue(llm.prompts[0].contains("禁止 send"), "点名禁止 send：${llm.prompts[0]}")
+    }
+
+    @Test
+    fun `guard hint absent for proactive entry so icebreak is not blocked`() {
+        // proactive 豁免：破冰首条由 mustIcebreak 强制 send，禁发守卫不能把它锁死
+        val lines = listOf(
+            HistoryMessageItem(sender = "用户A", content = "还在吗", timestamp = 1_000L, senderId = 7L)
+        )
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}""", """{"action":"return"}"""))
+        val (controller, _, _) = buildController(llm, historyLines = lines)
+
+        controller.run(SessionPick(SessionPickType.PROACTIVE, "123"))
+
+        llm.prompts.forEachIndexed { i, p ->
+            assertFalse(p.contains("本轮没有任何新消息"),
+                "proactive 第${i + 1}轮不吃禁发守卫：$p")
+        }
+    }
+
+    @Test
+    fun `entry-consumed unread counts as new notes so reply stays allowed`() {
+        // 与放宽守卫对称的另一半：进场消费的未读必须算「本轮新消息」——否则
+        // 真·新回复也会被禁发。同时断言（新）标记与新消息注释真的出现
+        val lines = listOf(
+            HistoryMessageItem(sender = "用户A", content = "早看过的旧话",
+                timestamp = 1_000L, senderId = 123L)
+        )
+        val llm = FakeLLM(mutableListOf("""{"action":"return"}"""))
+        val (controller, lucatBot, _) = buildController(llm, historyLines = lines)
+
+        // 会话外到达 → unreadQueue（列表态 handleMessage 入队），进场时被消费
+        lucatBot.backToConversationList()
+        lucatBot.handleMessage(
+            org.dlucxoket.lucatbot.model.event.message.FriendMessageEvent(
+                message = org.dlucxoket.lucatbot.model.message.ChatMessage(
+                    listOf(org.dlucxoket.lucatbot.model.message.member.TextMessageMember("刚回的这句"))
+                ),
+                sender = org.dlucxoket.lucatbot.model.user.User(
+                    123L, "用户A", org.dlucxoket.lucatbot.model.user.Sex.UNKNOWN, 0, "", card = null
+                ),
+                timestamp = 9_000L, messageId = 42L
+            ),
+            isAtMe = false, isAtAll = false
+        )
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val prompt = llm.prompts[0]
+        assertTrue(prompt.contains("刚回的这句"), "进场未读进新消息注释：$prompt")
+        assertFalse(prompt.contains("本轮没有任何新消息"),
+            "有进场新消息 → 不加禁发提示：$prompt")
     }
 
     @Test

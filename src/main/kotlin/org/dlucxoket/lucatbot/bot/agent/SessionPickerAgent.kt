@@ -4,6 +4,7 @@ import org.dlucxoket.lucatbot.bot.agent.data.SessionDecision
 import org.dlucxoket.lucatbot.bot.agent.data.SessionDecisionParser
 import org.dlucxoket.lucatbot.bot.agent.data.SessionPickerRequest
 import org.dlucxoket.lucatbot.bot.agent.data.SessionAction
+import org.dlucxoket.lucatbot.bot.agent.data.SessionSummaryLine
 import org.dlucxoket.lucatbot.bot.llm.LLM
 import org.dlucxoket.lucatbot.bot.llm.TokenUsageAggregator
 import org.dlucxoket.lucatbot.bot.llm.fixIndent
@@ -111,26 +112,39 @@ class SessionPickerAgent(
      * 同放 user——system 只留指令与稳定状态。
      */
     private fun buildUserContent(input: SessionPickerRequest): String {
-        val sessionsText = if (input.sessions.isEmpty()) {
-            "（没有未读）"
-        } else {
-            input.sessions.joinToString("\n") { s ->
-                val typeLabel = s.conversationType
-                val unread = if (s.unreadCount > 0) "(${s.unreadCount}条未读)" else ""
-                val at = when {
-                    s.isAtMe -> "(@我)"
-                    s.isAtAll -> "(@全体)"
-                    s.isReplyToMe -> "(@回复你)"
-                    else -> ""
-                }
-                // 我上次发言距今（null=还没说过话）——选会话优先级依据
-                val spoke = s.botSpokeAgo?.let { "（我上次发言 $it）" } ?: "（我还没说过话）"
-                // 疑似被禁言标记（日期=最近一次禁言失败的更新日期）
-                val ban = s.suspectedBanDate?.let { "【疑似禁言 $it】" } ?: ""
-                // 该会话主体的记忆摘要（最新几条单行——把记忆/待办驱动对上具体会话）
-                val mem = s.memoryBrief?.let { "（记忆：$it）" } ?: ""
-                "- $typeLabel ${s.name}(${s.id})(${s.time})$unread$at$spoke$ban：${s.lastMessage}$mem"
+        fun render(s: SessionSummaryLine): String {
+            val typeLabel = s.conversationType
+            val unread = if (s.unreadCount > 0) "(${s.unreadCount}条未读)" else ""
+            val at = when {
+                s.isAtMe -> "(@我)"
+                s.isAtAll -> "(@全体)"
+                s.isReplyToMe -> "(@回复你)"
+                else -> ""
             }
+            // 我上次发言距今（null=还没说过话）——选会话优先级依据
+            val spoke = s.botSpokeAgo?.let { "（我上次发言 $it）" } ?: "（我还没说过话）"
+            // 疑似被禁言标记（日期=最近一次禁言失败的更新日期）
+            val ban = s.suspectedBanDate?.let { "【疑似禁言 $it】" } ?: ""
+            // 该会话主体的记忆摘要（最新几条单行——把记忆/待办驱动对上具体会话）
+            val mem = s.memoryBrief?.let { "（记忆：$it）" } ?: ""
+            return "- $typeLabel ${s.name}(${s.id})(${s.time})$unread$at$spoke$ban：${s.lastMessage}$mem"
+        }
+
+        // 未读与已读分区渲染——混在「未读消息」一个区里，模型会把**早看过**的
+        // 最后一条（表情包/图片）当成未读新消息追进去回话（实盘 02:10：01:58
+        // 已看过并决定不回的表情包，休眠重进被当成「新图片」又回了一遍）
+        val unreadLines = input.sessions.filter { it.unreadCount > 0 }
+        val readLines = input.sessions.filter { it.unreadCount == 0 }
+        val sessionsText = when {
+            input.sessions.isEmpty() -> "（没有未读）"
+            else -> buildList {
+                if (unreadLines.isNotEmpty()) {
+                    add("### 未读消息\n" + unreadLines.joinToString("\n", transform = ::render))
+                }
+                if (readLines.isNotEmpty()) {
+                    add("### 最近会话（已读，没有未读）\n" + readLines.joinToString("\n", transform = ::render))
+                }
+            }.joinToString("\n")
         }
 
         val proactiveText = if (input.proactiveCandidates.isEmpty()) {
