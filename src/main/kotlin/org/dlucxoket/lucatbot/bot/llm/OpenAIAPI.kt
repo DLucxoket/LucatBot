@@ -142,6 +142,8 @@ class OpenAIAPI(
      * langchain4j 自带的 `maxRetries=2` 只覆盖传输层重试，这两类它不管：
      * - **`text cannot be null`**——HTTP 200 但 `content` 为空（实盘 deepseek-v4：
      *   推理型模型把预算耗在 reasoning 上交白卷），在响应转换阶段抛异常；
+     *   langchain4j 1.x 起同一成因也可能**不抛**、静默返回 `text=null`——那条
+     *   由 [ask] 里的空文本救援重试接住（抛异常与不抛两条路都补一次）；
      * - **转换前就炸的畸形响应**（SSE `data: …` 当 JSON 那类）。
      *
      * 空响应重试一次多半能救回来——实盘一次空响应曾把整段对话打断（read_more
@@ -197,19 +199,53 @@ class OpenAIAPI(
         val startedAt = System.nanoTime()
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
-        val response = try {
-            chatWithOneRetry(model, chatRequest)
+        var text = try {
+            chatText(model, chatRequest, TokenUsageChannel.TEXT, requestText, startedAt)
         } catch (e: Exception) {
             // 端点偶发坏响应（实盘：SSE `data: …` 被当 JSON 解析）→ 分级兜底
             return degradeOrThrow(e, TokenUsageChannel.TEXT, requestText, sinceMs(startedAt))
         }
-        val durationMs = sinceMs(startedAt)
-        val text = response.aiMessage().text()
-        recordUsage(response, TokenUsageChannel.TEXT, requestText, text, durationMs)
-        if (text.isNullOrBlank()) {
-            log.warn("LLM 返回空文本（端点异常/输出被吞/finish_reason 截断），调用方会按解析失败兜底")
+        if (text.isBlank()) {
+            // 空响应救援重试：chatWithOneRetry 的补救只覆盖「抛异常」的空响应，而
+            // langchain4j 1.x 起 content=null 不再抛、静默返回 text=null——这条路
+            // 失守（实盘 01:36：输出撞 max-tokens 后 content 为空，未经重试直接
+            // 走解析失败兜底，一整轮白烧）。空响应重试一次多半能救回来；仍空才兜底。
+            log.warn("LLM 返回空文本（端点异常/输出被吞/finish_reason 截断），300ms 后补一次重试")
+            runCatching { Thread.sleep(300) }
+            val retryStartedAt = System.nanoTime()
+            val retryText = try {
+                chatText(model, chatRequest, TokenUsageChannel.TEXT, requestText, retryStartedAt)
+            } catch (e: Exception) {
+                return degradeOrThrow(e, TokenUsageChannel.TEXT, requestText, sinceMs(retryStartedAt))
+            }
+            if (retryText.isNotBlank()) {
+                text = retryText
+            } else {
+                log.warn("LLM 重试后仍返回空文本，调用方会按解析失败兜底")
+            }
         }
         return text
+    }
+
+    /**
+     * 发一轮请求并记账，返回回复文本（**绝不返回 null**）
+     *
+     * `AiMessage.text()` 是平台类型、**可为 null**（实盘 01:36：输出撞 max-tokens
+     * 后 content=null → text() 返回 null——直接 return 按非空插桩抛 NPE 打崩主循环）。
+     * 归一成空串，调用方走既有的「空文本 → 解析失败兜底」路径。
+     * 异常原样上抛，由调用方各自策略处理（文本路分级降级、带图路外层转纯文本）。
+     */
+    private fun chatText(
+        model: OpenAiChatModel,
+        request: ChatRequest,
+        channel: TokenUsageChannel,
+        requestText: String,
+        startedAt: Long
+    ): String {
+        val response = chatWithOneRetry(model, request)
+        val text = response.aiMessage().text()
+        recordUsage(response, channel, requestText, text, sinceMs(startedAt))
+        return text ?: ""
     }
 
     /**
@@ -369,12 +405,20 @@ class OpenAIAPI(
             // 轨迹：正文逐字 + 每张图的 ref（data URI 占位不入库）
             val requestText = renderRequest(systemPrompt, question, images)
             val startedAt = System.nanoTime()
-            val response = chatWithOneRetry(createModel(), chatRequest) // 同文本路：非配置失败补一次
-            val durationMs = sinceMs(startedAt)
-            val result = response.aiMessage().text()
-            recordUsage(response, TokenUsageChannel.IMAGE, requestText, result, durationMs)
-            if (result.isNullOrBlank()) {
-                log.warn("LLM 返回空文本（带图请求），调用方会按解析失败兜底")
+            val imageModel = createModel()
+            var result = chatText(imageModel, chatRequest, TokenUsageChannel.IMAGE, requestText, startedAt)
+            if (result.isBlank()) {
+                // 同文本路：空文本救援一次（外层 catch 只管**抛异常**的失败）
+                log.warn("LLM 返回空文本（带图请求），300ms 后补一次重试")
+                runCatching { Thread.sleep(300) }
+                val retryStartedAt = System.nanoTime()
+                val retryText = chatText(imageModel, chatRequest, TokenUsageChannel.IMAGE, requestText, retryStartedAt)
+                result = if (retryText.isNotBlank()) {
+                    retryText
+                } else {
+                    log.warn("LLM 重试后仍返回空文本（带图），调用方会按解析失败兜底")
+                    ""
+                }
             }
             VisionSupport.markSupported()
             result
