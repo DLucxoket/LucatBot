@@ -96,7 +96,9 @@ class ActionLog(
                 append("]")
                 e.conversationId?.let { append("[$it]") }
                 append(" ")
-                append(e.action)
+                // 操作正文截 30 字：「回复：…」的正文与聊天记录逐字重复（长句整段
+                // 进 prompt 纯占字符）——截断只影响注入，落库/面板仍是全文
+                append(e.action.take(30))
                 e.reason?.let { append("（$it）") }
             }
         }

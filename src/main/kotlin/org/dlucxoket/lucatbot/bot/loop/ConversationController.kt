@@ -344,6 +344,9 @@ class ConversationController(
             fun resolveRef(content: String): String =
                 ChatReferenceResolver.resolve(content, refIndex) { ts -> formatTime(ts) }
 
+            // 本轮到达的新消息 → 窗口行打「（新）」标记（提示词侧的整段新消息注释
+            // 与窗口行逐字重复，已改为只标记不重列——见下方 promptNotes）
+            val insertIds = inserts.mapNotNull { it.messageId }.toSet()
             val recentLines = historyResult.messages.map {
                 ConversationChatLine(
                     // 展示名 + 名片/QQ昵称注解（同号不同名时点破是同一人；改名后为新展示名）
@@ -352,15 +355,26 @@ class ConversationController(
                     isMe = it.isFromBot || it.sender == "bot" || it.sender == "我",
                     time = formatTime(it.timestamp),
                     content = resolveRef(it.content),
-                    messageId = it.messageId
+                    messageId = it.messageId,
+                    isNew = it.messageId != null && it.messageId in insertIds
                 )
             }
             // 新消息注释同样解析（它们引用的多是窗口内刚出现的消息）；
             // 带 message_id 时附（#id）标记，本轮就能对新消息发起回复
-            val newNotes = inserts.map {
-                val idTag = it.messageId?.let { id -> "（#$id）" } ?: ""
-                "（新消息）${it.senderName}(${it.senderId}) [${formatTime(it.timestamp)}]$idTag：${resolveRef(it.content)}"
+            fun noteOf(ins: LucatBot.UnreadMessage): String {
+                val idTag = ins.messageId?.let { id -> "（#$id）" } ?: ""
+                return "（新消息）${ins.senderName}(${ins.senderId}) [${formatTime(ins.timestamp)}]$idTag：${resolveRef(ins.content)}"
             }
+            val newNotes = inserts.map { noteOf(it) }
+            // 提示词侧去重：新消息此刻通常已整段出现在上方「最近聊天记录」里（同一条
+            // 再列一遍纯占字符、长消息整段重复）——窗口内已见的不再列，「哪些是新的」
+            // 改由窗口行的（新）标记承担；hint/预搜/无接话对象判定仍用全量 newNotes
+            //（它们数的是「有没有新消息」，不受文本去重影响）。无 id 的条目对不上
+            // 窗口，照旧兜底列出（宁可重复不可丢）
+            val windowIds = recentLines.mapNotNull { it.messageId }.toSet()
+            val promptNotes = inserts
+                .filter { it.messageId == null || it.messageId !in windowIds }
+                .map { noteOf(it) }
 
             // 首轮决策前：**进场预搜记忆**（P2）——单拎的拆词智能体对当前窗口拆词 →
             // 查库，命中直接进 pendingMemoryHits，与首轮 prompt 一起注入。旧流程把
@@ -419,7 +433,7 @@ class ConversationController(
                 actionLog = actionLog.dump(),
                 fixedMemory = fixedMemory?.current().orEmpty(),
                 recentMessages = recentLines,
-                newMessageNotes = newNotes,
+                newMessageNotes = promptNotes,
                 proactive = mustIcebreak,
                 readMoreRounds = readMoreRounds,
                 historyCovered = historyCount,

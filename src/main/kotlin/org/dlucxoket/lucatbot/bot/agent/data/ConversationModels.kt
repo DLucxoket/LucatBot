@@ -362,7 +362,13 @@ data class ConversationChatLine(
      * OneBot message_id（渲染成行上的「（#数字）」标记）——LLM send 时
      * 以「回复 #id：」引用它。null = 老数据没有 id，不渲染。
      */
-    val messageId: Long? = null
+    val messageId: Long? = null,
+    /**
+     * 本轮新到（编排层按 message_id 对上待插入队列）——渲染成行尾「（新）」。
+     * 新消息的整段「（新消息）」注释与窗口行逐字重复（同一份记录再列一遍），
+     * 提示词侧已去重只兜底窗口外条目，「哪些是新的」靠这个行内标记保留。
+     */
+    val isNew: Boolean = false
 ) {
     /**
      * 行头「发送者」——**行格式单一源**：`我` / `名字` / `名字(QQ号)`

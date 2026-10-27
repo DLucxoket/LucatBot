@@ -236,7 +236,10 @@ class ConversationAgent(
             val who = line.who()
             // 行带（#message_id）：send 时以「回复 #id：」引用该行（老数据无 id 不渲染）
             val idTag = line.messageId?.let { "（#$it）" } ?: ""
-            "- $who [${line.time}]$idTag：${line.content}"
+            // 行内「（新）」：本轮新到的消息——整段新消息注释已与窗口去重，
+            // 「哪些是新的」全靠这个标记（无 id 的兜底注释仍走 newMessageNotes）
+            val newTag = if (line.isNew) "（新）" else ""
+            "- $who [${line.time}]$idTag$newTag：${line.content}"
         }
         val newMsgText = if (input.newMessageNotes.isEmpty()) {
             ""
