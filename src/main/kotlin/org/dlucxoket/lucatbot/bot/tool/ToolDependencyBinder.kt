@@ -57,5 +57,18 @@ class ToolDependencyBinder(
             ToolDiscovery.getTools().forEach { it.bindBot(bot) }
             lastBoundBot = bot
         }
+
+        /**
+         * 断线解绑：把该账号绑在所有 Tool 上的 Bot 摘掉（NapCatOnlineHook.offline 调用）。
+         *
+         * selfId 不符直接不动——防止迟到的 offline 回调清掉刚重连绑上的新 Bot。
+         * `lastBoundBot` 一并置 null：否则下次 bindBotToAll 因引用相同短路、永不重绑。
+         */
+        fun unbindBotToAll(selfId: Long) {
+            val bound = lastBoundBot ?: return
+            if (bound.selfId != selfId) return
+            ToolDiscovery.getTools().forEach { it.unbindBot() }
+            lastBoundBot = null
+        }
     }
 }

@@ -92,6 +92,19 @@ abstract class Tool<I, O> {
     }
 
     /**
+     * 解绑 Bot（NapCat 断线时由 ToolDependencyBinder 调用）
+     *
+     * Shiro 断线在 `afterConnectionClosed` 里**同步清空 WS session 属性**
+     * （`adapter` 属性被抹掉）——继续持有这个 Bot 实例的每个 OneBot action
+     * 都会撞 `ShiroException: Adapter type wrong`（误导，实为「已断线」）。
+     * 置 null 后走 [runTool] 的「Bot 未绑定」干净语义；重连由
+     * NapCatOnlineHook.online 重新绑定。
+     */
+    fun unbindBot() {
+        this.bot = null
+    }
+
+    /**
      * 绑定应用服务依赖（启动时由 [ToolDependencyBinder] 自动遍历调用）
      *
      * 默认空实现：无服务依赖的 Tool 无需关心。

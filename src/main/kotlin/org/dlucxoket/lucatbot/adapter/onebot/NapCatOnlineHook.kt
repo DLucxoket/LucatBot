@@ -25,6 +25,12 @@ import org.springframework.stereotype.Component
  * 1. 绑定发送通道（`shiroBot` + Tool 依赖——不必等首条消息，连接即可用；幂等）
  * 2. 按已读水位重建未读（selfId 此刻已知；[ReadStateService] 幂等，首条消息处的兜底调用不冲突）
  * 3. 请求主循环**默认先真实查看一遍消息列表**（置位强制查看 + 唤醒空闲休眠）
+ *
+ * 断线（[offline]，Shiro `afterConnectionClosed` 两条分支都会异步回调）：
+ * Shiro 在断线时**同步清空 WS session 属性**（`adapter` 被抹掉）并把 bot 移出容器，
+ * 还持有该 Bot 的每个 OneBot action 都会抛 `ShiroException: Adapter type wrong`
+ * （误导性报错，实为「已断线」）——故断线即清掉 `shiroBot` 与 Tool 绑定，
+ * 窗口内的发送/爬楼走「Bot 未绑定」干净语义，重连由 [online] 重新绑定。
  */
 @Component
 @Primary
@@ -45,6 +51,24 @@ class NapCatOnlineHook(
             log.info("NapCat 已连接（selfId={}）→ 重建未读并默认查看消息列表", bot.selfId)
         } catch (e: Exception) {
             log.warn("NapCat 连接钩子失败（忽略，不影响连接）: {}", e.message)
+        }
+    }
+
+    /**
+     * 断线清理——不清则断线窗口内所有动作撞 `Adapter type wrong`：
+     * Shiro `afterConnectionClosed` 同步 `attributes.clear()`（`adapter` 属性被抹），
+     * 旧 Bot 实例的每个 OneBot action 都过 `getAdapter` → 必抛。
+     * 置空后走 Tool 的「Bot 未绑定」；selfId 不符（迟到回调）不动。
+     */
+    override fun offline(selfId: Long) {
+        try {
+            if (lucatBot.shiroBot?.selfId == selfId) {
+                lucatBot.shiroBot = null
+            }
+            ToolDependencyBinder.unbindBotToAll(selfId)
+            log.info("NapCat 已断线（selfId={}）→ 清除发送通道（窗口内动作走「Bot 未绑定」）", selfId)
+        } catch (e: Exception) {
+            log.warn("NapCat 断线清理失败（忽略）: {}", e.message)
         }
     }
 }
