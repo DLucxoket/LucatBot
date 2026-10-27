@@ -25,8 +25,10 @@ import java.util.concurrent.RejectedExecutionException
  * - **两阶段写入**：阶段1 复盘产出候选（含检索关键词）→ 用关键词查库命中已有
  *   记忆 → 阶段2 把命中回喂 [MemoryAgent] 复核，过滤改写式重复后再写入
  *   （写入时 [MemoryService] 的精确判重仍是最后一道防线）
- * - **幂等**：同一会话只整理一次（正常退出与停机收尾可能并发触发，
- *   [reflectLock] + 会话标识去重保证不重复写入）
+ * - **幂等**：同一会话段只整理一次（正常退出与停机收尾可能并发触发，
+ *   [reflectLock] + 会话标识去重保证不重复写入）；置位在**提交时**完成，
+ *   迟到的任务完成不会盖掉 [beginConversation] 的重置（实盘竞态：第二段
+ *   内容曾被误判「已整理过」整段跳过）
  * - **失败不影响退出**：LLM 异常/解析失败一律兜底，整体再套 try/catch，
  *   只 log.warn——绝不阻塞「返回消息列表」；复核阶段失败**保守放行**候选，
  *   绝不因复核故障把记忆整批吞掉
@@ -87,15 +89,27 @@ class MemoryReflector(
     /**
      * 异步整理（正常退出路径）：提交后立即返回，**不阻塞主循环下一步**
      *
-     * 同会话幂等保护与同步版共用（任务体即 [reflect]）；执行器拒绝
-     * （已停机）只 log，不抛——停机路径另有同步补做兜底。
+     * 幂等在**提交时**判定与置位（[tryMarkReflected]），任务体只做 [doReflect]——
+     * 修复实盘竞态：任务在单线程执行器里排队做两轮 LLM（数秒~十几秒），期间
+     * 用户重回同一会话再退出（[beginConversation] 已重置幂等位），迟到的旧任务
+     * 在完成时又把置位盖回去（旧代码在完成时置位），后一个任务运行时看到
+     * 「已整理过」直接跳过——第二个会话段的内容整段没进记忆，日志只剩一条
+     * 「记忆已整理过，跳过重复整理」。提交时置位后，每个会话段的退出必然
+     * 各自提交一次整理，与任务完成时序无关。
+     *
+     * 执行器拒绝（已停机）只 log，不抛——停机路径另有同步补做兜底。
      */
     fun reflectAsync(conversationId: String) {
+        if (!tryMarkReflected(conversationId)) {
+            log.debug("会话 {} 的记忆已整理过，跳过重复整理", conversationId)
+            return
+        }
         synchronized(pendingLock) { pendingTasks++ }
         try {
             executor.execute {
                 try {
-                    reflect(conversationId)
+                    // 与停机同步补做互斥（旧代码整段在 reflectLock 内，语义保留）
+                    synchronized(reflectLock) { doReflect(conversationId) }
                 } finally {
                     synchronized(pendingLock) {
                         pendingTasks--
@@ -131,19 +145,29 @@ class MemoryReflector(
     }
 
     /**
-     * 同步整理（幂等入口）：同会话已整理过则直接跳过
+     * 同步整理（幂等入口）：同会话段已提交过整理则直接跳过
      *
      * 停机收尾路径专用（必须等它写完才能落盘退出）；正常退出用 [reflectAsync]。
+     * 幂等同样在**入口**判定（[tryMarkReflected]），与异步路径共用一个位。
      */
     fun reflect(conversationId: String) {
-        synchronized(reflectLock) {
-            if (lastReflected == conversationId) {
-                log.debug("会话 {} 的记忆已整理过，跳过重复整理", conversationId)
-                return
-            }
-            doReflect(conversationId)
-            lastReflected = conversationId
+        if (!tryMarkReflected(conversationId)) {
+            log.debug("会话 {} 的记忆已整理过，跳过重复整理", conversationId)
+            return
         }
+        synchronized(reflectLock) { doReflect(conversationId) }
+    }
+
+    /**
+     * 幂等置位（提交/入口时调用）：false = 本会话段已提交过整理，调用方跳过
+     *
+     * 置位与检查同在 [reflectLock] 内——提交线程完成，不等任务跑完，因此
+     * [beginConversation] 的重置不可能被迟到的任务完成盖回去（实盘竞态根因）。
+     */
+    private fun tryMarkReflected(conversationId: String): Boolean = synchronized(reflectLock) {
+        if (lastReflected == conversationId) return false
+        lastReflected = conversationId
+        true
     }
 
     /** 记忆整理的实际执行（仅在 [reflectLock] 内调用） */
@@ -189,6 +213,13 @@ class MemoryReflector(
                         actionLog.append("固定短记更新", conversationId = conversationId)
                     }
                 }
+            }
+
+            // 阶段1降级（LLM 异常/解析失败 → DEGRADED 空结果）以前是**静默**空手
+            // 而归：日志里只有 debug「无值得记录的内容」，看起来和「真没东西可记」
+            // 一模一样——实盘排查「内容没进记忆但日志说整理过」时无法区分
+            if (result.degraded) {
+                log.warn("阶段1复盘解析失败（本轮整理空手而归）：会话 {} 的内容未写入记忆", conversationId)
             }
 
             // 待办结算（兜底，**必须在「无候选就 return」之前**——办完待办却没别的

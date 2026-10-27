@@ -16,6 +16,7 @@ import org.dlucxoket.lucatbot.bot.todo.TodoService
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.util.concurrent.Executor
 
 /**
  * 记忆写入判重——防「记忆被反复记录」
@@ -205,6 +206,51 @@ class MemoryDedupeTest {
             f.chat.getHistorySummary("private:7", 10).contains("（已记忆）"),
             "写入成功后窗口行打标：${f.chat.getHistorySummary("private:7", 10)}"
         )
+    }
+
+    @Test
+    fun `re-entry exit is not skipped by late completion of previous async reflect`() {
+        // 实盘竞态：退出整理是异步单线程执行，任务里做两轮 LLM（数秒~十几秒）；
+        // 旧代码幂等位在**任务完成时**才置——期间用户重回同一会话又退出
+        //（beginConversation 已重置），迟到的旧任务完成时把置位盖回去，
+        // 第二段的整理任务看到「已整理过」直接跳过：新内容整段没进记忆，
+        // 日志只剩一条「记忆已整理过，跳过重复整理」
+        val queued = ArrayDeque<Runnable>()
+        val chat = ChatHistoryService(
+            JsonFileChatHistoryRepository(File.createTempFile("hist-race", ".json").absolutePath)
+        )
+        chat.recordHistoryMessage(
+            "private:7", 7L, "甲", "我最喜欢的颜色是蓝色", timestamp = 1_000L, isFromBot = false
+        )
+        val memSvc = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-race", ".json").absolutePath)
+        )
+        val llm = FakeLLM(
+            mutableListOf(
+                """{"memories":[{"kind":"fact","content":"他最喜欢蓝色","tags":[]}]}""",
+                """{"memories":[{"kind":"fact","content":"他最喜欢蓝色","tags":[]}]}"""
+            )
+        )
+        val reflector = MemoryReflector(
+            memoryAgent = MemoryAgent(llm),
+            memoryService = memSvc,
+            chatHistoryService = chat,
+            actionLog = ActionLog(),
+            executor = Executor { queued += it }
+        )
+
+        reflector.reflectAsync("private:7")   // 段1退出：任务已提交、尚未执行
+        reflector.beginConversation()         // 重回同一会话（幂等位重置）
+        reflector.reflectAsync("private:7")   // 段2退出：又提交一个任务
+
+        assertEquals(2, queued.size, "两段各提交一个整理任务")
+        queued.removeFirst().run()            // 段1的任务此时才跑完（迟到完成）
+        queued.removeFirst().run()            // 段2的任务必须照常执行
+
+        // 阶段1系统语固定开头「你正在复盘…」；第3次调用是段2关键词命中后的
+        // 阶段2复核（不数进来——它依赖判库命中，断言要盯「每段各复盘一次」）
+        val stage1Count = llm.prompts.count { it.contains("你正在复盘一段刚结束的对话") }
+        assertEquals(2, stage1Count, "两个会话段各复盘一次（旧代码第二次被误跳过，只剩1次）")
     }
 
     // ------------------------------------------------------------------
