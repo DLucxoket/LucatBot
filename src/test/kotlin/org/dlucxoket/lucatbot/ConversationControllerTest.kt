@@ -821,6 +821,34 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `memory hits duplicating overview are dropped but short ones kept`() {
+        // 实测浪费：进场预搜按词查库命中的往往正是概览里同一条记忆（样例 16 条里
+        // 4 条逐字重复 600+ 字）——长条目判重后丢弃（信息仍在概览里）；
+        // <12 字短句不判重（防误杀，浪费可忽略），照常带
+        val memoryService = MemoryService(
+            JsonFileMemoryRepository(File.createTempFile("mem-dedup", ".json").absolutePath)
+        )
+        val longMemory = "青玄给自家AI设了固定时间区间、按自己心情发晚安然后自己掐掉进程；" +
+            "他正考虑给AI注入情感模块，但担心注入后被外界信息整抑郁（自称早有先例）"
+        memoryService.rememberEvent(MemorySubject.user(123L), longMemory)
+        memoryService.rememberEvent(MemorySubject.user(123L), "碳酸猫是他妈妈")
+        val llm = FakeLLM(mutableListOf(
+            """{"action":"send","params":{"content":"我想想"},"memory_queries":["青玄","碳酸猫"],"reason":"回忆"}""",
+            """{"action":"return"}"""
+        ))
+        val (controller, _, _) = buildController(llm, memoryService = memoryService)
+
+        controller.run(SessionPick(SessionPickType.PRIVATE, "123"))
+
+        val second = llm.prompts[1]
+        assertTrue(second.contains(longMemory), "概览侧照常注入（丢的只是重复副本）：$second")
+        val block = second.substringAfter("【记忆搜索结果", "")
+        assertFalse(block.contains("「青玄」："), "与概览逐字重复的长条目不再列：$second")
+        assertTrue(block.contains("「碳酸猫」：碳酸猫是他妈妈"),
+            "短条目不判重、照常带（长度门槛）：$second")
+    }
+
+    @Test
     fun `many memory_queries are all searched in one round`() {
         // 关键词数量可以多：一轮 5 个词全部出结果行（上限 12，prompt 写「数量不限」）
         val memoryService = MemoryService(

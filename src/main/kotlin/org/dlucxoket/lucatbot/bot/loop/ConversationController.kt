@@ -408,12 +408,25 @@ class ConversationController(
             val historyCapped = !reachedHistoryStart && historyCount >= maxHistoryWindow
             // 上一轮/更早 memory_queries 的搜索结果 → 追加在记忆段末尾（**不清空**：
             // 一直带着，直到下次给出 memory_queries 才被新结果整体覆盖；
-            // 从没请求过 → 空串，记忆段与原来完全一致）
+            // 从没请求过 → 空串，记忆段与原来完全一致）。
+            // 进场预搜按关键词命中，命中的往往正是概览里同一条记忆——实测样例
+            // 16 条里 4 条与概览逐字重复（600+ 字），同一份内容在 prompt 出现两遍
+            // 纯占字符，判重后丢弃（信息仍在概览里）；单条 150 字封顶防日后写肥
+            val memoryOverview = memoryService.getMemoryOverview(
+                primary = MemorySubject.fromConversation(conversationId)
+            )
             val memoryHitsBlock = if (pendingMemoryHits.isEmpty()) {
                 ""
             } else {
-                "\n【记忆搜索结果（进场预搜 + 你用 memory_queries 请求的关键词；再次请求会覆盖）】\n" +
-                    pendingMemoryHits.joinToString("\n") { "- $it" }
+                val hits = pendingMemoryHits
+                    .filterNot { hit -> duplicatedInOverview(hit, memoryOverview) }
+                    .map { hit -> if (hit.length > 150) hit.take(147) + "…" else hit }
+                if (hits.isEmpty()) {
+                    ""
+                } else {
+                    "\n【记忆搜索结果（进场预搜 + 你用 memory_queries 请求的关键词；再次请求会覆盖）】\n" +
+                        hits.joinToString("\n") { "- $it" }
+                }
             }
             val request = ConversationRequest(
                 persona = lucatBot.persona,
@@ -426,9 +439,7 @@ class ConversationController(
                 selfQq = selfQq,
                 // 全量概览：当前对象主体记忆 + 其他会话记忆少量（带主体标签）——
                 // 不再只注入当前会话；缺的细节由 LLM 经 MemoryQueryTool 关键词搜
-                shortTermMemory = memoryService.getMemoryOverview(
-                    primary = MemorySubject.fromConversation(conversationId)
-                ) + memoryHitsBlock + sessionManager.getFatigueHint(conversationId),
+                shortTermMemory = memoryOverview + memoryHitsBlock + sessionManager.getFatigueHint(conversationId),
                 todos = todoService.summaryForPrompt(),
                 actionLog = actionLog.dump(),
                 fixedMemory = fixedMemory?.current().orEmpty(),
@@ -936,6 +947,29 @@ class ConversationController(
             todoSettlement.settle(ref, conversationId)
         }
         return deferredRemember
+    }
+
+    /**
+     * 搜索结果条目是否与记忆概览重复（**句中 20 字探针判重**）
+     *
+     * 进场预搜按关键词命中，命中的往往正是概览里同一条记忆——实测样例 16 条里
+     * 4 条与概览逐字重复（600+ 字），同一份内容在 prompt 出现两遍纯占字符。
+     * 取正文（去掉「关键词」：前缀）句中 20 字做探针：不同记忆连续 20 字相同
+     * 视为同一条（信息仍留在概览里，丢的只是重复副本）。长度门槛防误杀：
+     * 正文 <12 字不判重（短句太容易撞、浪费也可忽略），12~27 字要求整句在
+     * 概览里，≥28 字取 offset 8~28 的句中探针（避开各自的开头前缀差异）。
+     *
+     * @param hit 【记忆搜索结果】里的一条（「关键词」：正文）
+     * @param overview 同轮注入的记忆概览全文（空串 = 没有概览，不判重）
+     */
+    private fun duplicatedInOverview(hit: String, overview: String): Boolean {
+        if (overview.isBlank()) return false
+        val body = hit.substringAfter("：", hit).trim()
+        return when {
+            body.length < 12 -> false
+            body.length < 28 -> overview.contains(body)
+            else -> overview.contains(body.substring(8, 28))
+        }
     }
 
     /**
