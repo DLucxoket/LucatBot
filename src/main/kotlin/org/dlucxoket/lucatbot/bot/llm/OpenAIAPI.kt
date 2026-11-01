@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot.bot.llm
 
+import dev.langchain4j.data.message.AiMessage
+import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.Content
 import dev.langchain4j.data.message.ImageContent
 import dev.langchain4j.data.message.SystemMessage
@@ -196,14 +198,74 @@ class OpenAIAPI(
 
         /** 轨迹：发给 LLM 的真实请求（正文逐字；与实际 messages 同源） */
         val requestText = renderRequest(systemPrompt, question, emptyList())
+        return askMessages(model, chatRequest, TokenUsageChannel.TEXT, requestText)
+    }
+
+    /**
+     * **API 原生多轮上下文**调用（OpenAI 协议的 messages 数组）
+     *
+     * 与两参 [ask] 的区别只在消息列表：[history] 的每一轮按协议以独立的
+     * `system` / `user` / `assistant` 消息随请求发出——模型能分清哪句是
+     * 自己说的、哪句是对方说的，多轮对话/追问场景比「压进一条 user 文本」更稳，
+     * 且协议层可吃到 prompt 缓存（前缀不变的历史天然命中 `cached_tokens`）。
+     *
+     * 历史为空时直接退化为两参 [ask]（不发多余的空上下文）。重试、空响应救援、
+     * 分级降级、记账与文本路完全一致（复用 [askMessages]）。
+     */
+    override fun askWithContext(systemPrompt: String, history: List<LlmTurn>, question: String): String {
+        if (history.isEmpty()) return ask(systemPrompt, question)
+        val model = createModel()
+        val chatRequest = ChatRequest.builder()
+            .messages(contextMessages(systemPrompt, history, question))
+            .build()
+        val requestText = renderRequest(systemPrompt, history, question)
+        return askMessages(model, chatRequest, TokenUsageChannel.TEXT, requestText)
+    }
+
+    /**
+     * 多轮上下文的消息列表组装（抽出来便于测试）
+     *
+     * 顺序：system（非空才发）→ 历史各轮（按时间正序）→ 本轮 user。
+     * 刻意**不校验**历史里是否夹带 system 轮——协议允许，交给调用方决定
+     * （比如把长期人格从 systemPrompt 挪进历史首轮也合法）。
+     */
+    internal fun contextMessages(
+        systemPrompt: String,
+        history: List<LlmTurn>,
+        question: String
+    ): List<ChatMessage> = buildList {
+        if (systemPrompt.isNotBlank()) add(SystemMessage.systemMessage(systemPrompt))
+        history.forEach { turn ->
+            add(
+                when (turn.role) {
+                    LlmRole.SYSTEM -> SystemMessage.systemMessage(turn.content)
+                    LlmRole.USER -> UserMessage.userMessage(turn.content)
+                    LlmRole.ASSISTANT -> AiMessage.aiMessage(turn.content)
+                }
+            )
+        }
+        add(UserMessage.userMessage(question))
+    }
+
+    /**
+     * 发一轮请求的完整链路：[chatWithOneRetry] 补一次重试 → 空文本救援再试一次
+     * → 仍异常走 [degradeOrThrow] 分级降级。文本路与上下文路共用（语义与旧
+     * [ask] 内联实现逐字一致，只是抽出来避免两处复制）。
+     */
+    private fun askMessages(
+        model: OpenAiChatModel,
+        chatRequest: ChatRequest,
+        channel: TokenUsageChannel,
+        requestText: String
+    ): String {
         val startedAt = System.nanoTime()
 
         /** 发送请求并获取 AI 消息，提取纯文本返回 */
         var text = try {
-            chatText(model, chatRequest, TokenUsageChannel.TEXT, requestText, startedAt)
+            chatText(model, chatRequest, channel, requestText, startedAt)
         } catch (e: Exception) {
             // 端点偶发坏响应（实盘：SSE `data: …` 被当 JSON 解析）→ 分级兜底
-            return degradeOrThrow(e, TokenUsageChannel.TEXT, requestText, sinceMs(startedAt))
+            return degradeOrThrow(e, channel, requestText, sinceMs(startedAt))
         }
         if (text.isBlank()) {
             // 空响应救援重试：chatWithOneRetry 的补救只覆盖「抛异常」的空响应，而
@@ -214,9 +276,9 @@ class OpenAIAPI(
             runCatching { Thread.sleep(300) }
             val retryStartedAt = System.nanoTime()
             val retryText = try {
-                chatText(model, chatRequest, TokenUsageChannel.TEXT, requestText, retryStartedAt)
+                chatText(model, chatRequest, channel, requestText, retryStartedAt)
             } catch (e: Exception) {
-                return degradeOrThrow(e, TokenUsageChannel.TEXT, requestText, sinceMs(retryStartedAt))
+                return degradeOrThrow(e, channel, requestText, sinceMs(retryStartedAt))
             }
             if (retryText.isNotBlank()) {
                 text = retryText
@@ -373,6 +435,21 @@ class OpenAIAPI(
             images.forEach { img ->
                 append("\n[图片 ${img.ref}]（data URI ${img.dataUri.length} 字符，略）")
             }
+        }
+
+    /**
+     * 多轮上下文请求的轨迹渲染：历史各轮按 `### <role>` 逐段展开（正文逐字，
+     * 与实际 messages 同源），最后一段是本轮 user。
+     */
+    internal fun renderRequest(systemPrompt: String, history: List<LlmTurn>, question: String): String =
+        buildString {
+            if (systemPrompt.isNotBlank()) {
+                append("### system\n").append(systemPrompt).append('\n')
+            }
+            history.forEach { turn ->
+                append("### ").append(turn.role.wire).append('\n').append(turn.content).append('\n')
+            }
+            append("### user\n").append(question)
         }
 
     /**

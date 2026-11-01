@@ -11,6 +11,7 @@ package org.dlucxoket.lucatbot.bot.llm
  * 实现约定：
  * - `ask(systemPrompt, question)`：带系统提示的完整调用，systemPrompt 为空时退化为纯用户消息
  * - `ask(question)`：便捷重载，等价于 `ask("", question)`
+ * - `askWithContext(systemPrompt, history, question)`：API 原生多轮上下文（messages 数组）
  *
  * 当前唯一实现：[OpenAIAPI]（兼容任意 OpenAI 协议端点）
  */
@@ -61,6 +62,11 @@ interface LLM {
             // DEFAULT）的全部图片取材白做（第四轮 OOP 审查 P1-1）
             override fun ask(systemPrompt: String, question: String, images: List<PromptImage>): String =
                 (springInstance ?: OpenAIAPI.DEFAULT).ask(systemPrompt, question, images)
+
+            // 多轮上下文同理：委托对象必须显式转发，否则走接口默认的「折叠成一条
+            // user 文本」降级路径——多轮历史会被压平，API 原生 messages 上下文白带
+            override fun askWithContext(systemPrompt: String, history: List<LlmTurn>, question: String): String =
+                (springInstance ?: OpenAIAPI.DEFAULT).askWithContext(systemPrompt, history, question)
         }
     }
 
@@ -84,6 +90,30 @@ interface LLM {
      */
     fun ask(systemPrompt: String, question: String, images: List<PromptImage>): String =
         ask(systemPrompt, question)
+
+    /**
+     * 向 LLM 发起提问（**API 原生多轮上下文**——messages 数组）
+     *
+     * 与两参 [ask] 的区别：[history] 里的每一轮都按 OpenAI 协议以独立的
+     * `user` / `assistant` 消息随请求发出（而不是压进同一条 user 文本），
+     * 模型能分清哪句是自己说的、哪句是对方说的，多轮对话/追问场景更稳。
+     *
+     * 默认实现**把历史折叠成一条 user 文本**（测试替身等实现无需改动即可兼容）；
+     * 真正走协议 messages 数组由 [OpenAIAPI] override。
+     *
+     * @param systemPrompt 系统提示词（可为空；即使非空也只需出现在请求头一次，
+     *   不必再塞进 [history]——重复发只会白烧 token）
+     * @param history      历史轮次（按时间正序；不包含本轮 [question]）
+     * @param question     本轮用户输入
+     * @return LLM 生成的回复文本
+     */
+    fun askWithContext(systemPrompt: String, history: List<LlmTurn>, question: String): String {
+        val folded = buildString {
+            history.forEach { turn -> append(turn.role.wire).append("：").append(turn.content).append('\n') }
+            append("user：").append(question)
+        }
+        return ask(systemPrompt, folded)
+    }
 
     /**
      * 向 LLM 发起提问（便捷重载）
