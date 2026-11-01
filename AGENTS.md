@@ -85,6 +85,8 @@ llm:
 
 使用自研 `OpenAIAPI`（`bot/llm/`）——任何兼容 OpenAI 协议的端点均可。
 
+**上下文组织**（`llm.context-mode`）：`compressed`（默认，每轮压成一条 system + 一条 user，行为不变）| `native`（传统 agent 式连贯 messages：一次巡逻（消息列表→会话段）共用一套上下文，两个主 Agent 的静态指令 `staticInstructions` 合并进首轮 system，此后 user（每轮动态状态+剧情数据）/ assistant（AI 原始回应）/ system（编排层操作结果，`LlmContextScope.noteSystem`）一路连贯到巡逻结束）。上下文对象 `SharedLlmContext` 挂在 `LlmContextScope`（**线程隔离**）——通知跳转/异步记忆整理在别的线程看不到，自动退回压缩路径。`Agent.staticInstructions` 默认空（不参与合并的辅助 Agent 在 native 模式下整段 system+user 折进当轮 user，自包含不丢信息）。
+
 ## OOP 设计原则（必须遵守）
 
 ### 1. JSON 仅在 LLM API 边界

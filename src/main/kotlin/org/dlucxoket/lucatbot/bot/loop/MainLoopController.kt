@@ -1,6 +1,8 @@
 package org.dlucxoket.lucatbot.bot.loop
 
 import org.dlucxoket.lucatbot.bot.LucatBot
+import org.dlucxoket.lucatbot.bot.llm.LlmContextMode
+import org.dlucxoket.lucatbot.bot.llm.LlmContextScope
 import org.dlucxoket.lucatbot.bot.persona.BotMood
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -164,6 +166,31 @@ class MainLoopController(
         return true
     }
 
+    /**
+     * **native 上下文模式**：一次巡逻（选会话 + 会话段）共用一套连贯 messages
+     *
+     * 首轮 system 合并两个主 Agent 的静态指令（消息列表 + 会话内）；此后每轮
+     * 用户提示词进 user、AI 回复进 assistant、编排层操作结果进 system——从消息
+     * 列表一路连贯到退出会话/去空闲为止（`llm.context-mode: native`）。
+     *
+     * 压缩模式（默认）直接透传，行为不变。通知跳转/异步记忆整理跑在别的线程，
+     * 看不到这份上下文，自动走压缩路径（不串台）。
+     */
+    private fun <T> withSharedContext(block: () -> T): T {
+        if (LlmContextScope.mode != LlmContextMode.NATIVE) return block()
+        val pickerInstructions = messageListController.staticInstructions
+        val conversationInstructions = conversationController.staticInstructions
+        LlmContextScope.begin(
+            systemPrompt = "$pickerInstructions\n\n$conversationInstructions",
+            knownInstructions = listOf(pickerInstructions, conversationInstructions)
+        )
+        try {
+            return block()
+        } finally {
+            LlmContextScope.end() // 异常路径也收口，别把上下文残留到下一次巡逻
+        }
+    }
+
     private fun runLoop() {
         var fromIdle = false
         while (running) {
@@ -173,16 +200,18 @@ class MainLoopController(
                         // pick + 会话段持锁（与通知跳转互斥）；idle 休眠与会话间歇在锁外
                         // 「连上默认看一眼」的强制查看由 MessageListController 内部置位/消费
                         val pick = withSessionGate {
-                            val p = messageListController.pickSession(fromIdleWake = fromIdle)
-                            if (p != null) {
-                                if (p.conversationType ==
-                                    org.dlucxoket.lucatbot.bot.agent.data.SessionPickType.PROACTIVE
-                                ) {
-                                    actionLog.append("主动找人 ${p.targetId}")
+                            withSharedContext {
+                                val p = messageListController.pickSession(fromIdleWake = fromIdle)
+                                if (p != null) {
+                                    if (p.conversationType ==
+                                        org.dlucxoket.lucatbot.bot.agent.data.SessionPickType.PROACTIVE
+                                    ) {
+                                        actionLog.append("主动找人 ${p.targetId}")
+                                    }
+                                    conversationController.run(p)
                                 }
-                                conversationController.run(p)
+                                p
                             }
-                            p
                         }
                         if (pick == null) {
                             enterIdleAndSleep()

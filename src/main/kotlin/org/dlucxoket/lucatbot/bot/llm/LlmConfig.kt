@@ -1,5 +1,7 @@
 package org.dlucxoket.lucatbot.bot.llm
 
+import org.slf4j.LoggerFactory
+import org.springframework.core.env.Environment
 import org.springframework.stereotype.Component
 
 /**
@@ -9,6 +11,9 @@ import org.springframework.stereotype.Component
  * - 构造时调用 [LLM.install]——此时 `OpenAIAPI` 已就绪（平台配置读
  *   application.yaml 的 `llm.active` + `llm.platforms.<active>.*`），之后所有走 [LLM.DEFAULT] 的调用
  *   都会转发到这个容器 Bean。
+ * - 同时按 `llm.context-mode`（`compressed` | `native`，缺省 `compressed`）
+ *   安装 [LlmContextScope] 的上下文模式——压缩（每轮独立一条 system+user）
+ *   或原生连贯 messages（一次巡逻一套上下文）。
  * - 非 Spring 环境不会加载本类，[LLM.DEFAULT] 保持 null 的 springInstance，
  *   转发到 [OpenAIAPI.DEFAULT] 兜底实例。
  *
@@ -16,8 +21,12 @@ import org.springframework.stereotype.Component
  * 即使 Agent 在本类之前构造，其 ask() 也会在调用时拿到已注册的容器实例。
  */
 @Component
-class LlmConfig(openAIAPI: OpenAIAPI) {
+class LlmConfig(openAIAPI: OpenAIAPI, environment: Environment) {
     init {
         LLM.install(openAIAPI)
+        val mode = LlmContextMode.parse(environment.getProperty("llm.context-mode"))
+        LlmContextScope.installMode(mode)
+        LoggerFactory.getLogger(LlmConfig::class.java)
+            .info("LLM 上下文模式：{}（llm.context-mode）", mode.wire)
     }
 }

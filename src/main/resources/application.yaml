@@ -15,6 +15,10 @@ shiro:
 # 兜底共用 LLM_API_KEY（与旧部署兼容）
 llm:
   active: mimo            # ← 用哪个平台：mimo(Token Plan额度制) | mimo-paygo(按量) | intern | siliconflow
+  # ← 上下文组织方式：compressed = 每轮压成「一条 system + 一条 user」独立发出（默认，省 token、每轮自包含）
+  #                    native    = 传统 agent 式连贯 messages：一次巡逻（消息列表→会话段）共用一套上下文，
+  #                                各 Agent 静态指令合并进首轮 system，user/assistant/system 轮一路连贯
+  context-mode: compressed
   platforms:
     # 小米 MiMo · **Token Plan**（额度制：按 Credits 扣账户额度，命中缓存极便宜）
     mimo:

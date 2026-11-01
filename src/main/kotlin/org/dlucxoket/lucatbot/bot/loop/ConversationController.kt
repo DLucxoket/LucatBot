@@ -148,6 +148,18 @@ class ConversationController(
 ) {
     private val log = LoggerFactory.getLogger(ConversationController::class.java)
 
+    /**
+     * **native 上下文模式**：会话内 Agent 的静态指令段
+     *
+     * 主循环把它与选会话 Agent 的指令合并进共享上下文的首轮 system；
+     * 压缩模式下无人读取，行为不变。
+     */
+    val staticInstructions: String
+        get() = conversationAgent.staticInstructions
+
+    /** 操作结果落上下文 system 轮（native 模式且本线程挂着上下文时生效；否则空操作） */
+    private fun noteOp(text: String) = org.dlucxoket.lucatbot.bot.llm.LlmContextScope.noteSystem(text)
+
     /** memory_queries 每轮搜索词上限（prompt 写「数量不限、宁多勿少」，这里只防极端刷量） */
     private val maxMemoryQueries = 12
 
@@ -606,6 +618,7 @@ class ConversationController(
                         lucatBot.updateMood { it.decay() }
                     }
                     logAct("爬楼 $count 条", why)
+                    noteOp("操作结果：已往前翻楼，窗口累计覆盖 $historyCount 条消息")
                     log.info("read_more → 累计读取 {}（上限 {}）", historyCount, maxHistoryWindow)
                 }
 
@@ -707,6 +720,7 @@ class ConversationController(
                             }
                         }
                         logAct("回复：$sentText", why)
+                        noteOp("操作结果：消息已发出（${sentContents.size} 条）：${sentText.take(60)}")
                         log.info("发送成功 {} 条：{}", sentContents.size, sentText.take(80))
                         lucatBot.updateMood { it.boost() }
                         mustIcebreak = false
@@ -736,6 +750,7 @@ class ConversationController(
                             // 属输出格式问题（非通道失败），不计 sendFailStreak
                             log.warn("send 的 content 无有效消息，未发出")
                             logAct("发送内容无效", why)
+                            noteOp("操作结果：send 的内容无效，没有发出任何消息——请按 send 格式重新组织")
                             sendFailureNote = "上一轮你 send 的 content 为空或无法识别任何有效消息，" +
                                 "没有发出任何内容——按 send 动作说明重新组织（JSON 数组，每条含 members）再发。"
                             mustIcebreak = false
@@ -755,6 +770,7 @@ class ConversationController(
                                 else "发送部分失败（已发 ${sentContents.size}/${outgoing.size}）",
                                 why
                             )
+                            noteOp("操作结果：发送失败（${detail.take(120)}）")
                             sendFailureNote = buildSendFailureNote(detail, isGroup)
                             // 疑似禁言打点：会话列表渲染【疑似禁言 MM-dd】（发送成功自动清除）
                             if (bannedRetCode(detail) != null) {
@@ -845,6 +861,7 @@ class ConversationController(
                 ConversationAction.RETURN -> {
                     log.info("决策 return，离开会话")
                     logAct("返回消息列表", why)
+                    noteOp("操作结果：你退出了会话，回到消息列表")
                     return
                 }
 
@@ -852,6 +869,7 @@ class ConversationController(
                     val query = decision.toolQuery
                     toolNotes.recordCatalog(query, toolCatalog.catalog(query))
                     logAct("查看工具目录（${toolCatalog.count(query)} 个）", why)
+                    noteOp("操作结果：已查看工具目录（${toolCatalog.count(query)} 个），见下一轮提示")
                     log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
                 }
 
@@ -863,6 +881,7 @@ class ConversationController(
                     val call = toolCatalog.invokeDetailed(toolName, decision.toolInput)
                     toolNotes.recordResult(toolName, call.output, call.isError)
                     logAct("调用工具 $toolName", why)
+                    noteOp("操作结果：已调用工具 $toolName（${if (call.isError) "失败" else "成功"}），见下一轮提示")
                     log.info("tool {} → {} 字符", toolName, call.output.length)
                     // 失败结果不进日志就只能对着「433 字符」猜——报错内容直接打出来
                     if (call.isError) {
@@ -876,6 +895,7 @@ class ConversationController(
                                 switchTarget.conversationType, switchTarget.targetId)
                         } else {
                             logAct("切换会话 → ${switchTarget.conversationType}:${switchTarget.targetId}", why)
+                            noteOp("操作结果：已切换会话 → ${switchTarget.conversationType}:${switchTarget.targetId}")
                             log.info("会话内切换 → {}:{}（经 SwitchConversationTool）",
                                 switchTarget.conversationType, switchTarget.targetId)
                             pendingSwitchTarget = switchTarget
@@ -894,6 +914,7 @@ class ConversationController(
                         else "看图 ${att.images.size} 张（${att.missing.size} 张没拿到）",
                         why
                     )
+                    noteOp("操作结果：已取图 ${att.images.size} 张（${att.missing.size} 张没拿到），下一轮以附件给你")
                     log.info("view_images 请求 {} 张 → 附件 {}、缺失 {}", refs.size, att.images.size, att.missing)
                 }
             }

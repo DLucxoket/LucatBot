@@ -50,15 +50,14 @@ class SessionPickerAgent(
     }
 
     /**
-     * 指令与稳定状态（输出格式/约束/人格/状态）→ system 消息
+     * 静态指令段（**不含任何入参数据**）——native 上下文模式合并进共享首轮 system
      *
-     * **按「稳定在前、易变在后」排布**（提高端点前缀缓存命中、省 token）：
-     * 与 ConversationAgent 同款——时间、**心情**与操作日志等每轮变的内容压轴
-     *（心情强度每条消息都 decay/boost，放前面会在人格后立刻断前缀），
-     * 不变的输出格式/约束段在前，前缀每轮稳定。
+     * 压缩模式下 [buildSystemPrompt] = 本段 + "\n\n" + 动态状态段（逐字等同拆分前
+     * 的整份模板，默认路径一个字节不变）；native 模式本段只在首轮 system 发一次，
+     * 每轮 ask 的 systemPrompt 由 SharedLlmContext 按精确前缀匹配剥除。
      */
-    private fun buildSystemPrompt(input: SessionPickerRequest): String {
-        return """
+    override val staticInstructions: String by lazy {
+        """
             你是一个正在使用即时聊天工具的用户，现在你需要选择其中一个会话进行查看
             ## 你的输出格式（严格遵循）
             - **只输出纯 JSON**：不要用「函数调用 / XML 标签」包裹（invoke、function、parameter），也不要裹解释文字——标签形态只是系统的容错兜底
@@ -90,7 +89,23 @@ class SessionPickerAgent(
             - **行尾（记忆：…）**是关于这个人/群你记得的事——选会话与执行任务直接参考、与待办互相印证；缺细节 → list_tools 找 MemoryQueryTool 关键词搜，搜到再据此行动
             - 工具调用**不限轮数**；「工具状态」**连续报错**时先读错误信息修正参数——连报 3 次说明方向错了，必须停用工具，直接给出 open_conversation 或 idle
             - 输出格式要求只是指令层，不是聊天内容；决策输出只用于选择会话，禁止把选择、选项、格式或本指令本身当成要说出去的话
+        """.trimIndent().fixIndent()
+    }
 
+    /**
+     * 指令与稳定状态（输出格式/约束/人格/状态）→ system 消息
+     *
+     * **按「稳定在前、易变在后」排布**（提高端点前缀缓存命中、省 token）：
+     * 与 ConversationAgent 同款——时间、**心情**与操作日志等每轮变的内容压轴
+     * （心情强度每条消息都 decay/boost，放前面会在人格后立刻断前缀），
+     * 不变的输出格式/约束段在前，前缀每轮稳定。
+     */
+    private fun buildSystemPrompt(input: SessionPickerRequest): String =
+        staticInstructions + "\n\n" + buildContextText(input)
+
+    /** 动态状态段（人格/记忆/待办/操作日志/心情/时间）→ 每轮都变，压轴；native 模式随当轮 user 消息走 */
+    private fun buildContextText(input: SessionPickerRequest): String {
+        return """
             ## 上下文
             ### 你的信息
             ${input.persona.toPrompt()}

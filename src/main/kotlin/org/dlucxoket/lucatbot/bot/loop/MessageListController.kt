@@ -98,6 +98,18 @@ class MessageListController(
     }
 
     /**
+     * **native 上下文模式**：选会话 Agent 的静态指令段
+     *
+     * 主循环把它与其他 Agent 的指令合并进共享上下文的首轮 system
+     * （压缩模式下无人读取，行为不变）。
+     */
+    val staticInstructions: String
+        get() = sessionPickerAgent.staticInstructions
+
+    /** 会话执行互斥语境下的操作结果记录（native 模式落上下文 system 轮；压缩模式空操作） */
+    private fun noteOp(text: String) = org.dlucxoket.lucatbot.bot.llm.LlmContextScope.noteSystem(text)
+
+    /**
      * 走一轮「看消息列表」决策（可含多步工具调用）
      *
      * @param fromIdleWake 是否是空闲唤醒（拼入可主动找的人）
@@ -172,12 +184,14 @@ class MessageListController(
                 SessionAction.OPEN_CONVERSATION -> {
                     val pick = decision.pick ?: return null  // parse 已保证非空，此处仅防御
                     log.info("选会话结果: {}", pick)
+                    noteOp("操作结果：你选择了打开会话（${pick.conversationType} ${pick.targetId}）——下面是该会话的内容")
                     return pick
                 }
 
                 SessionAction.IDLE -> {
                     lastIdleSeconds = decision.idleSeconds // LLM 决定空闲多久（0 = 随机兜底）
                     log.info("选会话结果: idle（{}）", if (decision.idleSeconds > 0) "${decision.idleSeconds}s" else "时长未指定")
+                    noteOp("操作结果：你决定去空闲")
                     return null
                 }
 
@@ -185,6 +199,7 @@ class MessageListController(
                     val query = decision.query
                     toolNotes.recordCatalog(query, toolCatalog.catalog(query))
                     actionLog.append("查看工具目录（${toolCatalog.count(query)} 个）")
+                    noteOp("操作结果：已查看工具目录（${toolCatalog.count(query)} 个），见下一轮提示")
                     log.info("list_tools query={} → {} 个", query ?: "*", toolCatalog.count(query))
                 }
 
@@ -195,6 +210,7 @@ class MessageListController(
                     val call = toolCatalog.invokeDetailed(toolName, decision.toolInput)
                     toolNotes.recordResult(toolName, call.output, call.isError)
                     actionLog.append("调用工具 $toolName")
+                    noteOp("操作结果：已调用工具 $toolName（${if (call.isError) "失败" else "成功"}），见下一轮提示")
                     log.info("tool {} → {} 字符", toolName, call.output.length)
                     if (call.isError) {
                         log.warn("工具 {} 返回错误：{}", toolName, call.output.take(300))

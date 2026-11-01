@@ -175,6 +175,11 @@ class OpenAIAPI(
      * @return LLM 生成的回复文本
      */
     override fun ask(systemPrompt: String, question: String): String {
+        // native 共享上下文模式（`llm.context-mode: native` 且当前线程挂着上下文）：
+        // 走连贯 messages；否则照旧「一条 system + 一条 user」压缩发出（默认路径不变）
+        LlmContextScope.active()?.let {
+            return askViaContext(it, systemPrompt, question, emptyList(), TokenUsageChannel.TEXT)
+        }
         val model = createModel()
 
         /**
@@ -287,6 +292,104 @@ class OpenAIAPI(
             }
         }
         return text
+    }
+
+    /**
+     * **native 共享上下文模式**的一轮调用：把本轮拼进连贯 messages
+     *
+     * 与压缩路径的差异只在**组包**，健壮性完全一致（复用 [askMessages] 的
+     * 补重试 / 空响应救援 / 分级降级）：
+     * 1. 每轮 systemPrompt 里的静态指令段剥掉（已随首轮 system 发过），
+     *    剩下的**动态状态**与剧情数据一起作为本轮 user 轮进上下文；
+     * 2. 调用即落笔（user 轮先入列），模型回复入 assistant 轮——编排层随后
+     *    经 [LlmContextScope.noteSystem] 写「操作结果」system 轮；
+     * 3. 图片挂在**当轮 user** 上（content 数组），模型不支持识图时本请求
+     *    不带图重试，上下文不整体退回压缩。
+     *
+     * 空回复不入 assistant 轮（[SharedLlmContext.appendAssistant] 自守），
+     * 避免上下文里出现哑轮。
+     */
+    private fun askViaContext(
+        ctx: SharedLlmContext,
+        systemPrompt: String,
+        question: String,
+        images: List<PromptImage>,
+        channel: TokenUsageChannel
+    ): String {
+        val startedAt = System.nanoTime()
+        // 已确认模型不支持识图：本请求不带图（上下文照常连贯，不退回压缩）
+        val useImages = if (images.isNotEmpty() && !VisionSupport.unsupported()) images else emptyList()
+        // 没带图就按纯文本通道记账（与压缩路径「不支持识图 → 纯文本 ask」同语义）
+        val effChannel = if (useImages.isEmpty()) TokenUsageChannel.TEXT else channel
+        // 本轮 user 轮：动态状态（剥掉已发过的静态指令）+ 剧情数据
+        val dynamic = ctx.stripInstructions(systemPrompt)
+        val userText = when {
+            dynamic.isEmpty() -> question
+            question.isEmpty() -> dynamic
+            else -> "$dynamic\n\n$question"
+        }
+        ctx.appendUser(userText)
+        return try {
+            val result = sendContextTurns(ctx, useImages, effChannel)
+            ctx.appendAssistant(result)
+            result
+        } catch (e: Exception) {
+            if (useImages.isNotEmpty()) {
+                if (VisionSupport.looksLikeVisionUnsupported(e.message)) {
+                    VisionSupport.markUnsupported()
+                    log.warn("模型不支持识图（{}）——本次运行已记住，后续请求不再携带图片", e.message)
+                } else {
+                    log.warn("带图片请求失败（{}），本上下文不带图重试", e.message)
+                }
+                val result = sendContextTurns(ctx, emptyList(), effChannel)
+                ctx.appendAssistant(result)
+                result
+            } else {
+                degradeOrThrow(e, effChannel, renderContextRequest(ctx), sinceMs(startedAt))
+            }
+        }
+    }
+
+    /**
+     * 组装**连贯上下文**的 messages：首轮 system → 历史各轮（正序）→
+     * 当轮若是 user 且带图，content 数组注入图片（[userContents] 同款组装）。
+     */
+    private fun sendContextTurns(
+        ctx: SharedLlmContext,
+        images: List<PromptImage>,
+        channel: TokenUsageChannel
+    ): String {
+        val turns = ctx.turns
+        val messages = buildList<ChatMessage> {
+            if (ctx.systemPrompt.isNotBlank()) add(SystemMessage.systemMessage(ctx.systemPrompt))
+            turns.forEachIndexed { i, turn ->
+                val isLast = i == turns.lastIndex
+                add(
+                    when {
+                        isLast && images.isNotEmpty() && turn.role == LlmRole.USER ->
+                            UserMessage(userContents(turn.content, images))
+                        turn.role == LlmRole.SYSTEM -> SystemMessage.systemMessage(turn.content)
+                        turn.role == LlmRole.ASSISTANT -> AiMessage.aiMessage(turn.content)
+                        else -> UserMessage.userMessage(turn.content)
+                    }
+                )
+            }
+        }
+        val chatRequest = ChatRequest.builder().messages(messages).build()
+        return askMessages(createModel(), chatRequest, channel, renderContextRequest(ctx))
+    }
+
+    /**
+     * 连贯上下文请求的**轨迹渲染**：首轮 system + 上下文各轮按 `### <role>`
+     * 逐段展开（正文逐字，与实际 messages 同源）。
+     */
+    internal fun renderContextRequest(ctx: SharedLlmContext): String = buildString {
+        if (ctx.systemPrompt.isNotBlank()) {
+            append("### system\n").append(ctx.systemPrompt).append('\n')
+        }
+        ctx.turns.forEach { turn ->
+            append("### ").append(turn.role.wire).append('\n').append(turn.content).append('\n')
+        }
     }
 
     /**
@@ -468,6 +571,10 @@ class OpenAIAPI(
      * 网络超时/429/鉴权错误不误记。
      */
     override fun ask(systemPrompt: String, question: String, images: List<PromptImage>): String {
+        // native 共享上下文模式：图随当轮 user 一起发（不再整体退回压缩路径）
+        LlmContextScope.active()?.let {
+            return askViaContext(it, systemPrompt, question, images, TokenUsageChannel.IMAGE)
+        }
         if (images.isEmpty()) return ask(systemPrompt, question)
         // 已确认模型不支持识图：不给图片内容，直接纯文本（省一次必败请求与重试延迟）
         if (VisionSupport.unsupported()) return ask(systemPrompt, question)

@@ -69,6 +69,20 @@ abstract class Agent<I, O>(
     val shortDescription: String by lazy { description.substringBefore("\n") }
 
     /**
+     * **native 上下文模式**：本 Agent 的静态指令段（不含任何入参数据）
+     *
+     * 原生连贯上下文模式（`llm.context-mode: native`）下不区分 Agent：
+     * 各 Agent 的这段指令在一次巡逻开头**合并进共享上下文的首轮 system**，
+     * 此后每轮只带动态状态与剧情数据（user 消息）。
+     *
+     * 默认空 = 不参与合并（MemoryAgent 等辅助 Agent 的调用在 native 模式下
+     * 整段 system+user 折进当轮 user 消息，自包含、不丢信息）。
+     * 参与合并的 Agent 用它 override，并让 `buildSystemPrompt(input)` =
+     * 本段 + 动态状态段（压缩模式行为逐字不变，native 模式靠精确前缀匹配剥重）。
+     */
+    open val staticInstructions: String get() = ""
+
+    /**
      * 输入类型的 Class（用于 JSON 反序列化）
      */
     protected abstract val inputClass: Class<I>
